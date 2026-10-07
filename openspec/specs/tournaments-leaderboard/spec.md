@@ -1,0 +1,12 @@
+# tournaments-leaderboard Specification
+
+## Purpose
+Read-only tournament leaderboard page — the efhub `/tournaments` equivalent. No live integration this phase; rankings sourced from seeded data.
+## Requirements
+### Requirement: Tournament Leaderboard Display
+The system MUST serve `/tournaments` displaying a leaderboard table with team name, points, and rank columns, with a Discord registration link.
+
+#### Scenario: Viewing leaderboard
+- **WHEN** a visitor navigates to `/tournaments`
+- **THEN** the page renders a ranked table of teams with points, and a "Register via Discord" external link.
+

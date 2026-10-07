@@ -1,0 +1,54 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build outputs
+dist/
+build/
+.next/
+out/
+*.tsbuildinfo
+.turbo/
+
+# Env
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Prisma generated client
+packages/db/src/generated/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Postgres data volume
+pgdata/
+
+# eFootball data dumps (efhub/pesdb/efootbase — 6.5GB+, scripts output)
+dump/
+
+# R2 manifest (auto-gen by scripts/r2_upload.py)
+dump/efootbase/r2_manifest.json
+
+# Reference clone of efootbase.com for visual diffing (HTML/CSS/PNG — copyrighted, not for commit)
+tmp/
+
+# eFootball APK / XAPK archives (copyrighted game binaries, large — not for commit)
+*.apk
+*.xapk
+*.apks
+
+# Scratch/notes
+t.txt
+

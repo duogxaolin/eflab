@@ -1,0 +1,29 @@
+{
+  "name": "eflab",
+  "version": "0.1.0",
+  "private": true,
+  "description": "eFootball database web + backend ecosystem — Turborepo monorepo",
+  "packageManager": "pnpm@11.1.2",
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "db:generate": "pnpm --filter @eflab/db run db:generate",
+    "db:push": "pnpm --filter @eflab/db run db:push",
+    "db:migrate": "pnpm --filter @eflab/db run db:migrate",
+    "db:seed": "pnpm --filter @eflab/db run db:seed",
+    "api:dev": "pnpm --filter @eflab/api dev",
+    "web:dev": "pnpm --filter @eflab/web dev",
+    "clean": "turbo run clean && rm -rf node_modules apps/*/node_modules packages/*/node_modules"
+  },
+  "devDependencies": {
+    "turbo": "^2.5.4",
+    "typescript": "^5.9.2",
+    "@types/node": "^22.10.2"
+  },
+  "engines": {
+    "node": ">=22.0.0",
+    "pnpm": ">=10.0.0"
+  }
+}

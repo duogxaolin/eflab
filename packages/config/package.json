@@ -1,0 +1,1 @@
+{"name":"@eflab/config","version":"0.0.0","private":true,"type":"module","exports":{"./tsconfig.base.json":"./tsconfig.base.json","./tsconfig.next.json":"./tsconfig.next.json","./tsconfig.node.json":"./tsconfig.node.json"},"files":["tsconfig.base.json","tsconfig.next.json","tsconfig.node.json"]}

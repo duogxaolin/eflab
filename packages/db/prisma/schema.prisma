@@ -1,0 +1,534 @@
+// eFootball lab — Prisma schema for PostgreSQL 16.
+// Models the full efhub SQLite (259 cols) normalized into relational tables.
+// BigInt Player IDs (15-digit Konami External PID) — serialized via SuperJSON.
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["fullTextSearchPostgres", "postgresqlExtensions", "driverAdapters"]
+  output          = "../src/generated"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---- Enums ----
+
+enum Role {
+  USER
+  MODERATOR
+  ADMIN
+}
+
+enum CardType {
+  STANDARD
+  TRENDING
+  EPIC
+  BIG_TIME
+  HIGHLIGHT
+  SHOW_TIME
+  STRIKE_ARENA
+  LEGENDARY
+}
+
+// ---- Core: Player card (one player → N card versions, same baseId) ----
+
+model Player {
+  id             BigInt    @id
+  baseId         BigInt
+  name           String
+  accentedName   String?
+  japName        String?
+  chineseName    String?
+  shirt          String?
+  shirtNational  String?
+  nationalityId  Int
+  country2Id     Int?
+  height         Int
+  weight         Int
+  age            Int
+  strongerFoot   Int      @default(0)
+  registeredPosition Int
+  playingStyleAttack  Int   @default(0)
+  playingStyleDefense Int   @default(0)
+  cardType       CardType
+  featuredPackId String?
+  ovr            Int
+  maxOvr         Int
+  condition      String   @default("B")
+  form           Int      @default(1)
+  injuryResistance Int    @default(1)
+  weakFootUsage  Int      @default(0)
+  weakFootAccuracy Int    @default(0)
+  releaseDate    DateTime?
+  datapackId     Int      @default(20251204)
+  levelCap       Int      @default(50)
+  cost           Int      @default(0)
+  variation      Int      @default(0)
+  stars          Int      @default(0)
+  marketValue    Int      @default(0)
+  boosterId1     Int?
+  boosterId2     Int?
+  // 26 base stats (denormalized; value 40–99)
+  offensiveAwareness      Int @default(40)
+  ballControl            Int @default(40)
+  dribbling              Int @default(40)
+  tightPossession        Int @default(40)
+  lowPass                Int @default(40)
+  loftedPass            Int @default(40)
+  finishing              Int @default(40)
+  heading                Int @default(40)
+  placeKicking           Int @default(40)
+  curl                   Int @default(40)
+  speed                  Int @default(40)
+  acceleration           Int @default(40)
+  kickingPower           Int @default(40)
+  jump                   Int @default(40)
+  physicalContact       Int @default(40)
+  balance                Int @default(40)
+  stamina                Int @default(40)
+  defensiveAwareness     Int @default(40)
+  ballWinning            Int @default(40)
+  defensiveEngagement    Int @default(40)
+  aggression             Int @default(40)
+  gkAwareness            Int @default(40)
+  gkCatching             Int @default(40)
+  gkParrying             Int @default(40)
+  gkReflexes             Int @default(40)
+  gkReach                Int @default(40)
+  // 26 max stats (MAX + base stat name)
+  maxOffensiveAwareness      Int @default(40)
+  maxBallControl            Int @default(40)
+  maxDribbling              Int @default(40)
+  maxTightPossession        Int @default(40)
+  maxLowPass                Int @default(40)
+  maxLoftedPass             Int @default(40)
+  maxFinishing              Int @default(40)
+  maxHeading                Int @default(40)
+  maxPlaceKicking           Int @default(40)
+  maxCurl                   Int @default(40)
+  maxSpeed                  Int @default(40)
+  maxAcceleration           Int @default(40)
+  maxKickingPower           Int @default(40)
+  maxJump                   Int @default(40)
+  maxPhysicalContact       Int @default(40)
+  maxBalance                Int @default(40)
+  maxStamina                Int @default(40)
+  maxDefensiveAwareness     Int @default(40)
+  maxBallWinning            Int @default(40)
+  maxDefensiveEngagement    Int @default(40)
+  maxAggression             Int @default(40)
+  maxGkAwareness            Int @default(40)
+  maxGkCatching             Int @default(40)
+  maxGkParrying             Int @default(40)
+  maxGkReflexes             Int @default(40)
+  maxGkReach                Int @default(40)
+  // 13 position aptitudes (0=registered,1=secondary,2=none)
+  posGK  Int @default(2)
+  posCB  Int @default(2)
+  posLB  Int @default(2)
+  posRB  Int @default(2)
+  posDMF Int @default(2)
+  posCMF Int @default(2)
+  posLMF Int @default(2)
+  posRMF Int @default(2)
+  posAMF Int @default(2)
+  posLWF Int @default(2)
+  posRWF Int @default(2)
+  posSS  Int @default(2)
+  posCF  Int @default(2)
+  // 13 position OVR ratings
+  ratingGK  Int @default(40)
+  ratingCB  Int @default(40)
+  ratingLB  Int @default(40)
+  ratingRB  Int @default(40)
+  ratingDMF Int @default(40)
+  ratingCMF Int @default(40)
+  ratingLMF Int @default(40)
+  ratingRMF Int @default(40)
+  ratingAMF Int @default(40)
+  ratingLWF Int @default(40)
+  ratingRWF Int @default(40)
+  ratingSS  Int @default(40)
+  ratingCF  Int @default(40)
+  // 11 physique / body model
+  neckLength        Int @default(5)
+  neckSize          Int @default(5)
+  shoulderHeight    Int @default(5)
+  shoulderWidth     Int @default(5)
+  chestMeasurement  Int @default(5)
+  waistSize         Int @default(5)
+  armSize           Int @default(5)
+  armLength         Int @default(5)
+  thighSize         Int @default(5)
+  calfSize          Int @default(5)
+  legLength         Int @default(5)
+  // 5 derived physics (floats)
+  legCoverage           Float  @default(0)
+  armCoverage           Float  @default(0)
+  peakJumpHeight        Float  @default(0)
+  torsoCollisionWidth   Float  @default(0)
+  dribbleHeight         Float  @default(0)
+  // 5 player tactic compat (0–99)
+  possessionGame    Int @default(0)
+  quickCounter      Int @default(0)
+  longBallCounter   Int @default(0)
+  outWide           Int @default(0)
+  longBall          Int @default(0)
+  // AI playstyle flags
+  trickster      Boolean @default(false)
+  mazingRun      Boolean @default(false)
+  speedingBullet Boolean @default(false)
+  incisiveRun    Boolean @default(false)
+  longBallExpert Boolean @default(false)
+  earlyCross     Boolean @default(false)
+  // relations
+  skills       PlayerSkill[]
+  // otherVersions is implemented via a manual `WHERE baseId = ?` (no enforced self-relation FK,
+  // since base versions can be missing from a partial dataset).
+  packCards    PackCard[]
+  builds       Build[]
+  reviews      Review[]
+  tierVotes    TierVote[]
+  // Phase 2 reverse relation — posts sharing this card into the feed.
+  posts        Post[]    @relation("PostPlayer")
+  // community tier aggregate (cached)
+  communityTier String?
+
+  @@index([baseId])
+  @@index([cardType])
+  @@index([ovr])
+  @@index([maxOvr])
+  @@index([name])
+  @@index([nationalityId, registeredPosition])
+  @@index([ovr, cardType])
+  // Phase 2 composite indexes for the top filter+sort combos (full-data-seed spec).
+  // Postgres btree indexes are usable for both ASC and DESC scans.
+  @@index([cardType, ovr])
+  @@index([registeredPosition, ovr])
+  @@index([nationalityId, ovr])
+}
+
+// ---- Manager (1,844) ----
+
+model Manager {
+  id            BigInt   @id
+  name          String
+  accentedName  String?
+  japName       String?
+  chineseName   String?
+  age           Int      @default(50)
+  country       Int      @default(0)
+  adaptability  Int      @default(0)
+  affinity      Int      @default(0)
+  marketValue   Int      @default(0)
+  // 6 tactic ratings (0–99)
+  possessionGame    Int @default(0)
+  quickCounter      Int @default(0)
+  longBallCounter   Int @default(0)
+  outWide           Int @default(0)
+  longBall          Int @default(0)
+  overload          Int @default(0)
+  // boost slots (ref into Booster)
+  boostId1 Int?
+  boostId2 Int?
+  // relations
+  builds Build[]
+
+  @@index([name])
+}
+
+// ---- Booster (Boost table) ----
+
+model Booster {
+  id              Int      @id
+  name            String
+  japName         String?
+  version         Int      @default(0)
+  magnitude       Int      @default(2)
+  maxMagnitude    Int      @default(4)
+  color           Int      @default(0)
+  // affected stat magnitudes (sparse — only non-zero entries)
+  offensiveAwareness      Int? @default(0)
+  ballControl             Int? @default(0)
+  dribbling               Int? @default(0)
+  tightPossession         Int? @default(0)
+  lowPass                 Int? @default(0)
+  loftedPass              Int? @default(0)
+  finishing               Int? @default(0)
+  placeKicking            Int? @default(0)
+  curl                    Int? @default(0)
+  heading                 Int? @default(0)
+  defensiveAwareness      Int? @default(0)
+  defensiveEngagement     Int? @default(0)
+  ballWinning             Int? @default(0)
+  aggression              Int? @default(0)
+  kickingPower            Int? @default(0)
+  speed                   Int? @default(0)
+  acceleration            Int? @default(0)
+  balance                 Int? @default(0)
+  physicalContact         Int? @default(0)
+  jump                    Int? @default(0)
+  stamina                 Int? @default(0)
+  gkAwareness             Int? @default(0)
+  gkCatching              Int? @default(0)
+  gkParrying              Int? @default(0)
+  gkReflexes              Int? @default(0)
+  gkReach                 Int? @default(0)
+  weakFootAccuracy        Int? @default(0)
+}
+
+// ---- Skill (67) ----
+
+model Skill {
+  id          Int    @id
+  slug        String @unique
+  name        String
+  description String @default("")
+  category    String @default("General")
+  players     PlayerSkill[]
+
+  @@index([category])
+}
+
+model PlayerSkill {
+  playerId BigInt
+  skillId  Int
+  player   Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  skill    Skill  @relation(fields: [skillId], references: [id], onDelete: Cascade)
+
+  @@id([playerId, skillId])
+  @@index([skillId])
+}
+
+// ---- Pack + Team + Country + League ----
+
+model Pack {
+  id          String @id
+  name        String
+  releaseDate DateTime
+  type        String   @default("pack")
+  playerCount Int      @default(0)
+  cards       PackCard[]
+
+  @@index([type])
+}
+
+model PackCard {
+  packId    String
+  playerId  BigInt
+  pack      Pack   @relation(fields: [packId], references: [id], onDelete: Cascade)
+  player    Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@id([packId, playerId])
+}
+
+model Team {
+  id        Int     @id
+  name      String
+  countryId Int     @default(0)
+  leagueId  Int     @default(0)
+  national  Boolean @default(false)
+  emblemUrl String?
+}
+
+model Country {
+  id        Int     @id
+  name      String
+  region    String?
+  continent String?
+  flagUrl   String?
+}
+
+model League {
+  id        Int     @id
+  name      String
+  emblemUrl String?
+}
+
+// ---- Community ----
+
+model User {
+  id             String   @id @default(cuid())
+  username       String   @unique
+  email          String   @unique
+  emailVerified  Boolean  @default(false)
+  displayName    String?
+  region         String?
+  country        String?
+  avatarUrl      String?
+  isPro          Boolean  @default(false)
+  proUntil       DateTime?
+  role           Role     @default(USER)
+  followersCount Int      @default(0)
+  followingCount Int      @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  builds         Build[]
+  tierVotes      TierVote[]
+  reviews        Review[]
+  sessions       Session[]
+  accounts       Account[]
+  following      Follow[] @relation("FollowFollowing")
+  followers      Follow[] @relation("FollowFollower")
+  posts          Post[]
+  postLikes      PostLike[]
+  comments       Comment[]
+  tierLists     TierList[]
+
+  @@index([username])
+}
+
+model Build {
+  id            String   @id @default(cuid())
+  authorId      String
+  playerId       BigInt
+  managerId      BigInt?
+  level         Int
+  trainingPoints Json
+  boosters       Json
+  note          String?
+  isPublic      Boolean  @default(true)
+  isPro         Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  author        User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  player        Player   @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  manager       Manager? @relation(fields: [managerId], references: [id], onDelete: SetNull)
+
+  @@index([playerId, isPublic])
+  @@index([authorId])
+}
+
+model Review {
+  id        String   @id @default(cuid())
+  authorId  String
+  playerId   BigInt
+  rating    Int
+  content   String
+  createdAt DateTime @default(now())
+  author    User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  player    Player   @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@index([playerId])
+}
+
+model TierVote {
+  userId    String
+  playerId   BigInt
+  tier       String
+  author     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  player     Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@id([userId, playerId])
+  @@index([playerId])
+}
+// ---- Phase 2: Authentication + Social + Feed + Tier Lists ----
+
+model Session {
+  id        String   @id @default(cuid())
+  token     String   @unique
+  userId    String
+  expiresAt DateTime
+  ipAddress String?
+  userAgent String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model Account {
+  id              String   @id @default(cuid())
+  userId          String
+  providerId      String
+  accountId       String
+  providerType    String   @default("oauth")
+  accessToken     String?
+  refreshToken    String?
+  accessTokenExpiresAt DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope           String?
+  passwordHashed  String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([providerId, accountId])
+  @@index([userId])
+}
+
+model Follow {
+  followerId String
+  followingId String
+  createdAt   DateTime @default(now())
+  follower    User @relation("FollowFollower", fields: [followerId], references: [id], onDelete: Cascade)
+  following   User @relation("FollowFollowing", fields: [followingId], references: [id], onDelete: Cascade)
+
+  @@id([followerId, followingId])
+  @@index([followingId])
+}
+
+model Post {
+  id         String   @id @default(cuid())
+  authorId   String
+  content    String
+  mediaUrls  String[]
+  playerId   BigInt?
+  region     String?
+  country    String?
+  likesCount Int      @default(0)
+  commentsCount Int   @default(0)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  author     User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  player     Player?  @relation("PostPlayer", fields: [playerId], references: [id], onDelete: SetNull)
+  likes      PostLike[]
+  comments   Comment[]
+
+  @@index([authorId])
+  @@index([createdAt])
+  @@index([region])
+  @@index([country])
+}
+
+model PostLike {
+  postId    String
+  userId    String
+  createdAt DateTime @default(now())
+  post      Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+  user      User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([postId, userId])
+  @@index([userId])
+}
+
+model Comment {
+  id        String   @id @default(cuid())
+  postId    String
+  authorId  String
+  content   String
+  createdAt DateTime @default(now())
+  post      Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+  author    User @relation(fields: [authorId], references: [id], onDelete: Cascade)
+
+  @@index([postId])
+  @@index([authorId])
+}
+
+model TierList {
+  id          String   @id @default(cuid())
+  authorId    String
+  name        String
+  tiers       Json
+  isPublic    Boolean  @default(true)
+  submissions Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  author      User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
+
+  @@index([authorId])
+  @@index([createdAt])
+  @@index([isPublic])
+}
