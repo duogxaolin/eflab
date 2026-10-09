@@ -31,6 +31,7 @@ export const playerListInput = z.object({
   maxOvrMin: z.coerce.number().int().min(40).max(120).optional(),
   maxOvrMax: z.coerce.number().int().min(40).max(120).optional(),
   weakFoot: z.enum(["0", "1", "2", "3"]).optional(),
+  strongerFoot: z.coerce.number().int().optional(),
   nationalityId: z.coerce.number().int().optional(),
   clubId: z.coerce.number().int().optional(),
   leagueId: z.coerce.number().int().optional(),

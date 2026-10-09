@@ -350,6 +350,7 @@ export const playerRouter = router({
         (and as unknown[]).push({ maxOvr: { gte: input.maxOvrMin ?? 40, lte: input.maxOvrMax ?? 120 } });
       }
       if (input.weakFoot) (and as unknown[]).push({ weakFootAccuracy: { gte: Number(input.weakFoot) } });
+      if (input.strongerFoot !== undefined) (and as unknown[]).push({ strongerFoot: input.strongerFoot });
       if (input.nationalityId !== undefined) (and as unknown[]).push({ nationalityId: input.nationalityId });
       if (input.clubId !== undefined) (and as unknown[]).push({ featuredPackId: String(input.clubId) });
       if (input.skillId !== undefined) (and as unknown[]).push({ skills: { some: { skillId: input.skillId } } });
@@ -512,6 +513,14 @@ export const playerRouter = router({
     });
     await attachBoosters(rowsWithFlag);
     return rowsWithFlag.map(toCardDTO);
+  }),
+
+  // Return all countries for the Nationality filter
+  countries: publicProcedure.query(async () => {
+    return prisma.country.findMany({
+      select: { id: true, name: true, flagUrl: true },
+      orderBy: { name: "asc" },
+    });
   }),
 });
 
