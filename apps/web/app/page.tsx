@@ -1,11 +1,28 @@
 "use client";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { trpc } from "@/lib/trpc";
 import { PlayerCard } from "@/components/cards/PlayerCard";
 import type { CardPreview } from "@eflab/shared";
-import { Search, Star, MessageSquare, ArrowUp, CheckCircle2, ExternalLink, Link2, Play } from "lucide-react";
+import {
+  Search,
+  Sparkles,
+  Star,
+  MessageSquare,
+  ArrowUp,
+  CheckCircle2,
+  ExternalLink,
+  Link2,
+  Play,
+  X,
+} from "lucide-react";
+import {
+  CARD_TYPE_COLOR_VAR,
+  CARD_TYPE_LABEL,
+  positionOf,
+  statTierClass,
+} from "@/lib/card-display";
+import { playerCardUrl } from "@/lib/r2-images";
 
 const FEATURED_VIDEOS = [
   {
@@ -69,85 +86,289 @@ const COMMUNITY_COMMENTS = [
 export default function HomePage() {
   const router = useRouter();
   const [q, setQ] = useState("");
+  const [isFocused, setIsFocused] = useState(false);
+  const searchRef = useRef<HTMLDivElement>(null);
 
-  // Top 18 distinct star players across Epic, Big Time, Show Time, Highlight
-  const trending = trpc.player.trending.useQuery();
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (searchRef.current && !searchRef.current.contains(event.target as Node)) {
+        setIsFocused(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
 
-  // 3 exact featured packs: Spanish League Midfielders, Piemonte BN, Netherlands
-  const featuredPacks = trpc.pack.featured.useQuery();
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        setIsFocused(false);
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  // Latest 18 players by releaseDate DESC (DISTINCT ON baseId — newest card of each player)
+  const latest = trpc.player.trending.useQuery();
+
+  // efootbase homepage "Latest Packs" — 17 curated featured bundles from
+  // specialPlayerList (dump/efootbase/packs.json). Cards pre-ordered by
+  // efootbase's `list` array, including legend spotlights at the top.
+  const featuredBundles = trpc.featured.list.useQuery();
 
   const search = trpc.player.search.useQuery(
     { q, limit: 8 },
     { enabled: q.trim().length > 0 }
   );
 
-  const trendingCards = (trending.data ?? []) as CardPreview[];
+  const latestCards = (latest.data ?? []) as CardPreview[];
   const searchResults = (search.data ?? []).slice(0, 6);
 
   const submitSearch = (e: React.FormEvent) => {
     e.preventDefault();
+    setIsFocused(false);
     if (q.trim()) router.push(`/players?q=${encodeURIComponent(q.trim())}`);
     else router.push("/players");
   };
 
   return (
     <div className="space-y-8">
-      {/* Player Search Combobox (efootbase exact style) */}
-      <form onSubmit={submitSearch} className="player-search-combobox relative w-full">
-        <div className="relative h-11 w-full">
-          <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 size-4 text-[var(--color-text-dim)] pointer-events-none" />
-          <input
-            type="text"
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder="Search players by name…"
-            aria-label="Search players"
-            className="w-full h-11 pl-10 pr-4 text-sm rounded-xl bg-[var(--color-panel)] border border-[var(--color-line)] text-white placeholder-[var(--color-text-dim)] focus:outline-none focus:border-[var(--color-accent)] transition-all shadow-sm"
-          />
-        </div>
-        {q.trim() && searchResults.length > 0 && (
-          <div className="absolute z-50 mt-1.5 w-full rounded-xl bg-[var(--color-panel)] border border-[var(--color-line)] shadow-2xl overflow-hidden">
-            {searchResults.map((p) => (
-              <button
-                key={p.id}
-                type="button"
-                onClick={() => router.push(`/players/${p.baseId}/${p.id}`)}
-                className="w-full flex items-center justify-between gap-3 px-3.5 py-2.5 hover:bg-[var(--color-elevated)] transition-colors text-left cursor-pointer"
-              >
-                <div className="truncate">
-                  <span className="font-semibold text-sm text-white">{p.name}</span>
-                  <span className="text-xs text-[var(--color-text-dim)] ml-2">{p.cardType.replace(/_/g, " ")}</span>
+      {/* ================= HERO SEARCH BANNER ================= */}
+      <section className="rounded-xl border border-[var(--color-line)] bg-[var(--color-panel)] p-5 sm:p-6 shadow-sm">
+        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6">
+          {/* Left Column: Title, Subtitle, Search Form, Quick Filters */}
+          <div className="min-w-0 flex-1">
+            {/* Meta tag */}
+            <div className="flex items-center gap-2 text-xs">
+              <span className="font-mono font-semibold uppercase tracking-wider text-[var(--color-accent)] text-[11px]">
+                eFootball™ 2027
+              </span>
+              <span className="text-[var(--color-line)]">/</span>
+              <span className="text-[var(--color-text-secondary)]">
+                48,407 Players Database
+              </span>
+            </div>
+
+            {/* Heading & Subtitle */}
+            <h1 className="mt-1.5 text-2xl font-bold tracking-tight text-white sm:text-3xl">
+              Player Database &amp; Build Simulator
+            </h1>
+            <p className="mt-1 text-xs sm:text-sm text-[var(--color-text-secondary)]">
+              Search player stats, simulate max-level progression, and discover the latest packs.
+            </p>
+
+            {/* Search Combobox Form */}
+            <div ref={searchRef} className="relative mt-4">
+              <form onSubmit={submitSearch} className="relative">
+                <div className="relative flex items-center">
+                  <Search className="absolute left-3.5 size-4 text-[var(--color-text-dim)] pointer-events-none" />
+                  <input
+                    type="text"
+                    value={q}
+                    onFocus={() => setIsFocused(true)}
+                    onChange={(e) => {
+                      setQ(e.target.value);
+                      setIsFocused(true);
+                    }}
+                    placeholder="Search players by name…"
+                    aria-label="Search players"
+                    className="h-11 w-full rounded-lg bg-[var(--color-canvas)] border border-[var(--color-line)] pl-10 pr-24 text-sm text-white placeholder-[var(--color-text-dim)] focus:outline-none focus:border-[var(--color-accent)] transition-colors"
+                  />
+
+                  {/* Right actions inside search input */}
+                  <div className="absolute right-2.5 flex items-center gap-1.5">
+                    {q && (
+                      <button
+                        type="button"
+                        onClick={() => setQ("")}
+                        className="flex size-6 items-center justify-center rounded text-[var(--color-text-dim)] hover:text-white transition-colors cursor-pointer"
+                        aria-label="Clear search"
+                      >
+                        <X className="size-3.5" />
+                      </button>
+                    )}
+                    <kbd className="hidden sm:inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono text-[var(--color-text-dim)] bg-[var(--color-panel)] border border-[var(--color-line)]">
+                      ⌘K
+                    </kbd>
+                    <button
+                      type="submit"
+                      className="px-2.5 py-1 rounded-md bg-[var(--color-accent)] text-xs font-semibold text-[var(--color-accent-foreground)] hover:brightness-110 transition-all cursor-pointer"
+                    >
+                      Search
+                    </button>
+                  </div>
                 </div>
-                <span className="font-mono text-xs font-bold text-[var(--color-accent)] shrink-0">{p.ovr} OVR</span>
-              </button>
-            ))}
+
+                {/* Autocomplete Dropdown */}
+                {isFocused && q.trim().length > 0 && (
+                  <div className="absolute left-0 right-0 top-full z-50 mt-1.5 overflow-hidden rounded-xl border border-[var(--color-line)] bg-[var(--color-panel)] shadow-2xl divide-y divide-[var(--color-line-separator)]">
+                    <div className="flex items-center justify-between px-3.5 py-1.5 text-[11px] font-mono text-[var(--color-text-dim)] bg-[var(--color-canvas)]/50">
+                      <span>{searchResults.length} players found</span>
+                      <span>Press Enter to view all</span>
+                    </div>
+
+                    {searchResults.length > 0 ? (
+                      <div className="max-h-72 overflow-y-auto divide-y divide-[var(--color-line-separator)]/60">
+                        {searchResults.map((p) => {
+                          const pos = positionOf(p.registeredPosition);
+                          return (
+                            <button
+                              key={p.id}
+                              type="button"
+                              onClick={() => {
+                                setIsFocused(false);
+                                router.push(`/players/${p.baseId}/${p.id}`);
+                              }}
+                              className="group flex w-full items-center justify-between gap-3 px-3.5 py-2 text-left hover:bg-[var(--color-elevated)] transition-colors cursor-pointer"
+                            >
+                              <div className="flex items-center gap-2.5 min-w-0">
+                                <div className="size-8 shrink-0 overflow-hidden rounded bg-[var(--color-canvas)] border border-[var(--color-line)] flex items-center justify-center">
+                                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                                  <img
+                                    src={playerCardUrl(p.id)}
+                                    alt=""
+                                    className="size-full object-contain"
+                                    onError={(e) => {
+                                      (e.target as HTMLElement).style.display = "none";
+                                    }}
+                                  />
+                                </div>
+                                <div className="min-w-0 truncate">
+                                  <div className="flex items-center gap-2">
+                                    <span className="font-semibold text-sm text-white group-hover:text-[var(--color-accent)] transition-colors truncate">
+                                      {p.name}
+                                    </span>
+                                    <span className="font-mono text-[10px] font-bold px-1 py-0.5 rounded bg-[var(--color-elevated)] border border-[var(--color-line)] text-[var(--color-text-secondary)] shrink-0">
+                                      {pos}
+                                    </span>
+                                  </div>
+                                  <div className="text-xs text-[var(--color-text-dim)] truncate mt-0.5">
+                                    <span style={{ color: CARD_TYPE_COLOR_VAR[p.cardType] }}>
+                                      {CARD_TYPE_LABEL[p.cardType] ?? p.cardType}
+                                    </span>
+                                    <span className="mx-1.5">•</span>
+                                    <span className="font-mono">Max {p.maxOvr ?? p.ovr}</span>
+                                  </div>
+                                </div>
+                              </div>
+                              <span className={`font-mono text-xs font-bold shrink-0 ${statTierClass(p.maxOvr ?? p.ovr)}`}>
+                                {p.maxOvr ?? p.ovr} OVR
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <div className="px-4 py-4 text-center text-xs text-[var(--color-text-dim)]">
+                        No players found matching &quot;{q}&quot;
+                      </div>
+                    )}
+
+                    {searchResults.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsFocused(false);
+                          router.push(`/players?q=${encodeURIComponent(q.trim())}`);
+                        }}
+                        className="flex w-full items-center justify-center py-2 text-xs font-semibold text-[var(--color-accent)] hover:bg-[var(--color-elevated)] transition-colors cursor-pointer"
+                      >
+                        View all results for &quot;{q.trim()}&quot; →
+                      </button>
+                    )}
+                  </div>
+                )}
+              </form>
+
+              {/* Quick Filters */}
+              <div className="mt-3 flex flex-wrap items-center gap-1.5 text-xs">
+                <span className="text-[var(--color-text-dim)] text-[11px] font-medium mr-1">
+                  Quick filters:
+                </span>
+                <button
+                  type="button"
+                  onClick={() => router.push("/players?cardType=EPIC")}
+                  className="px-2.5 py-1 rounded-md border border-[var(--color-line)] bg-[var(--color-canvas)] text-[var(--color-text-secondary)] hover:text-white hover:border-[var(--color-line-active)] transition-colors cursor-pointer"
+                >
+                  Epic &amp; Big Time
+                </button>
+                <button
+                  type="button"
+                  onClick={() => router.push("/players?cardType=SHOW_TIME")}
+                  className="px-2.5 py-1 rounded-md border border-[var(--color-line)] bg-[var(--color-canvas)] text-[var(--color-text-secondary)] hover:text-white hover:border-[var(--color-line-active)] transition-colors cursor-pointer"
+                >
+                  Show Time
+                </button>
+                <button
+                  type="button"
+                  onClick={() => router.push("/players?cardType=HIGHLIGHT")}
+                  className="px-2.5 py-1 rounded-md border border-[var(--color-line)] bg-[var(--color-canvas)] text-[var(--color-text-secondary)] hover:text-white hover:border-[var(--color-line-active)] transition-colors cursor-pointer"
+                >
+                  Highlight
+                </button>
+                <button
+                  type="button"
+                  onClick={() => router.push("/players?ovrMin=90")}
+                  className="px-2.5 py-1 rounded-md border border-[var(--color-line)] bg-[var(--color-canvas)] text-[var(--color-text-secondary)] hover:text-white hover:border-[var(--color-line-active)] transition-colors cursor-pointer"
+                >
+                  90+ OVR
+                </button>
+                <button
+                  type="button"
+                  onClick={() => router.push("/packs")}
+                  className="px-2.5 py-1 rounded-md border border-[var(--color-line)] bg-[var(--color-canvas)] text-[var(--color-text-secondary)] hover:text-white hover:border-[var(--color-line-active)] transition-colors cursor-pointer"
+                >
+                  Packs
+                </button>
+                <button
+                  type="button"
+                  onClick={() => router.push("/compare")}
+                  className="px-2.5 py-1 rounded-md border border-[var(--color-line)] bg-[var(--color-canvas)] text-[var(--color-text-secondary)] hover:text-white hover:border-[var(--color-line-active)] transition-colors cursor-pointer"
+                >
+                  Compare
+                </button>
+              </div>
+            </div>
           </div>
-        )}
-      </form>
+
+          {/* Right Column: Desktop Spotlight (Single Clean Aligned PlayerCard) */}
+          {latestCards[0] && (
+            <div className="hidden lg:flex flex-col items-center justify-center shrink-0 pl-6 border-l border-[var(--color-line)] min-w-[120px]">
+              <span className="text-[10px] font-mono uppercase tracking-wider text-[var(--color-text-dim)] mb-2">
+                Latest Card
+              </span>
+              <div className="w-24">
+                <PlayerCard player={latestCards[0]} size="sm" showName={true} />
+              </div>
+            </div>
+          )}
+        </div>
+      </section>
 
       {/* Main 2-Column Layout */}
       <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_320px]">
         {/* ================= LEFT MAIN COLUMN ================= */}
         <div className="min-w-0 space-y-10">
-          {/* 1. Trending Players (3 rows × 6 columns = 18 cards) */}
+          {/* 1. Latest Players (3 rows × 6 columns = 18 cards, releaseDate DESC) */}
           <section className="space-y-3">
             <h2 className="flex items-center gap-2 text-lg font-semibold text-white">
-              <Star className="size-4 text-[var(--color-text-secondary)]" />
-              <span>Trending Players</span>
+              <Sparkles className="size-4 text-[var(--color-text-secondary)]" />
+              <span>Latest Players</span>
             </h2>
 
             <div className="grid grid-cols-3 gap-3 px-1 py-2 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6">
-              {trending.isLoading
+              {latest.isLoading
                 ? [...Array(18)].map((_, i) => (
                     <div key={i} className="aspect-[240/339] rounded-md bg-[var(--color-panel)] animate-pulse" />
                   ))
-                : trendingCards.map((p) => (
+                : latestCards.map((p) => (
                     <PlayerCard key={p.id} player={p} size="full" showName />
                   ))}
             </div>
           </section>
 
-          {/* 2. Latest Packs (3 real featured packs with all cards inside) */}
+          {/* 2. Latest Packs (efootbase specialPlayerList — 17 featured bundles) */}
           <section className="space-y-3">
             <h2 className="flex items-center gap-2 text-lg font-semibold text-white">
               <Link2 className="size-4 text-[var(--color-text-secondary)]" />
@@ -155,17 +376,14 @@ export default function HomePage() {
             </h2>
 
             <div className="space-y-6">
-              {(featuredPacks.data ?? []).map((pack) => (
-                <section key={pack.id} className="space-y-2">
+              {(featuredBundles.data ?? []).map((bundle) => (
+                <section key={bundle.id} className="space-y-2">
                   <div className="flex items-center justify-between text-xs border-b border-[var(--color-line-separator)]/60 pb-2">
-                    <Link
-                      href={`/packs/${pack.id}`}
-                      className="font-semibold text-sm text-white hover:text-[var(--color-accent)] transition-colors no-underline"
-                    >
-                      {pack.name}
-                    </Link>
+                    <span className="font-semibold text-sm text-white">
+                      {bundle.name}
+                    </span>
                     <span className="font-mono text-[var(--color-text-dim)] text-[11px]">
-                      {new Date(pack.releaseDate).toLocaleDateString("en-US", {
+                      {new Date(bundle.releaseDate).toLocaleDateString("en-US", {
                         month: "short",
                         day: "numeric",
                         year: "numeric",
@@ -174,14 +392,14 @@ export default function HomePage() {
                   </div>
 
                   <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-3 px-1 py-2">
-                    {pack.cards.map((p) => (
-                      <PlayerCard key={p.id} player={p as CardPreview} size="full" showName />
+                    {bundle.cards.map((p) => (
+                      <PlayerCard key={p.id} player={p} size="full" showName />
                     ))}
                   </div>
                 </section>
               ))}
 
-              {featuredPacks.isLoading && [0, 1, 2].map((i) => (
+              {featuredBundles.isLoading && [0, 1, 2].map((i) => (
                 <div key={i} className="space-y-2">
                   <div className="h-4 w-48 rounded bg-[var(--color-panel)] animate-pulse" />
                   <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-3 px-1 py-2">
@@ -192,13 +410,6 @@ export default function HomePage() {
                 </div>
               ))}
             </div>
-
-            <Link
-              href="/packs"
-              className="button button--outline w-fit no-underline inline-flex items-center gap-1.5 rounded-lg border border-[var(--color-line)] bg-transparent px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-[var(--color-panel)] transition-colors"
-            >
-              Show all packs
-            </Link>
           </section>
         </div>
 

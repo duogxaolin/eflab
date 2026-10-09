@@ -86,6 +86,15 @@ function PlayersContent() {
   const [ovrMin, setOvrMin] = useState<number | undefined>();
   const [weakFoot, setWeakFoot] = useState<"" | "0" | "1" | "2" | "3">("");
 
+  // Default scope: chỉ special cards CÓ artwork (Epic/Big_Time/Show_Time) — match efootbase
+  // /players top 12 chỉ có 3 loại này (8 Big_Time + 3 Epic + 1 Show_Time, 0 HIGHLIGHT).
+  // HIGHLIGHT có maxOvr boosted 104-105 (cao nhất) nhưng không có frame/bg trên R2 → render
+  // gradient trần — sort maxOvr DESC sẽ đẩy HIGHLIGHT lên top, che mất card đẹp. Bỏ HIGHLIGHT
+  // khỏi scope default để /players luôn showcase card có artwork 4-layer như efootbase.
+  // Khi user chọn 1 cardType cụ thể thì scope này bị override (xem cardTypeIn bên dưới).
+  // TODO: khi thêm UI filter cardType, HIGHLIGHT có thể expose qua 1 option riêng.
+  const SPECIAL_CARD_TYPES: CardType[] = ["EPIC", "BIG_TIME", "SHOW_TIME"];
+
   // Active popover tracker: null | "position" | "style" | "foot" | "ovr" | "country" | "sort"
   const [activePopover, setActivePopover] = useState<string | null>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
@@ -113,6 +122,7 @@ function PlayersContent() {
     order,
     q: q || undefined,
     cardType: cardType || undefined,
+    cardTypeIn: cardType ? undefined : SPECIAL_CARD_TYPES,
     position: (position as never) || undefined,
     playingStyle: playingStyle ? Number(playingStyle) : undefined,
     nationalityId,

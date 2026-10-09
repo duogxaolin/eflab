@@ -90,18 +90,22 @@ def make_s3_client(account_id: str, access_key: str, secret: str):
     )
 
 
-def collect_files(prefix: Path) -> list[tuple[Path, str]]:
-    """Walk prefix dir → list of (abs_path, key). key = relpath from prefix.
+def collect_files(prefix: Path, key_prefix: str | None = None) -> list[tuple[Path, str]]:
+    """Walk prefix dir → list of (abs_path, key). key = relpath from prefix,
+    optionally prepended with `key_prefix` (use when prefix is a leaf dir and
+    you want the R2 key to retain the subdir name, e.g. prefix=.../images/managers
+    with key_prefix="managers/" → key "managers/{id}.webp").
     Skips OS junk (.DS_Store, Thumbs.db) and hidden files."""
     SKIP = {".DS_Store", "Thumbs.db", ".gitkeep"}
     files = []
+    kp = key_prefix.rstrip("/") + "/" if key_prefix else ""
     for p in sorted(prefix.rglob("*")):
         if not p.is_file():
             continue
         if p.name in SKIP or p.name.startswith("."):
             continue
         rel = p.relative_to(prefix)
-        key = str(rel).replace(os.sep, "/")
+        key = kp + str(rel).replace(os.sep, "/")
         files.append((p, key))
     return files
 
@@ -154,6 +158,7 @@ def main():
     ap = argparse.ArgumentParser(description="Upload dump/efootbase/images to Cloudflare R2")
     ap.add_argument("--env", default=".env", help="path to .env (default: .env)")
     ap.add_argument("--prefix", default="dump/efootbase/images", help="local dir to upload (default: dump/efootbase/images)")
+    ap.add_argument("--key-prefix", default=None, help="optional R2 key prefix to PREPEND to relpath (e.g. 'managers/' when prefix is a leaf dir)")
     ap.add_argument("--workers", type=int, default=32, help="upload workers (default: 32)")
     ap.add_argument("--limit", type=int, default=None, help="limit N files (test mode)")
     ap.add_argument("--dry-run", action="store_true", help="list files, no upload")
@@ -174,7 +179,7 @@ def main():
     print(f"  prefix: {prefix}")
     print(f"  workers: {args.workers}")
 
-    files = collect_files(prefix)
+    files = collect_files(prefix, key_prefix=args.key_prefix)
     total = len(files)
     if args.limit:
         files = files[:args.limit]

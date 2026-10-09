@@ -64,7 +64,7 @@ export const pagesRouter = router({
       .map((t) => ({
         id: t.id,
         name: t.name,
-        country: countryById.get(t.countryId) ?? t.name,
+        country: t.countryId != null ? (countryById.get(t.countryId) ?? t.name) : t.name,
         // Deterministic pseudo-points: stable enough for a read-only leaderboard
         // scaffold without a live scoring source. Replaced by real ranking in Phase 3.
         points: 1000 - (Math.abs(t.id) % 500) - (t.name.length * 7),

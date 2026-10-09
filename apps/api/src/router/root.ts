@@ -9,6 +9,7 @@ import { userRouter } from "./routers/user.js";
 import { tierListRouter } from "./routers/tierList.js";
 import { feedRouter } from "./routers/feed.js";
 import { pagesRouter } from "./routers/pages.js";
+import { featuredRouter } from "./routers/featured.js";
 
 export const appRouter = router({
   player: playerRouter,
@@ -21,6 +22,7 @@ export const appRouter = router({
   tierList: tierListRouter,
   feed: feedRouter,
   pages: pagesRouter,
+  featured: featuredRouter,
 });
 
 export type AppRouter = typeof appRouter;

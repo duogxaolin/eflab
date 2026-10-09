@@ -25,18 +25,10 @@ import {
   Sparkles,
 } from "lucide-react";
 
-// Booster id → label (Konami booster enum). efootball has ~7 booster types per
-// color; labels here are best-effort until we add a `booster` const in shared.
-// TODO: move to @eflab/shared const + populate from efhub SQLite booster table.
-const BOOSTER_LABELS: Record<number, string> = {
-  1: "Mid Booster (Lv1)",
-  2: "Sharp Booster (Lv2)",
-  3: "Incisive Pass (Lv3)",
-  4: "Striker Booster (Lv4)",
-  5: "Sentinel Booster (Lv5)",
-  6: "Anchor Booster (Lv6)",
-  7: "Talisman Booster (Lv7)",
-};
+// (Booster display reads the resolved `player.booster1`/`booster2` objects from
+// the API — the Booster table is seeded from the efootbase dump with real names
+// + stat magnitudes, so we render those instead of a `Booster #{id}` fallback.
+// Added 2026-10-08; the old BOOSTER_LABELS guess table (7 hardcoded ids) is gone.)
 
 // Pitch position grid (left→right, top→bottom) — 12 outfield slots + GK row.
 const PITCH_SLOTS: Position[] = ["LWF", "SS", "RWF", "LMF", "AMF", "RMF", "CMF", "DMF", "LB", "CB", "RB", "GK"];
@@ -177,9 +169,13 @@ function CompareContent() {
     { enabled: searchVal.trim().length > 0 }
   );
 
+  // Compare fires as soon as ANY card is picked (≥1) so the chosen card renders
+  // immediately — not gated on ≥2, which made single-card slots show the
+  // Add Player placeholder again and swallow the second pick. The stat matrix
+  // panel below remains gated on compareData.length >= 2. (Fix 2026-10-08.)
   const compareQ = trpc.player.compare.useQuery(
     { cardIds: selected },
-    { enabled: selected.length >= 2 }
+    { enabled: selected.length >= 1 }
   );
 
   const swapPlayers = () => {
@@ -267,7 +263,7 @@ function CompareContent() {
               return (
                 <div className="flex flex-col items-center space-y-3">
                   <div className="relative group w-48">
-                    <PlayerCard player={player} size="full" />
+                    <PlayerCard player={player} size="full" showDetails />
                     <button
                       onClick={() => removeSlot(0)}
                       className="absolute -top-2 -right-2 p-1.5 rounded-full bg-[var(--color-panel)] border border-[var(--color-line-active)] text-[var(--color-text-secondary)] hover:text-white hover:border-[var(--color-line-active)] shadow-md transition-colors"
@@ -320,7 +316,7 @@ function CompareContent() {
               return (
                 <div className="flex flex-col items-center space-y-3">
                   <div className="relative group w-48">
-                    <PlayerCard player={player} size="full" />
+                    <PlayerCard player={player} size="full" showDetails />
                     <button
                       onClick={() => removeSlot(1)}
                       className="absolute -top-2 -right-2 p-1.5 rounded-full bg-[var(--color-panel)] border border-[var(--color-line-active)] text-[var(--color-text-secondary)] hover:text-white hover:border-[var(--color-line-active)] shadow-md transition-colors"
@@ -520,25 +516,36 @@ function CompareContent() {
           </div>
           <div className="grid grid-cols-2 gap-6">
             {compareData.slice(0, 2).map((p) => {
-              const b1 = p.boosterId1 != null ? BOOSTER_LABELS[p.boosterId1] ?? `Booster #${p.boosterId1}` : null;
-              const b2 = p.boosterId2 != null ? BOOSTER_LABELS[p.boosterId2] ?? `Booster #${p.boosterId2}` : null;
+              const boosters = [p.booster1, p.booster2].filter(Boolean);
               return (
                 <div key={p.id} className="space-y-2">
                   <span className="font-bold text-[var(--color-text-primary)] text-sm truncate block">{p.name}</span>
                   <div className="flex flex-wrap gap-2">
-                    {b1 && (
-                      <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full border border-[var(--color-accent-secondary)]/30 bg-[var(--color-accent-secondary)]/10 text-[11px] font-bold text-[var(--color-accent-secondary)]">
-                        <Sparkles className="h-3 w-3" /> {b1}
-                      </span>
-                    )}
-                    {b2 && (
-                      <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full border border-amber-500/30 bg-amber-950/20 text-[11px] font-bold text-amber-400">
-                        <Sparkles className="h-3 w-3" /> {b2}
-                      </span>
-                    )}
-                    {!b1 && !b2 && (
+                    {boosters.length === 0 && (
                       <span className="text-[11px] text-[var(--color-text-dim)] italic">No boosters assigned</span>
                     )}
+                    {boosters.map((b, i) => (
+                      <div
+                        key={`b-${p.id}-${i}-${b!.id}`}
+                        className="inline-flex flex-col gap-1 px-2.5 py-1.5 rounded-xl border border-[var(--color-accent-secondary)]/30 bg-[var(--color-accent-secondary)]/10"
+                      >
+                        <span className="inline-flex items-center gap-1 text-[11px] font-bold text-[var(--color-accent-secondary)]">
+                          <Sparkles className="h-3 w-3" /> {b!.name}
+                        </span>
+                        {Object.keys(b!.stats).length > 0 && (
+                          <div className="flex flex-wrap gap-1">
+                            {Object.entries(b!.stats).map(([k, v]) => (
+                              <span
+                                key={k}
+                                className="px-1.5 py-0.5 rounded-md bg-[var(--color-accent-secondary)]/10 text-[10px] font-mono text-[var(--color-accent-secondary)]"
+                              >
+                                +{v} {statLabel(k as BaseStat)}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ))}
                   </div>
                 </div>
               );

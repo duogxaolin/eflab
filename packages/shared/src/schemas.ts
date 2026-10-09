@@ -50,9 +50,13 @@ export const playerSearchInput = z.object({
   limit: z.coerce.number().int().min(1).max(50).default(10),
 });
 
-// Comparison: 2–4 cards.
+// Comparison: 1–4 cards. (min 1, not 2: the page renders each card as soon as
+// it's picked, before the second card is selected. The stat matrix panel is
+// gated client-side on compareData.length >= 2 — schema only needs to accept
+// a single pick so the chosen card shows instead of a re-shown Add Player
+// placeholder that swallows the next addition. See notes 2026-10-08.)
 export const compareInput = z.object({
-  cardIds: z.array(bigIntString).min(2).max(4),
+  cardIds: z.array(bigIntString).min(1).max(4),
 });
 
 export const managerListInput = z.object({

@@ -53,6 +53,14 @@ Distilled design principles and interface specifications for eflab. Balances the
 - Horizontal carousel rows with scroll snap for trending collections.
 - Diverging stat delta meters for player comparison (positive green / negative red indicators).
 
+### Homepage Database Banner & Search
+- Zinc surface: Clean panel `bg-[#18181b] border border-[#28282c] rounded-xl` matching the data card density.
+- Header hierarchy: Solid crisp white header (`font-bold text-white tracking-tight`), version meta tag (`eFootball™ 2027 / 48,407 Players Database`), concise technical description.
+- Search combobox: Compact `h-11` input on canvas background with clean `Search` icon, `⌘K` badge, instant clear `✕`, and lime action button.
+- Rich autocomplete dropdown: Floating surface with mini card thumbnails, player name, position pills, card type label, and tabular mono OVR.
+- Quick filter chips: Clean text-only micro-pills (`Epic & Big Time`, `Show Time`, `Highlight`, `90+ OVR`, `Packs`, `Compare`) with no decorative emojis.
+- Desktop spotlight: Single clean, upright `PlayerCard` in a bordered slot showcasing the latest trending card.
+
 ### Skills Directory
 - Categorized by Showtime vs Classic.
 - Tri-color Type Badges: Stat boost (Amber), Outcome (Emerald), Animation (Violet).
@@ -84,6 +92,6 @@ Distilled design principles and interface specifications for eflab. Balances the
 ## Anti-Patterns (What We Deliberately Avoid)
 - NO Three.js or heavy WebGL runtimes for card display (CSS 3D transforms are lighter and more accessible).
 - NO external API calls to key-gated efootbase services.
-- NO bulky marketing hero banners on the homepage (content-first, data-first hierarchy).
+- NO AI-style landing page tropes (gradient text, neon blur auras, decorative pitch watermarks, tilted casino cards, emoji chips) — hero must stay data-first and athletic.
 - NO unnormalized snake_case data in UI components.
 - NO prices shown for card packs.

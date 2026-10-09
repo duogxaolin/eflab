@@ -268,6 +268,121 @@ export const PLAYER_TACTICS: readonly ManagerTactic[] = [
 // Booster slot count.
 export const BOOSTER_SLOT_COUNT = 2;
 
+// 32 eFootball playing styles (attacking + defensive, single enum shared by both
+// `playingStyleAttack` and `playingStyleDefense`). Numeric IDs from efootbase
+// `players_meta.json` → `playing_style.values`. eflab seeds `playingStyleAttack`
+// from efootbase `playing_style` and `playingStyleDefense` from `playing_style_2`.
+// 0 = Basic (no style) for both slots; efootbase shows "Basic" for unstyled cards.
+export const PLAYING_STYLES: Readonly<Record<number, string>> = {
+  0: "Basic",
+  1: "Goal Poacher",
+  2: "Dummy Runner",
+  3: "Fox in the Box",
+  4: "Prolific Winger",
+  5: "Classic No. 10",
+  6: "Hole Player",
+  7: "Box-to-Box",
+  8: "Anchor Man",
+  9: "The Destroyer",
+  10: "Extra Frontman",
+  11: "Attacking Full-back",
+  12: "Defensive Full-back",
+  13: "Deep-Lying Forward",
+  14: "Creative Playmaker",
+  15: "Build Up",
+  16: "Attacking GK",
+  17: "Defensive GK",
+  18: "Roaming Flank",
+  19: "Cross Specialist",
+  20: "Orchestrator",
+  21: "Full-back Finisher",
+  22: "Target Man",
+  24: "Front Line Pressure",
+  25: "Front Line Poacher",
+  26: "Attack Outlet",
+  27: "All-action Defender",
+  28: "Pass Disruptor",
+  29: "Covering Role",
+  30: "High Line Master",
+  33: "Sweeper GK",
+  35: "High Line GK",
+};
+
+/** Resolve a playing-style id to its display name, defaulting to "Basic". */
+export function playingStyleName(id: number | null | undefined): string {
+  if (id == null) return "Basic";
+  return PLAYING_STYLES[id] ?? "Basic";
+}
+
+// efootbase playing-style id → short description (from efootbase player detail page).
+// Used on the player detail page tactical box. Keys without a known description are
+// omitted (the UI falls back to just the style name). Sourced from efootbase
+// /players/{baseId}/{playerId} verbatim 2026-10-08.
+export const PLAYING_STYLE_DESCRIPTIONS: Partial<Record<string, string>> = {
+  "Classic No. 10":
+    "A traditional playmaker who operates near the penalty area, creating and finishing chances, while conserving stamina by avoiding unnecessary sprints.",
+  "Goal Poacher":
+    "A predatory striker who lurks in the penalty area, pouncing on any loose ball to score.",
+  "Dummy Runner":
+    "A forward who draws defenders away with intelligent off-the-ball runs to create space for teammates.",
+  "Fox in the Box":
+    "A penalty-box predator who waits inside the area for the slightest sniff of goal.",
+  "Prolific Winger":
+    "A wide attacker who uses pace and dribbling to beat defenders and deliver crosses or cut inside to shoot.",
+  "Hole Player":
+    "An attacking midfielder who drifts into pockets of space between the lines to receive and create.",
+  "Box-to-Box":
+    "A tireless midfielder who contributes at both ends of the pitch, supporting attacks and tracking back to defend.",
+  "Anchor Man":
+    "A defensive midfielder who shields the backline and stays deep to break up opposition attacks.",
+  "The Destroyer":
+    "An aggressive ball-winner who hunts the ball and breaks up play with tough tackling.",
+  "Extra Frontman":
+    "A defender who ventures forward to add weight to attacks, almost becoming an extra striker.",
+  "Attacking Full-back":
+    "A full-back who bombs forward to support the attack, overlapping and delivering crosses.",
+  "Defensive Full-back":
+    "A conservative full-back who prioritises defensive duties and rarely ventures forward.",
+  "Deep-Lying Forward":
+    "A forward who drops deep to link play, drawing defenders out and creating space for teammates.",
+  "Creative Playmaker":
+    "A vision-driven player who exploits openings in the defence to launch attacks and provide decisive passes.",
+  "Build Up":
+    "A defender or midfielder who orchestrates play from deep, distributing the ball to start attacks.",
+  "Roaming Flank":
+    "A wide player who drifts across the pitch to find space and influence play in multiple zones.",
+  "Cross Specialist":
+    "A wide player who specialises in delivering accurate crosses into the box.",
+  "Orchestrator":
+    "A deep-lying playmaker who controls the tempo and dictates play from midfield.",
+  "Full-back Finisher":
+    "A full-back who makes attacking runs inside to get into scoring positions.",
+  "Target Man":
+    "A tall, physical striker who holds up the ball and wins aerial duels to bring others into play.",
+  "Front Line Pressure":
+    "A forward who presses the opposition backline to force turnovers high up the pitch.",
+  "Attack Outlet":
+    "A player who provides a reliable outlet for forward passes, holding up play and bringing others in.",
+  "All-action Defender":
+    "A defender who contributes across the pitch, defending solidly and joining the attack when possible.",
+  "Pass Disruptor":
+    "Defends by actively blocking the opponent's passing lanes.",
+  "Covering Role":
+    "A defender who provides cover for teammates, sweeping up behind the defensive line.",
+  "High Line Master":
+    "A defender who plays a high line, pushing the defensive line up to compress play.",
+  "Sweeper GK":
+    "A goalkeeper who sweeps up behind the defensive line, acting as a last-man defender.",
+  "High Line GK":
+    "A goalkeeper who plays a high line, ready to sweep up behind a pushed-up defence.",
+  "Attacking GK":
+    "A goalkeeper who is proactive in starting attacks with quick distribution.",
+  "Defensive GK":
+    "A conservative goalkeeper who prioritises shot-stopping and staying on the line.",
+  "Front Line Poacher":
+    "A forward who poaches goals by lurking on the edge of the defensive line.",
+};
+
 // 11 filter dimensions for /players.
 export const PLAYER_FILTER_DIMENSIONS = [
   "cardType",

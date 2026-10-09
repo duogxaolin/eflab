@@ -364,6 +364,69 @@ body {
   line-height: 1.2;
 }
 
+/* ── Detail-card overlays (efootbase dna §10 detail render — not on grid) ──
+ * efootbase shows these 3 layers ONLY on /players/{baseId}/{playerId}:
+ *   .pcb__nation       — circle nationality flag at left-mid
+ *   .pcb__badge--max-level  — green "Max LVL NN" pill at bottom-left
+ *   .pcb__badge--max-ovr   — "MAX NN" pill at bottom-right (replaces condition
+ *                           on the detail card; grid view keeps condition only).
+ * The shape + geometry below is copied verbatim from efootbase's css (the cqw
+ * values are identical to efootbase's), so the card lines up 1:1 with the
+ * reference at any card size. Added 2026-10-08 — was the most-noticed "thiếu
+ * gì đó" diff between efootbase detail and local.
+ */
+.pcb__nation {
+  z-index: 2;
+  background: #111;
+  border: 0.833333cqw solid #fff;
+  border-radius: 9999px;
+  width: 17.5cqw;
+  height: 17.5cqw;
+  position: absolute;
+  top: 34.5833cqw;
+  left: 8.75cqw;
+  overflow: hidden;
+  transform: translate(-50%);
+  pointer-events: none;
+}
+.pcb__nation-img {
+  object-fit: cover;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.pcb__badge {
+  z-index: 3;
+  min-width: 13.3333cqw;
+  height: 13.3333cqw;
+  font-family: 'efootballSans', var(--font-pcb-sans, system-ui), sans-serif;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+  background: #262626;
+  border: 0.625cqw solid #acf41a4d;
+  border-radius: 2.5cqw;
+  justify-content: center;
+  align-items: center;
+  padding: 0.833333cqw 1.66667cqw;
+  font-size: 11.6667cqw;
+  font-weight: 500;
+  line-height: 1;
+  display: flex;
+  position: absolute;
+}
+.pcb__badge--bottom-left { bottom: 3.33333cqw; left: 3.33333cqw; }
+.pcb__badge--bottom-right { bottom: 3.33333cqw; right: 3.33333cqw; }
+.pcb__badge--top-right { top: 3.33333cqw; right: 3.33333cqw; }
+.pcb__badge--max-level {
+  color: #7dff1f;
+  transform: translateY(-0.416667cqw);
+}
+.pcb__badge--max-ovr {
+  color: #fff;
+  text-shadow: 1px 0 #000;
+  transform: translateY(-0.625cqw);
+}
+
 /* ──────────────────────────────────────────────────────────────────────────
  * efootbase Navigation & Shell
  * ────────────────────────────────────────────────────────────────────────── */

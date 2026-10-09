@@ -19,7 +19,8 @@
     "db:push": "prisma db push --schema=prisma/schema.prisma --accept-data-loss",
     "db:migrate": "prisma migrate deploy --schema=prisma/schema.prisma",
     "db:migrate:dev": "prisma migrate dev --schema=prisma/schema.prisma",
-    "db:seed": "tsx src/seed-efootbase-full.ts"
+    "db:seed": "tsx src/seed-efootbase-full.ts",
+    "db:crossfill": "tsx src/seed-efhub-crossfill.ts"
   },
   "dependencies": {
     "@eflab/config": "workspace:*",

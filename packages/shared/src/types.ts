@@ -23,6 +23,25 @@ export interface CardPreview {
   ovr: number;
   registeredPosition: number;
   condition: string;
+  /** Max achievable OVR (base card's maxOvr). Used by the detail-page card render
+   *  for the bottom-left "MAX NN" efootbase badge (efootbase dna §10 detail).
+   *  Optional on CardPreview because some lightweight producers (featured bundle
+   *  cards, pack cards, skill listings) don't select it — PlayerCardDTO always
+   *  carries it. Added 2026-10-08 (was PlayerCardDTO-only — the detail-card
+   *  render was missing efootbase's MAX badges). */
+  maxOvr?: number;
+  /** Nationality flag URL (R2) for the detail-card nation overlay. PlayerCardDTO
+   *  always carries it (joined from Country.flagUrl in the API); CardPreview
+   *  only needs it when rendered in the detail context (showDetails=true). Most
+   *  grid producers don't join Country, so optional here. */
+  flagUrl?: string | null;
+  nationalityId?: number;
+  /** Playing-style ids (numeric, see PLAYING_STYLES). When present, PlayerCard
+   *  renders the 2-line "Attack: X / Defence: Y" label under the card name
+   *  (matches efootbase grid/list cards). Optional — lightweight producers that
+   *  don't select these just omit the label. Added 2026-10-09. */
+  playingStyleAttack?: number;
+  playingStyleDefense?: number;
 }
 
 export interface PlayerCardDTO extends CardPreview {
@@ -31,7 +50,6 @@ export interface PlayerCardDTO extends CardPreview {
   chineseName: string | null;
   shirt: string | null;
   shirtNational: string | null;
-  nationalityId: number;
   country2Id: number | null;
   height: number;
   weight: number;
@@ -79,17 +97,43 @@ export interface PlayerCardDTO extends CardPreview {
   // booster ids
   boosterId1: number | null;
   boosterId2: number | null;
+  // resolved booster objects (joined from Booster table by boosterId1/2). When the
+  // API batch-attaches these, the detail page + compare render the real name +
+  // stat magnitudes instead of "Booster #199". Added 2026-10-08 — dump has 359
+  // booster IDs not in fixtures/boosters.json; seeder Phase 1c upserts them.
+  booster1: BoosterDTO | null;
+  booster2: BoosterDTO | null;
   // relations
-  otherVersions: Array<{ id: string; cardType: CardType; ovr: number; maxOvr: number }>;
+  otherVersions: Array<{
+    id: string;
+    cardType: CardType;
+    ovr: number;
+    maxOvr: number;
+    /** registeredPosition — needed to render the position badge under each
+     *  version in the "Other versions of <player>" carousel. Added 2026-10-08
+     *  (was just {id,cardType,ovr,maxOvr} which forced a fallback position). */
+    registeredPosition: number;
+  }>;
   pack: { id: string; name: string } | null;
   // community tier (aggregated)
   communityTier: string | null;
-  // R2 image URLs (populated from Country.flagUrl / Team.emblemUrl via seed-efootbase-full.ts).
-  // When present, the client renders these instead of constructing efimg URLs from IDs.
-  // efootbase uses SHA256 hash filenames → not ID-derivable → must come from DB.
-  flagUrl: string | null;
+  // R2 image URLs (populated from Country.flagUrl / Team.emblemUrl / League.emblemUrl
+  // via seed-efootbase-full.ts). When present, the client renders these instead of
+  // constructing efimg URLs from IDs. efootbase uses SHA256 hash filenames → not
+  // ID-derivable → must come from DB.
+  // (flagUrl is inherited from CardPreview — that's where the nation overlay on
+  //  detail cards pulls it from. teamEmblemUrl stays here since the CardPreview
+  //  lightweight card list doesn't need a club emblem.)
   teamEmblemUrl: string | null;
+  // Display-name overlays (joined Team/Country/League in the API procedure).
+  // Added 2026-10-08 so the player detail page can show the player's actual
+  // club, nationality, and league without hardcoding Messi/FC Barcelona.
+  countryName: string | null;
+  teamName: string | null;
+  leagueName: string | null;
+  leagueEmblemUrl: string | null;
 }
+
 
 export interface ManagerDTO {
   id: string;
@@ -118,6 +162,17 @@ export interface SkillDTO {
   name: string;
   description: string;
   category: string;
+}
+
+/** Resolved booster (joined by boosterId1/boosterId2 from the Booster table).
+ *  `stats` carries only the bumped stats (sparse), matching the efootbase dump
+ *  shape so the UI can render "+4 Low Pass · +4 Loft Pass" pills. */
+export interface BoosterDTO {
+  id: number;
+  name: string;
+  magnitude: number;
+  tier: string;
+  stats: Partial<Record<BaseStat, number>>;
 }
 
 export type SortDirection = "asc" | "desc";
@@ -260,6 +315,19 @@ export interface NewPlayerPackDTO {
   type: string;
   playerCount: number;
   players: Array<{ id: string; baseId: string; name: string; cardType: string; ovr: number; maxOvr: number; registeredPosition: number; condition: string }>;
+}
+
+/** efootbase homepage "Latest Packs" featured bundle (specialPlayerList entry).
+ *  Cards are pre-ordered by `ordinal` (efootbase's exact display order — note
+ *  this includes legend spotlights pulled from other packs, so OVR is not
+ *  monotonic). `releaseDate` comes from efootbase's `time` field. */
+export interface FeaturedBundleDTO {
+  id: number;
+  name: string;
+  slug: string;
+  releaseDate: string;
+  position: number;
+  cards: CardPreview[];
 }
 
 export interface LeaderboardTeamDTO {

@@ -54,6 +54,7 @@ model Player {
   playingStyleDefense Int   @default(0)
   cardType       CardType
   featuredPackId String?
+  dreamTeam      Boolean  @default(false) // efootbase dream_team flag (icon/legend card)
   ovr            Int
   maxOvr         Int
   condition      String   @default("B")
@@ -68,8 +69,20 @@ model Player {
   variation      Int      @default(0)
   stars          Int      @default(0)
   marketValue    Int      @default(0)
+  // cross-filled from eFHUB SQLite (efootbase API doesn't expose these; see
+  // seed-efhub-crossfill.ts). Stars = card rarity (1-5 ★); reputation = efhub
+  // rarity score (0-5, 91% covered); overallPotential = max OVR ceiling at
+  // max level (build simulator ceiling).
+  reputation        Int      @default(0)
+  overallPotential  Int      @default(0)
   boosterId1     Int?
   boosterId2     Int?
+  // team link (from efootbase team_name) — nullable since some cards have no club.
+  teamId         Int?
+  // community metrics from efootbase (views/ratings are efootbase community, not eflab's own).
+  views          Int      @default(0)
+  ratingCount    Int      @default(0)
+  avgRating      Float?
   // 26 base stats (denormalized; value 40–99)
   offensiveAwareness      Int @default(40)
   ballControl            Int @default(40)
@@ -97,6 +110,9 @@ model Player {
   gkParrying             Int @default(40)
   gkReflexes             Int @default(40)
   gkReach                Int @default(40)
+  gkClearing             Int @default(40)
+  // ↑ 6th GK stat (cross-filled from eFHUB — efootbase API only exposes 5 GK
+  // stats; efhub SQLite has GKClearing for 100% of players).
   // 26 max stats (MAX + base stat name)
   maxOffensiveAwareness      Int @default(40)
   maxBallControl            Int @default(40)
@@ -124,6 +140,7 @@ model Player {
   maxGkParrying             Int @default(40)
   maxGkReflexes             Int @default(40)
   maxGkReach                Int @default(40)
+  maxGkClearing             Int @default(40) // 6th GK stat (eFHUB cross-fill)
   // 13 position aptitudes (0=registered,1=secondary,2=none)
   posGK  Int @default(2)
   posCB  Int @default(2)
@@ -191,10 +208,13 @@ model Player {
   builds       Build[]
   reviews      Review[]
   tierVotes    TierVote[]
+  team         Team?    @relation(fields: [teamId], references: [id])
   // Phase 2 reverse relation — posts sharing this card into the feed.
   posts        Post[]    @relation("PostPlayer")
   // community tier aggregate (cached)
   communityTier String?
+  // efootbase homepage featured bundles (specialPlayerList) — ordered card spots.
+  featuredBundleCards FeaturedBundleCard[]
 
   @@index([baseId])
   @@index([cardType])
@@ -203,6 +223,7 @@ model Player {
   @@index([name])
   @@index([nationalityId, registeredPosition])
   @@index([ovr, cardType])
+  @@index([teamId])
   // Phase 2 composite indexes for the top filter+sort combos (full-data-seed spec).
   // Postgres btree indexes are usable for both ASC and DESC scans.
   @@index([cardType, ovr])
@@ -210,7 +231,10 @@ model Player {
   @@index([nationalityId, ovr])
 }
 
-// ---- Manager (1,844) ----
+// ---- Manager (efootbase APK bundles 65; efhub latestManagers.json tracks new releases) ----
+// efootbase managers.json has only: id, name, rating, booster_1, booster_2, image.
+// Other fields (tactic ratings, age, country) default to 0 — not present in efootbase source
+// (those come from efhub Firebase, which is client-gated; left as schema placeholder).
 
 model Manager {
   id            BigInt   @id
@@ -223,46 +247,60 @@ model Manager {
   adaptability  Int      @default(0)
   affinity      Int      @default(0)
   marketValue   Int      @default(0)
-  // 6 tactic ratings (0–99)
+  rating        Int      @default(0)
+  imageUrl      String?
+  // 6 tactic ratings (0–99) — efootbase does not expose; default 0.
   possessionGame    Int @default(0)
   quickCounter      Int @default(0)
   longBallCounter   Int @default(0)
   outWide           Int @default(0)
   longBall          Int @default(0)
   overload          Int @default(0)
-  // boost slots (ref into Booster)
+  // boost slots (booster_1/booster_2 from efootbase = stat key slug, not Booster.id)
   boostId1 Int?
   boostId2 Int?
+  booster1Stat String?
+  booster2Stat String?
   // relations
   builds Build[]
 
   @@index([name])
 }
 
-// ---- Booster (Boost table) ----
+// ---- Booster (efootbase APK efootball_boosters.json: standard + basic tiers) ----
+// efootbase bundles boosters with a fixed 27-element `bonus[]` array (statKeys order).
+// `tier` ∈ {"standard","basic"}: standard = unique named (BLUE LOCK, Bearer of Fate, Total
+// Package); basic = +1 selectable boosters (ids 0-29). Scaled +2/+3/+4/+5 of standard names
+// are derived at runtime by the client (not separate rows) — we store the base id only.
 
 model Booster {
   id              Int      @id
   name            String
   japName         String?
+  tier            String   @default("basic")   // "standard" | "basic"
   version         Int      @default(0)
   magnitude       Int      @default(2)
   maxMagnitude    Int      @default(4)
   color           Int      @default(0)
-  // affected stat magnitudes (sparse — only non-zero entries)
+  // affected stat magnitudes (sparse — only non-zero entries). Order matches
+  // efootbase statKeys: [offensive_awareness, ball_control, tight_possession, dribbling,
+  // low_pass, lofted_pass, finishing, set_piece_taking, curl, heading, defensive_awareness,
+  // defensive_engagement, tackling, aggression, kicking_power, speed, acceleration, balance,
+  // physical_contact, jumping, gk_awareness, gk_catching, gk_parrying, gk_reflexes, gk_reach,
+  // stamina, weak_foot_accuracy].
   offensiveAwareness      Int? @default(0)
   ballControl             Int? @default(0)
   dribbling               Int? @default(0)
   tightPossession         Int? @default(0)
   lowPass                 Int? @default(0)
-  loftedPass              Int? @default(0)
+  loftedPass             Int? @default(0)
   finishing               Int? @default(0)
   placeKicking            Int? @default(0)
   curl                    Int? @default(0)
   heading                 Int? @default(0)
   defensiveAwareness      Int? @default(0)
   defensiveEngagement     Int? @default(0)
-  ballWinning             Int? @default(0)
+  ballWinning            Int? @default(0)
   aggression              Int? @default(0)
   kickingPower            Int? @default(0)
   speed                   Int? @default(0)
@@ -277,6 +315,8 @@ model Booster {
   gkReflexes              Int? @default(0)
   gkReach                 Int? @default(0)
   weakFootAccuracy        Int? @default(0)
+
+  @@index([tier])
 }
 
 // ---- Skill (67) ----
@@ -324,13 +364,51 @@ model PackCard {
   @@id([packId, playerId])
 }
 
+// ---- FeaturedBundle (efootbase homepage "specialPlayerList") ----
+// Source: dump/efootbase/packs.json → data.specialPlayerList (17 bundles).
+// Each bundle = a homepage "Latest Packs" section: short display title (`name`),
+// release timestamp (`time` → releaseDate), and an ordered list of player cards
+// (`list` array → FeaturedBundleCard.ordinal preserves efootbase's exact display
+// order, including legend spotlights pulled from other packs). Note: this is
+// distinct from Pack/PackCard (seeded from the player `featured` field, 2.046
+// historical packs) — FeaturedBundle is efootbase's curated homepage carousel.
+
+model FeaturedBundle {
+  id          Int      @id @default(autoincrement())
+  name        String   // short display title ("Spanish League Midfielders", "Netherlands")
+  slug        String   @unique // stable id from efootbase name (for re-seed idempotency)
+  releaseDate DateTime // from efootbase `time` epoch
+  position    Int      @default(0) // index in specialPlayerList (sort tiebreaker)
+  cards       FeaturedBundleCard[]
+
+  @@index([releaseDate, position])
+}
+
+model FeaturedBundleCard {
+  bundleId Int
+  playerId BigInt
+  ordinal  Int // display order (index in efootbase `list` array)
+  bundle   FeaturedBundle @relation(fields: [bundleId], references: [id], onDelete: Cascade)
+  player   Player          @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@id([bundleId, playerId])
+  @@index([bundleId, ordinal])
+  @@index([playerId])
+}
+
 model Team {
   id        Int     @id
   name      String
-  countryId Int     @default(0)
-  leagueId  Int     @default(0)
+  countryId Int?
+  leagueId  Int?
   national  Boolean @default(false)
   emblemUrl String?
+  country   Country? @relation(fields: [countryId], references: [id], onDelete: SetNull)
+  league    League?  @relation(fields: [leagueId], references: [id], onDelete: SetNull)
+  players   Player[]
+
+  @@index([leagueId])
+  @@index([countryId])
 }
 
 model Country {
@@ -339,12 +417,17 @@ model Country {
   region    String?
   continent String?
   flagUrl   String?
+
+  teams Team[]
 }
 
 model League {
   id        Int     @id
   name      String
+  region    String?
   emblemUrl String?
+
+  teams Team[]
 }
 
 // ---- Community ----

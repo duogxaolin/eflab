@@ -5,10 +5,9 @@ import { useRouter } from "next/navigation";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import type { CardPreview } from "@eflab/shared";
 import { CARD_TYPE_COLOR_VAR, positionOf } from "@/lib/card-display";
+import { playingStyleName } from "@eflab/shared";
 import {
-  playerCardUrl,
-  cardBgUrl,
-  cardFrameUrl,
+  playerCardDynamicUrl,
   conditionUrl,
 } from "@/lib/r2-images";
 
@@ -42,6 +41,7 @@ export function PlayerCard({
   player,
   size = "full",
   showName = false,
+  showDetails = false,
   className = "",
 }: {
   player: CardPreview;
@@ -49,6 +49,14 @@ export function PlayerCard({
   /** Render the player name as a separate <a> link below the card, matching
    *  efootbase's verbatim `<a class="mt-1 block text-center text-xs ...">`. */
   showName?: boolean;
+  /** Render the 3 detail-only overlays (efootbase dna §10 /players/{id}):
+   *    .pcb__nation            — circular nationality flag (left-mid)
+   *    .pcb__badge--max-level   — "MAX LEVEL NN" pill (bottom-left, green)
+   *    .pcb__badge--max-ovr    — "MAX NN" pill (bottom-right, replaces condition)
+   *  Grid view defaults to false (matches efootbase homepage / list cards,
+   *  which render only bg + face + frame + OVR block + condition). The detail
+   *  page passes showDetails=true. Added 2026-10-08 — was the missing diff. */
+  showDetails?: boolean;
   className?: string;
 }) {
   const cardRef = useRef<HTMLDivElement>(null);
@@ -70,15 +78,11 @@ export function PlayerCard({
   const reset = useCallback(() => setTilt({ rx: 0, ry: 0, glare: 50 }), []);
 
   const pos = positionOf(player.registeredPosition);
-  const faceUrl = playerCardUrl(player.id);
-  const packHint =
-    "featuredPackId" in player && typeof player.featuredPackId === "string"
-      ? player.featuredPackId
-      : "pack" in player && player.pack && typeof player.pack === "object" && "name" in player.pack
-      ? String(player.pack.name)
-      : null;
-  const bgUrl = cardBgUrl(player.cardType, packHint);
-  const frameUrl = cardFrameUrl(player.cardType, packHint);
+  // efootbase renders the card as a single dynamic.webp (animated bg + frame
+  // baked-in). Matching efootbase 1:1: use the dynamic variant instead of the
+  // layered bg+face+frame composite. OVR block + condition + detail overlays +
+  // glare stay as markup on top.
+  const faceUrl = playerCardDynamicUrl(player.id);
   // Condition letter (DNA §12): stored as "A"–"E" or null; lowercase for URL.
   const condLetter =
     typeof player.condition === "string" &&
@@ -100,28 +104,9 @@ export function PlayerCard({
           transform: `rotateX(${tilt.rx}deg) rotateY(${tilt.ry}deg)`,
         }}
       >
-        {/* Layer 1 — background (by cardType) or gradient fallback.
-            Geometry/positioning driven by .pcb__background in globals.css. */}
-        {bgUrl ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={bgUrl}
-            alt=""
-            aria-hidden
-            loading="lazy"
-            draggable={false}
-            className="pcb__background"
-          />
-        ) : (
-          <div
-            className="pcb__background"
-            style={{
-              background: `linear-gradient(180deg, ${cardColor}33 0%, ${cardColor}11 50%, var(--color-canvas) 100%)`,
-            }}
-          />
-        )}
-
-        {/* Layer 2 — face / player photo (gradient+initial fallback on error) */}
+        {/* Face — efootbase renders a single dynamic.webp with animated bg +
+            frame baked-in. OVR block + condition + detail overlays sit on top.
+            Gradient+initial fallback on error. */}
         {faceError ? (
           <div
             className="pcb__placeholder"
@@ -147,19 +132,6 @@ export function PlayerCard({
           />
         )}
 
-        {/* Layer 3 — frame (optional, only some card types) */}
-        {frameUrl && !faceError && (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={frameUrl}
-            alt=""
-            aria-hidden
-            loading="lazy"
-            draggable={false}
-            className="pcb__frame"
-          />
-        )}
-
         {/* OVR + position block — position/typography driven by .pcb__ovr-block
             in globals.css (proportional cqw, matches efootbase geometry). */}
         {!faceError && (
@@ -170,8 +142,11 @@ export function PlayerCard({
         )}
 
         {/* Layer 4 — condition badge (optional, A–E). Wrapped in .pcb__condition
-            so the badge sits BOTTOM-right per efootbase (was top-right). */}
-        {condLetter && !faceError && (
+            so the badge sits BOTTOM-right per efootbase (was top-right).
+            NOTE: on the detail card (showDetails=true) efootbase REPLACES this
+            bottom-right slot with the "MAX OVR" badge — so the condition badge
+            is hidden when showDetails is on, and max-ovr renders below. */}
+        {condLetter && !faceError && !showDetails && (
           <div className="pcb__condition">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
@@ -183,6 +158,48 @@ export function PlayerCard({
               className="pcb__condition-img"
             />
           </div>
+        )}
+
+        {/* Detail-only overlays (efootbase dna §10 /players/{id} render):
+         *    nation flag (left-mid) + MAX LEVEL badge (bottom-left) +
+         *    MAX OVR badge (bottom-right, replacing condition). Grid cards omit
+         *    these three; the detail page passes showDetails=true. Added
+         *    2026-10-08 — these were the missing layers users noticed. */}
+        {showDetails && !faceError && (
+          <>
+            {/* Nation flag circle (left-mid). flagUrl comes from the API join
+                (Country.flagUrl, R2 SHA256 hash filename). If absent, skip the
+                overlay rather than render an empty circle. */}
+            {player.flagUrl && (
+              <div className="pcb__nation">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={player.flagUrl}
+                  alt=""
+                  aria-hidden
+                  loading="lazy"
+                  draggable={false}
+                  className="pcb__nation-img"
+                />
+              </div>
+            )}
+            {/* Max LEVEL badge — efootbase shows the player's max level number.
+                We don't store maxLevel separately in CardPreview yet, so render
+                maxOvr here as the "max" proxy (efootbase's bottom-left pill shows
+                the max-level value; on eflab the meaningful "max" number is maxOvr).
+                TODO: when CardPreview carries maxLevel, switch to "MAX LEVEL {n}". */}
+            {player.maxOvr != null && player.maxOvr > 0 && (
+              <div className="pcb__badge pcb__badge--bottom-left pcb__badge--max-level">
+                MAX {player.maxOvr}
+              </div>
+            )}
+            {/* Max OVR badge (bottom-right, replaces condition on detail). */}
+            {player.maxOvr != null && player.maxOvr > 0 && (
+              <div className="pcb__badge pcb__badge--bottom-right pcb__badge--max-ovr">
+                MAX {player.maxOvr}
+              </div>
+            )}
+          </>
         )}
 
         {/* Glare overlay (CSS 3D signature — pointer-driven, no default chrome) */}
@@ -206,6 +223,16 @@ export function PlayerCard({
   };
 
   if (showName) {
+    // efootbase grid/list card name link: name + 2 playstyle lines, all inside one <a>.
+    //   <a class="mt-1 block text-center text-xs">
+    //     <span class="sr-only">Name. </span>  ← efootbase uses sr-only for the name
+    //     <span class="flex flex-col gap-0.5 text-[11px] leading-tight">
+    //       <span> ↑icon  Attack: <style>
+    //       <span> ↓icon  Defence: <style>
+    // Both playstyle ids resolve via PLAYING_STYLES; 0/absent → "Basic".
+    const hasPlaystyle = player.playingStyleAttack != null || player.playingStyleDefense != null;
+    const atk = playingStyleName(player.playingStyleAttack);
+    const def = playingStyleName(player.playingStyleDefense);
     return (
       <div className="block">
         <div onClick={handleCardClick} className="block cursor-pointer">
@@ -213,9 +240,24 @@ export function PlayerCard({
         </div>
         <Link
           href={href}
-          className="mt-1 block text-center text-xs focus:outline-none truncate text-[var(--color-text-primary)]/80 hover:text-[var(--color-text-primary)] transition-colors"
+          className="mt-1 block text-center text-xs focus:outline-none text-[var(--color-text-primary)]/80 hover:text-[var(--color-text-primary)] transition-colors"
         >
-          {player.name}
+          <span className="block truncate">{player.name}</span>
+          {/* Playstyle badges — pill style: attack pill border red (#FF3464),
+              defence pill border cyan (#00EFFF), text white. Phân biệt bằng màu,
+              k prefix. Only rendered when the card carries playstyle ids. */}
+          {hasPlaystyle && (
+            <span className="mt-1 flex flex-col items-center gap-1 leading-tight">
+              <span className="inline-flex min-w-0 max-w-full items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium text-white truncate"
+                style={{ borderColor: "#FF346466", background: "#FF34641a" }}>
+                {atk}
+              </span>
+              <span className="inline-flex min-w-0 max-w-full items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium text-white truncate"
+                style={{ borderColor: "#00EFFF66", background: "#00EFFF1a" }}>
+                {def}
+              </span>
+            </span>
+          )}
         </Link>
       </div>
     );

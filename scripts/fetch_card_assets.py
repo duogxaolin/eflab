@@ -41,20 +41,26 @@ BACKGROUNDS = [
     "POTD_WC_26",
 ]
 
-# Frames: mix of underscored and space-separated names (URL-encode spaces).
-# Latest WC variant takes priority for each card type; plus generic single-booster.
+# Frames: only underscored filenames are valid on efootbase — the spaced
+# "(Cyan Booster)" names (e.g. "Show Time Frame (Cyan Booster)") were a wrong
+# guess in v1 of this script; efootbase returns an HTML 404 page (8054 bytes)
+# for those, which then got uploaded to R2 as garbage. Deleted from R2
+# 2026-10-07. Do NOT re-add them — verified by direct fetch + `file`.
 FRAMES = [
     "Big_Time_WC_26_Frame",
     "Big_Time_Frame_Single_Booster",
-    "Big Time Frame (Cyan Booster)",
     "Show_Time_WC_26_Frame",
-    "Show Time Frame (Cyan Booster)",
     "Epic_Frame_Single_Booster",
-    "Epic Frame (Cyan Booster)",
     "POTD_WC_26_Frame",
+    "POTW-Worldwide-Card [Booster]",
 ]
 
 CONDITIONS = ["a", "b", "c", "d", "e"]
+
+
+# efootbase chokes on bare urllib UA (404s spaced-filename frames even though
+# curl with a browser UA gets 200). Use a real browser UA.
+UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Safari/537.36"
 
 
 def fetch(url: str, out_path: str) -> bool:
@@ -63,7 +69,7 @@ def fetch(url: str, out_path: str) -> bool:
         return True
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "eflab-asset-fetch/1.0"})
+        req = urllib.request.Request(url, headers={"User-Agent": UA})
         with urllib.request.urlopen(req, timeout=30) as r:
             data = r.read()
             if r.status != 200 or not data:

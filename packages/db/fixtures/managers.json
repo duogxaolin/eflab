@@ -1,0 +1,522 @@
+[
+  {
+    "id": "17603997307931",
+    "name": "Cesc Fàbregas",
+    "rating": 89,
+    "booster_1": "lofted_pass",
+    "booster_2": "defensive_engagement",
+    "image": "17603997307931.webp"
+  },
+  {
+    "id": "17603460437385",
+    "name": "Christian Chivu",
+    "rating": 89,
+    "booster_1": "speed",
+    "booster_2": "stamina",
+    "image": "17603460437385.webp"
+  },
+  {
+    "id": "17594065092748",
+    "name": "Didier Deschamps",
+    "rating": 88,
+    "booster_1": "speed",
+    "booster_2": null,
+    "image": "17594065092748.webp"
+  },
+  {
+    "id": "17594333629521",
+    "name": "Dragan Stojkovic",
+    "rating": 88,
+    "booster_1": "kicking_power",
+    "booster_2": null,
+    "image": "17594333629521.webp"
+  },
+  {
+    "id": "17592991451474",
+    "name": "Erik ten Hag",
+    "rating": 85,
+    "booster_1": "speed",
+    "booster_2": null,
+    "image": "17592991451474.webp"
+  },
+  {
+    "id": "17599970775443",
+    "name": "Franz Beckenbauer",
+    "rating": 89,
+    "booster_1": "finishing",
+    "booster_2": "kicking_power",
+    "image": "17599970775443.webp"
+  },
+  {
+    "id": "17605607920019",
+    "name": "Franz Beckenbauer",
+    "rating": 89,
+    "booster_1": "dribbling",
+    "booster_2": "defensive_awareness",
+    "image": "17605607920019.webp"
+  },
+  {
+    "id": "17601312850052",
+    "name": "Fabio Capello",
+    "rating": 89,
+    "booster_1": "finishing",
+    "booster_2": "defensive_awareness",
+    "image": "17601312850052.webp"
+  },
+  {
+    "id": "17595944242399",
+    "name": "Frank Lampard",
+    "rating": 88,
+    "booster_1": "balance",
+    "booster_2": null,
+    "image": "17595944242399.webp"
+  },
+  {
+    "id": "17596212679870",
+    "name": "Frank Rijkaard",
+    "rating": 88,
+    "booster_1": "low_pass",
+    "booster_2": null,
+    "image": "17596212679870.webp"
+  },
+  {
+    "id": "17601581388990",
+    "name": "Frank Rijkaard",
+    "rating": 89,
+    "booster_1": "tight_possession",
+    "booster_2": "balance",
+    "image": "17601581388990.webp"
+  },
+  {
+    "id": "17597823189022",
+    "name": "Gian Piero Gasperini",
+    "rating": 88,
+    "booster_1": "physical_contact",
+    "booster_2": null,
+    "image": "17597823189022.webp"
+  },
+  {
+    "id": "17594065193592",
+    "name": "Gareth Southgate",
+    "rating": 87,
+    "booster_1": "acceleration",
+    "booster_2": null,
+    "image": "17594065193592.webp"
+  },
+  {
+    "id": "17604802510874",
+    "name": "Gennaro Gattuso",
+    "rating": 89,
+    "booster_1": "tackling",
+    "booster_2": "lofted_pass",
+    "image": "17604802510874.webp"
+  },
+  {
+    "id": "17593796657368",
+    "name": "Pep Guardiola",
+    "rating": 88,
+    "booster_1": "tight_possession",
+    "booster_2": null,
+    "image": "17593796657368.webp"
+  },
+  {
+    "id": "17601849721048",
+    "name": "Pep Guardiola",
+    "rating": 89,
+    "booster_1": "kicking_power",
+    "booster_2": "aggression",
+    "image": "17601849721048.webp"
+  },
+  {
+    "id": "17597554855616",
+    "name": "Hansi Flick",
+    "rating": 88,
+    "booster_1": "low_pass",
+    "booster_2": "speed",
+    "image": "17597554855616.webp"
+  },
+  {
+    "id": "17602386693824",
+    "name": "Hansi Flick",
+    "rating": 89,
+    "booster_1": "low_pass",
+    "booster_2": "dribbling",
+    "image": "17602386693824.webp"
+  },
+  {
+    "id": "17598360161790",
+    "name": "Johan Cruyff",
+    "rating": 89,
+    "booster_1": "tight_possession",
+    "booster_2": "jumping",
+    "image": "17598360161790.webp"
+  },
+  {
+    "id": "17597017982861",
+    "name": "José Mourinho",
+    "rating": 88,
+    "booster_1": "tackling",
+    "booster_2": null,
+    "image": "17597017982861.webp"
+  },
+  {
+    "id": "17601044514701",
+    "name": "José Mourinho",
+    "rating": 89,
+    "booster_1": "physical_contact",
+    "booster_2": "stamina",
+    "image": "17601044514701.webp"
+  },
+  {
+    "id": "17605071047055",
+    "name": "Jürgen Klopp",
+    "rating": 89,
+    "booster_1": "speed",
+    "booster_2": "aggression",
+    "image": "17605071047055.webp"
+  },
+  {
+    "id": "17594333631255",
+    "name": "Luis de la Fuente",
+    "rating": 88,
+    "booster_1": "acceleration",
+    "booster_2": null,
+    "image": "17594333631255.webp"
+  },
+  {
+    "id": "17594065194415",
+    "name": "Lionel Scaloni",
+    "rating": 87,
+    "booster_1": "low_pass",
+    "booster_2": null,
+    "image": "17594065194415.webp"
+  },
+  {
+    "id": "17599702337955",
+    "name": "Luciano Spalletti",
+    "rating": 89,
+    "booster_1": "defensive_awareness",
+    "booster_2": "stamina",
+    "image": "17599702337955.webp"
+  },
+  {
+    "id": "17602655027637",
+    "name": "Massimiliano Allegri",
+    "rating": 89,
+    "booster_1": "offensive_awareness",
+    "booster_2": "ball_control",
+    "image": "17602655027637.webp"
+  },
+  {
+    "id": "17592991452893",
+    "name": "Mikel Arteta",
+    "rating": 85,
+    "booster_1": "low_pass",
+    "booster_2": null,
+    "image": "17592991452893.webp"
+  },
+  {
+    "id": "17594870501085",
+    "name": "Mikel Arteta",
+    "rating": 88,
+    "booster_1": "acceleration",
+    "booster_2": "tight_possession",
+    "image": "17594870501085.webp"
+  },
+  {
+    "id": "17602923564765",
+    "name": "Mikel Arteta",
+    "rating": 89,
+    "booster_1": "acceleration",
+    "booster_2": "set_piece_taking",
+    "image": "17602923564765.webp"
+  },
+  {
+    "id": "17603728769159",
+    "name": "Niko Kovač",
+    "rating": 89,
+    "booster_1": "kicking_power",
+    "booster_2": "tight_possession",
+    "image": "17603728769159.webp"
+  },
+  {
+    "id": "17594073481737",
+    "name": "Olimpio Henriques",
+    "rating": 87,
+    "booster_1": "kicking_power",
+    "booster_2": null,
+    "image": "17594073481737.webp"
+  },
+  {
+    "id": "17600239209395",
+    "name": "Okan Buruk",
+    "rating": 89,
+    "booster_1": "balance",
+    "booster_2": "lofted_pass",
+    "image": "17600239209395.webp"
+  },
+  {
+    "id": "17600776082342",
+    "name": "Patrick Kluivert",
+    "rating": 89,
+    "booster_1": "low_pass",
+    "booster_2": "defensive_engagement",
+    "image": "17600776082342.webp"
+  },
+  {
+    "id": "17595407371499",
+    "name": "Patrick Vieira",
+    "rating": 88,
+    "booster_1": "tackling",
+    "booster_2": null,
+    "image": "17595407371499.webp"
+  },
+  {
+    "id": "17595675705641",
+    "name": "Paulo Fonseca",
+    "rating": 88,
+    "booster_1": "physical_contact",
+    "booster_2": "kicking_power",
+    "image": "17595675705641.webp"
+  },
+  {
+    "id": "17594065092609",
+    "name": "Roberto Martínez",
+    "rating": 88,
+    "booster_1": "physical_contact",
+    "booster_2": null,
+    "image": "17594065092609.webp"
+  },
+  {
+    "id": "17600507543553",
+    "name": "Roberto Martínez",
+    "rating": 89,
+    "booster_1": "ball_control",
+    "booster_2": "aggression",
+    "image": "17600507543553.webp"
+  },
+  {
+    "id": "17596481012062",
+    "name": "Ronald Koeman",
+    "rating": 88,
+    "booster_1": "ball_control",
+    "booster_2": "stamina",
+    "image": "17596481012062.webp"
+  },
+  {
+    "id": "17604534075742",
+    "name": "Ronald Koeman",
+    "rating": 89,
+    "booster_1": "low_pass",
+    "booster_2": "heading",
+    "image": "17604534075742.webp"
+  },
+  {
+    "id": "17596749549482",
+    "name": "Rúben Amorim",
+    "rating": 88,
+    "booster_1": "speed",
+    "booster_2": "offensive_awareness",
+    "image": "17596749549482.webp"
+  },
+  {
+    "id": "17602118258602",
+    "name": "Rúben Amorim",
+    "rating": 89,
+    "booster_1": "physical_contact",
+    "booster_2": "lofted_pass",
+    "image": "17602118258602.webp"
+  },
+  {
+    "id": "17599433801745",
+    "name": "Rudi Garcia",
+    "rating": 89,
+    "booster_1": "ball_control",
+    "booster_2": "offensive_awareness",
+    "image": "17599433801745.webp"
+  },
+  {
+    "id": "17593259887057",
+    "name": "Simone Inzaghi",
+    "rating": 85,
+    "booster_1": "stamina",
+    "booster_2": null,
+    "image": "17593259887057.webp"
+  },
+  {
+    "id": "17598091725265",
+    "name": "Simone Inzaghi",
+    "rating": 88,
+    "booster_1": "speed",
+    "booster_2": "finishing",
+    "image": "17598091725265.webp"
+  },
+  {
+    "id": "17599165366362",
+    "name": "Ståle Solbakken",
+    "rating": 89,
+    "booster_1": "heading",
+    "booster_2": "physical_contact",
+    "image": "17599165366362.webp"
+  },
+  {
+    "id": "17593259786612",
+    "name": "Stefano Pioli",
+    "rating": 85,
+    "booster_1": "tackling",
+    "booster_2": null,
+    "image": "17593259786612.webp"
+  },
+  {
+    "id": "17595138936066",
+    "name": "Steven Gerrard",
+    "rating": 88,
+    "booster_1": "dribbling",
+    "booster_2": null,
+    "image": "17595138936066.webp"
+  },
+  {
+    "id": "17593259887058",
+    "name": "Thomas Tuchel",
+    "rating": 85,
+    "booster_1": "physical_contact",
+    "booster_2": null,
+    "image": "17593259887058.webp"
+  },
+  {
+    "id": "17594065092637",
+    "name": "Vincenzo Montella",
+    "rating": 88,
+    "booster_1": "stamina",
+    "booster_2": null,
+    "image": "17594065092637.webp"
+  },
+  {
+    "id": "17597286420066",
+    "name": "Vincent Kompany",
+    "rating": 88,
+    "booster_1": "acceleration",
+    "booster_2": "kicking_power",
+    "image": "17597286420066.webp"
+  },
+  {
+    "id": "17593796759765",
+    "name": "Xabi Alonso",
+    "rating": 88,
+    "booster_1": "acceleration",
+    "booster_2": null,
+    "image": "17593796759765.webp"
+  },
+  {
+    "id": "17598897033429",
+    "name": "Xabi Alonso",
+    "rating": 88,
+    "booster_1": "acceleration",
+    "booster_2": null,
+    "image": "17598897033429.webp"
+  },
+  {
+    "id": "17605339484373",
+    "name": "Xabi Alonso",
+    "rating": 89,
+    "booster_1": "ball_control",
+    "booster_2": "finishing",
+    "image": "17605339484373.webp"
+  },
+  {
+    "id": "17592991452928",
+    "name": "Xavi",
+    "rating": 85,
+    "booster_1": "ball_control",
+    "booster_2": null,
+    "image": "17592991452928.webp"
+  },
+  {
+    "id": "17593528325190",
+    "name": "Zico",
+    "rating": 83,
+    "booster_1": "dribbling",
+    "booster_2": null,
+    "image": "17593528325190.webp"
+  },
+  {
+    "id": "17605876354558",
+    "name": "Johan Cruyff",
+    "rating": 89,
+    "booster_1": "acceleration",
+    "booster_2": "balance",
+    "image": "17605876354558.webp"
+  },
+  {
+    "id": "17606144688129",
+    "name": "Roberto Martínez",
+    "rating": 90,
+    "booster_1": "finishing",
+    "booster_2": "offensive_awareness",
+    "image": "17606144688129.webp"
+  },
+  {
+    "id": "17606413224402",
+    "name": "Thomas Tuchel",
+    "rating": 90,
+    "booster_1": "low_pass",
+    "booster_2": "stamina",
+    "image": "17606413224402.webp"
+  },
+  {
+    "id": "17606578901234",
+    "name": "Didier Deschamps",
+    "rating": 89,
+    "booster_1": "speed",
+    "booster_2": "ball_control",
+    "image": "17606578901234.webp"
+  },
+  {
+    "id": "17606647891234",
+    "name": "Vincenzo Montella",
+    "rating": 89,
+    "booster_1": "acceleration",
+    "booster_2": "tight_possession",
+    "image": "17606647891234.webp"
+  },
+  {
+    "id": "17606712345678",
+    "name": "Ronald Koeman",
+    "rating": 89,
+    "booster_1": "kicking_power",
+    "booster_2": "jumping",
+    "image": "17606712345678.webp"
+  },
+  {
+    "id": "17606834567890",
+    "name": "Julian Nagelsmann",
+    "rating": 89,
+    "booster_1": "dribbling",
+    "booster_2": "physical_contact",
+    "image": "17606834567890.webp"
+  },
+  {
+    "id": "17609097478250",
+    "name": "Antonio Conte",
+    "rating": 90,
+    "booster_1": "defensive_awareness",
+    "booster_2": "kicking_power",
+    "image": "17609097478250.webp"
+  },
+  {
+    "id": "17608292273375",
+    "name": "Frank Lampard",
+    "rating": 89,
+    "booster_1": "low_pass",
+    "booster_2": "defensive_engagement",
+    "image": "17608292273375.webp"
+  },
+  {
+    "id": "17608560707469",
+    "name": "José Mourinho",
+    "rating": 90,
+    "booster_1": "finishing",
+    "booster_2": "aggression",
+    "image": "17608560707469.webp"
+  }
+]

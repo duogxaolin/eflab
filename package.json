@@ -13,6 +13,7 @@
     "db:push": "pnpm --filter @eflab/db run db:push",
     "db:migrate": "pnpm --filter @eflab/db run db:migrate",
     "db:seed": "pnpm --filter @eflab/db run db:seed",
+    "db:crossfill": "pnpm --filter @eflab/db run db:crossfill",
     "api:dev": "pnpm --filter @eflab/api dev",
     "web:dev": "pnpm --filter @eflab/web dev",
     "clean": "turbo run clean && rm -rf node_modules apps/*/node_modules packages/*/node_modules"

@@ -1,6 +1,8 @@
 // Full seed from efootbase dump → Postgres.
 // Reads dump/efootbase/players.jsonl (48.407 players × 176 cols, efootbase schema)
-// and populates: Country, Team, Pack, Player (+ PlayerSkill + PackCard).
+// and populates: Country, League, Team, Pack, Player (+ PlayerSkill + PackCard).
+// Also seeds Manager (65) and Booster (full tier system) from the efootbase APK
+// bundled JSONs (extracted to dump/efootbase/apk-data/{managers,boosters}.json).
 // Skills (67) must already exist (db:seed:mock seeds them, or run skill-only first).
 //
 // Run:  set -a; source .env; set +a
@@ -18,8 +20,11 @@
 //   - s_* skill bools → PlayerSkill join (slug-kebab match)
 //   - p_* playstyle bools → trickster/mazingRun/...
 //   - featured (pack name) → Pack + featuredPackId + PackCard
+//   - team_name → Team + Player.teamId
+//   - league (int OID) → League (34 from /api/meta), Team.leagueId
+//   - views/avgRating/ratingCount → Player community fields
 
-import { createReadStream } from "node:fs";
+import { createReadStream, readFileSync, existsSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
@@ -29,6 +34,10 @@ import type { CardType, Prisma } from "./generated/client.js";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const JSONL_PATH = process.env.EFOOTBASE_DUMP_PATH
   ?? resolve(__dirname, "../../../dump/efootbase/players.jsonl");
+
+// efootbase /api/packs dump → specialPlayerList (17 homepage featured bundles) + packs.
+const PACKS_PATH = process.env.EFOOTBASE_PACKS_PATH
+  ?? resolve(__dirname, "../../../dump/efootbase/packs.json");
 
 const R2_BASE = process.env.R2_PUBLIC_BASE
   ?? process.env.NEXT_PUBLIC_R2_PUBLIC_BASE
@@ -52,6 +61,7 @@ interface EfbRow {
   age?: number;
   foot?: number;
   playing_style?: number;
+  playing_style_2?: number;
   card_type?: number;
   featured?: string | null;
   overall_rating?: number;
@@ -64,6 +74,17 @@ interface EfbRow {
   max_level?: number;
   booster_id?: number | null;
   booster2_id?: number | null;
+  // efootbase nests the full booster object inline (with name/add/stats). Used by
+  // Phase 1c to seed the Booster table from the dump (cards reference IDs that
+  // don't exist in fixtures/boosters.json — see notes 2026-10-08).
+  booster?: { name?: string; add?: number; stats?: Record<string, number> } | null;
+  booster2?: { name?: string; add?: number; stats?: Record<string, number> } | null;
+  league?: number;
+  shirt_number?: number;
+  dream_team?: number; // 1 = dream team (icon) card, 0 = normal
+  views?: number;
+  ratingCount?: number;
+  avgRating?: number;
   emblem_images?: {
     nationality?: string | null;
     league?: string | null;
@@ -137,7 +158,9 @@ const STAT_MAP: Record<string, string> = {
   balance: "balance",
   stamina: "stamina",
   defensive_awareness: "defensiveAwareness",
-  ball_winning: "ballWinning",
+  // efootbase names this stat `tackling` (NOT `ball_winning` — that key never
+  // appears in the dump). max_attributes also uses `tackling`, aliased below.
+  tackling: "ballWinning",
   defensive_engagement: "defensiveEngagement",
   aggression: "aggression",
   gk_awareness: "gkAwareness",
@@ -147,11 +170,14 @@ const STAT_MAP: Record<string, string> = {
   gk_reach: "gkReach",
 };
 
-// max_attributes uses different aliases for 3 stats
+// max_attributes uses different aliases for 3 stats (jump→jumping,
+// place_kicking→set_piece_taking, ballWinning→tackling). STAT_MAP already maps
+// `jumping` is NOT a base key (base uses `jump`), so only these overrides land.
 const MAX_STAT_MAP: Record<string, string> = {
   ...STAT_MAP,
   jumping: "maxJump",
   set_piece_taking: "maxPlaceKicking",
+  // STAT_MAP already has tackling→ballWinning; override to the max column.
   tackling: "maxBallWinning",
 };
 // Strip the non-max key duplicates (jump/place_kicking/ball_winning already in STAT_MAP
@@ -169,6 +195,18 @@ const PHYSIQUE_MAP: Record<string, string> = {
   thigh_size: "thighSize",
   calf_size: "calfSize",
   leg_length: "legLength",
+};
+
+// Derived body-model floats (efootbase "Body Model" detail panel). efootbase dump
+// exposes these directly; before 2026-10-08 they defaulted to 0 and the detail page
+// showed wrong jump/arm/torso measurements.peakJumpHeight maps from `jump_height`
+// (efootbase name) — not a Konami "max jump", it's the body-model derived float.
+const DERIVED_MAP: Record<string, string> = {
+  leg_coverage_radius: "legCoverage",
+  arm_coverage_radius: "armCoverage",
+  jump_height: "peakJumpHeight",
+  torso_collision: "torsoCollisionWidth",
+  dribble_height: "dribbleHeight",
 };
 
 const PLAYSTYLE_MAP: Record<string, string> = {
@@ -261,8 +299,11 @@ async function main(): Promise<void> {
   console.log("phase 1: scanning dump to build maps (Country/Team/Pack)…");
   const rows: EfbRow[] = [];
   const nationalityName = new Map<string, { hash: string | null }>();
-  const teamName = new Map<string, { hash: string | null; nationality: string | null }>();
+  const teamName = new Map<string, { hash: string | null; nationality: string | null; league: number | null }>();
+  const leagueEmblemHash = new Map<number, string>();
   const featuredPack = new Map<string, { time: number; type: string }>();
+  // booster id → inline booster object from dump (Phase 1c seeds these).
+  const boosterDump = new Map<number, { name?: string; add?: number; stats?: Record<string, number> }>();
 
   const rl0 = createInterface({ input: createReadStream(JSONL_PATH), crlfDelay: Infinity });
   for await (const line of rl0) {
@@ -280,7 +321,14 @@ async function main(): Promise<void> {
       teamName.set(r.team_name, {
         hash: basename(r.emblem_images?.team ?? null),
         nationality: r.nationality ?? null,
+        league: r.league ?? null,
       });
+    }
+    // collect league OID → emblem hash (first occurrence per league).
+    const lid = r.league;
+    if (lid != null && !leagueEmblemHash.has(lid)) {
+      const h = basename(r.emblem_images?.league ?? null);
+      if (h) leagueEmblemHash.set(lid, h);
     }
     const feat = r.featured ?? null;
     if (feat && feat !== "none" && !featuredPack.has(feat)) {
@@ -290,11 +338,19 @@ async function main(): Promise<void> {
         type: isSpecial ? "special_list" : "pack",
       });
     }
+    // Collect distinct booster objects by ID (cards reference IDs that don't
+    // exist in fixtures/boosters.json — dumped inline here). Phase 1c upserts
+    // them into the Booster table so the player detail + compare pages can
+    // render the real name + stat magnitudes instead of "Booster #{id}".
+    for (const [bid, bobj] of [[r.booster_id, r.booster], [r.booster2_id, r.booster2]] as Array<[number | null | undefined, { name?: string; add?: number; stats?: Record<string, number> } | null | undefined]>) {
+      if (bid == null || bobj == null) continue;
+      if (!boosterDump.has(bid)) boosterDump.set(bid, bobj);
+    }
   }
-  console.log(`  rows: ${rows.length} | countries: ${nationalityName.size} | teams: ${teamName.size} | packs: ${featuredPack.size}`);
+  console.log(`  rows: ${rows.length} | countries: ${nationalityName.size} | teams: ${teamName.size} | leagues: ${leagueEmblemHash.size} | packs: ${featuredPack.size} | boosters: ${boosterDump.size}`);
 
-  // ── Phase 1b: wipe + upsert Country / Team / Pack ────────────────────
-  console.log("phase 1b: wipe community/cascade-safe tables + upsert Country/Team/Pack…");
+  // ── Phase 1b: wipe + upsert Country / League / Team / Pack / Manager / Booster ──
+  console.log("phase 1b: wipe community/cascade-safe tables + upsert Country/League/Team/Pack/Manager/Booster…");
   // Wipe only the data we own; keep User/Session/Skill (skills seeded separately).
   await prisma.$transaction([
     prisma.tierVote.deleteMany({}),
@@ -305,8 +361,32 @@ async function main(): Promise<void> {
     prisma.pack.deleteMany({}),
     prisma.player.deleteMany({}),
     prisma.team.deleteMany({}),
+    prisma.league.deleteMany({}),
     prisma.country.deleteMany({}),
+    prisma.booster.deleteMany({}),
+    prisma.manager.deleteMany({}),
+    prisma.featuredBundleCard.deleteMany({}),
+    prisma.featuredBundle.deleteMany({}),
   ]);
+
+  // League: seed 34 leagues from fixtures/leagues.json (from /api/meta) + R2 emblem.
+  const leaguesFixture = JSON.parse(
+    readFileSync(resolve(__dirname, "../fixtures/leagues.json"), "utf-8"),
+  ) as { leagues: Record<string, { name: string; region: string }> };
+  await prisma.league.createMany({
+    data: Object.entries(leaguesFixture.leagues).map(([oid, info]) => {
+      const id = Number(oid);
+      const hash = leagueEmblemHash.get(id);
+      return {
+        id,
+        name: info.name,
+        region: info.region,
+        emblemUrl: hash ? `${R2_BASE}/emblems/league/${hash}` : null,
+      };
+    }),
+    skipDuplicates: true,
+  });
+  console.log(`  leagues upserted: ${Object.keys(leaguesFixture.leagues).length}`);
 
   // Country: assign sequential ids starting at 1 (efootbase has no numeric id).
   let countryId = 0;
@@ -333,11 +413,13 @@ async function main(): Promise<void> {
     teamNameToId.set(name, teamId);
   }
   await prisma.team.createMany({
-    data: [...teamName.entries()].map(([name, { hash, nationality }], i) => ({
+    data: [...teamName.entries()].map(([name, { hash, nationality, league }], i) => ({
       id: i + 1,
       name,
       national: nationality != null && nationality === name,
       emblemUrl: hash ? `${R2_BASE}/emblems/team/${hash}` : null,
+      countryId: nationality ? (countryNameToId.get(nationality) ?? null) : null,
+      leagueId: league ?? null,
     })),
     skipDuplicates: true,
   });
@@ -361,6 +443,134 @@ async function main(): Promise<void> {
     await prisma.pack.createMany({ data: packRows, skipDuplicates: true });
   }
   console.log(`  packs upserted: ${packRows.length}`);
+
+  // Manager: seed 65 from efootbase APK bundled managers.json (committed as fixture).
+  const managersPath = resolve(__dirname, "../fixtures/managers.json");
+  if (existsSync(managersPath)) {
+    const managers = JSON.parse(readFileSync(managersPath, "utf-8")) as Array<{
+      id: string; name: string; rating?: number;
+      booster_1?: string; booster_2?: string; image?: string;
+    }>;
+    await prisma.manager.createMany({
+      data: managers.map((m) => ({
+        id: BigInt(m.id),
+        name: m.name,
+        rating: m.rating ?? 0,
+        booster1Stat: m.booster_1 ?? null,
+        booster2Stat: m.booster_2 ?? null,
+        imageUrl: m.image ? `${R2_BASE}/managers/${m.image}` : null,
+      })),
+      skipDuplicates: true,
+    });
+    console.log(`  managers upserted: ${managers.length}`);
+  } else {
+    console.log("  ⚠ fixtures/managers.json missing — skipping Manager seed");
+  }
+
+  // Booster: seed standard (21) + basic (30) from efootbase APK boosters.json (committed as fixture).
+  // Map the 27-element `bonus[]` array (statKeys order) → sparse stat columns.
+  const boostersPath = resolve(__dirname, "../fixtures/boosters.json");
+  if (existsSync(boostersPath)) {
+    const bdef = JSON.parse(readFileSync(boostersPath, "utf-8")) as {
+      standard: Array<{ id: number; nameEn: string; nameJa?: string; bonus: number[] }>;
+      basic: Array<{ id: number; nameEn: string; nameJa?: string; bonus: number[] }>;
+    };
+    // statKeys order → Prisma column (snake_case → camelCase, efootbase aliases normalized).
+    const boosterStatColumns = [
+      "offensiveAwareness","ballControl","tightPossession","dribbling","lowPass","loftedPass",
+      "finishing","placeKicking","curl","heading","defensiveAwareness","defensiveEngagement",
+      "ballWinning","aggression","kickingPower","speed","acceleration","balance",
+      "physicalContact","jump","gkAwareness","gkCatching","gkParrying","gkReflexes","gkReach",
+      "stamina","weakFootAccuracy",
+    ] as const;
+    const boosterRows: Prisma.BoosterUncheckedCreateInput[] = [];
+    for (const tier of ["standard", "basic"] as const) {
+      for (const b of bdef[tier]) {
+        const entry: Prisma.BoosterUncheckedCreateInput = {
+          id: b.id,
+          name: b.nameEn,
+          japName: b.nameJa ?? null,
+          tier,
+          magnitude: b.nameEn.includes("+1") ? 1 : b.nameEn.includes("+2") ? 2
+            : b.nameEn.includes("+3") ? 3 : b.nameEn.includes("+4") ? 4 : 0,
+        };
+        // Spread bonus array → stat columns (only non-zero stored; defaults are 0).
+        for (let i = 0; i < boosterStatColumns.length && i < b.bonus.length; i++) {
+          const v = b.bonus[i]!;
+          if (v !== 0) (entry as Record<string, unknown>)[boosterStatColumns[i]!] = v;
+        }
+        boosterRows.push(entry);
+      }
+    }
+    await prisma.booster.createMany({ data: boosterRows, skipDuplicates: true });
+    console.log(`  boosters upserted: ${boosterRows.length} (standard ${bdef.standard.length} + basic ${bdef.basic.length})`);
+  } else {
+    console.log("  ⚠ fixtures/boosters.json missing — skipping Booster seed");
+  }
+
+  // ── Phase 1c: upsert Booster rows from the dump (inline booster objects).
+  // Cards reference boosterId1/2 IDs that are NOT in fixtures/boosters.json
+  // (dump uses ids 12–516 + 112 distinct formulas; fixtures only 0–29). Without
+  // this the UI shows "Booster #199". The dump's name is generic ("Booster +N"),
+  // so we synthesize a readable stat-suffix name from the bumped stats. Upsert
+  // so fixtures' prettier names ("Accuracy +1", "Aerial +1"…) win on id overlap.
+  if (boosterDump.size > 0) {
+    const boosterStatCols = [
+      "offensiveAwareness","ballControl","tightPossession","dribbling","lowPass","loftedPass",
+      "finishing","placeKicking","curl","heading","defensiveAwareness","defensiveEngagement",
+      "ballWinning","aggression","kickingPower","speed","acceleration","balance",
+      "physicalContact","jump","gkAwareness","gkCatching","gkParrying","gkReflexes","gkReach",
+      "stamina","weakFootAccuracy",
+    ] as const;
+    // human-readable stat labels for the synthesized booster name.
+    const statLabel: Record<string, string> = {
+      offensive_awareness: "OAware", ball_control: "BControl", dribbling: "Dribble",
+      tight_possession: "TightPoss", low_pass: "LowPass", lofted_pass: "LoftPass",
+      finishing: "Finish", place_kicking: "SetPiece", curl: "Curl", heading: "Heading",
+      defensive_awareness: "DAware", defensive_engagement: "DEngage", tackling: "Tackle",
+      aggression: "Aggression", kicking_power: "KickPow", speed: "Speed",
+      acceleration: "Accel", balance: "Balance", physical_contact: "PhysCont",
+      jump: "Jump", stamina: "Stamina", gk_awareness: "GKAware", gk_catching: "GKCatch",
+      gk_parrying: "GKParry", gk_reflexes: "GKReflex", gk_reach: "GKReach",
+      weak_foot_accuracy: "WeakFoot",
+    };
+    let dumpBoosterCount = 0;
+    for (const [bid, bobj] of boosterDump) {
+      const add = bobj.add ?? 0;
+      const stats = bobj.stats ?? {};
+      const statEntries = Object.entries(stats)
+        .filter(([, v]) => (v as number) !== 0)
+        .sort((a, b) => (b[1] as number) - (a[1] as number));
+      // synthesize readable name: "Booster +3 · Finish, KickPow, LowPass"
+      // (omit the suffix entirely when the booster has no bumped stats — some
+      // dump entries are "+1 magnitude, no specific stat", so render just
+      // "Booster +1" rather than the ugly "Booster +1 · ".)
+      const statNames = statEntries
+        .map(([k]) => statLabel[k] ?? k)
+        .slice(0, 4)
+        .join(", ");
+      const prettyName = statNames ? `Booster +${add} · ${statNames}` : `Booster +${add}`;
+      const entry: Prisma.BoosterUncheckedCreateInput = {
+        id: bid,
+        name: prettyName,
+        tier: "standard",
+        magnitude: add,
+      };
+      for (const [snakeKey, v] of statEntries) {
+        const col = STAT_MAP[snakeKey] ?? (snakeKey === "weak_foot_accuracy" ? "weakFootAccuracy" : null);
+        if (col && boosterStatCols.includes(col as typeof boosterStatCols[number])) {
+          (entry as Record<string, unknown>)[col] = v as number;
+        }
+      }
+      await prisma.booster.upsert({
+        where: { id: bid },
+        create: entry,
+        update: entry, // dump ids 12–516 don't collide with fixtures; but if they do, dump wins (cards reference dump ids)
+      });
+      dumpBoosterCount++;
+    }
+    console.log(`  boosters from dump upserted: ${dumpBoosterCount} (distinct ids behind cards)`);
+  }
 
   // ── Phase 2: stream upsert Player + PlayerSkill + PackCard ──────────
   console.log(`phase 2: upserting ${rows.length} players in batches of ${BATCH_SIZE}…`);
@@ -396,6 +606,7 @@ async function main(): Promise<void> {
       const featuredPackId = r.featured && r.featured !== "none"
         ? (packNameToId.get(r.featured) ?? null)
         : null;
+      const teamId = r.team_name ? (teamNameToId.get(r.team_name) ?? null) : null;
 
       const ovr = r.overall_rating ?? 40;
       const maxOvr = r.overall_at_max_level ?? ovr;
@@ -435,6 +646,13 @@ async function main(): Promise<void> {
         physiqueData[dbKey] = (r as unknown as Record<string, number | undefined>)[efbKey] ?? 5;
       }
 
+      // Derived body-model floats (efootbase "Body Model" detail panel).
+      const derivedData: Record<string, number> = {};
+      for (const [efbKey, dbKey] of Object.entries(DERIVED_MAP)) {
+        const v = (r as unknown as Record<string, number | undefined>)[efbKey];
+        derivedData[dbKey] = v != null ? Number(v) : 0;
+      }
+
       // Playstyle flags.
       const playstyleData: Record<string, boolean> = {};
       for (const [efbKey, dbKey] of Object.entries(PLAYSTYLE_MAP)) {
@@ -448,7 +666,7 @@ async function main(): Promise<void> {
         accentedName: null,
         japName: r.name_ja ?? null,
         chineseName: r.name_zh ?? null,
-        shirt: null,
+        shirt: r.shirt_number != null ? String(r.shirt_number) : null,
         shirtNational: null,
         nationalityId,
         country2Id: null,
@@ -458,9 +676,14 @@ async function main(): Promise<void> {
         strongerFoot: r.foot ?? 0,
         registeredPosition: registeredPos,
         playingStyleAttack: r.playing_style ?? 0,
-        playingStyleDefense: 0,
+        // efootbase dump exposes the defensive playstyle as `playing_style_2`
+        // (efootbase players_meta.json "playing_style_2" — Pass Disruptor, Basic,
+        // etc.). Was hardcoded 0 which lost the defensive style shown on efootbase.
+        playingStyleDefense: r.playing_style_2 ?? 0,
         cardType: CARD_TYPE_MAP[r.card_type ?? 0] ?? "STANDARD",
         featuredPackId,
+        dreamTeam: r.dream_team === 1,
+        teamId,
         ovr,
         maxOvr,
         condition: "B",
@@ -477,11 +700,15 @@ async function main(): Promise<void> {
         marketValue: 0,
         boosterId1: r.booster_id ?? null,
         boosterId2: r.booster2_id ?? null,
+        views: r.views ?? 0,
+        ratingCount: r.ratingCount ?? 0,
+        avgRating: r.avgRating ?? null,
         ...statData,
         ...maxStatData,
         ...posData,
         ...ratingData,
         ...physiqueData,
+        ...derivedData,
         ...playstyleData,
       };
       playerCreates.push(playerCreate);
@@ -538,6 +765,70 @@ async function main(): Promise<void> {
       where: { id: pc.packId },
       data: { playerCount: pc._count.playerId },
     });
+  }
+
+  // ── Phase 4: seed FeaturedBundle from efootbase /api/packs ──────────────
+  // efootbase /packs page lists 24 bundles = 17 specialPlayerList (homepage
+  // carousel) + 7 spotlight packs (individual player/manager spotlights: "Leo
+  // Messi 2027", "Lamine Yamal 2027", "José Mourinho 11-22", …). Both arrays
+  // share the same entry shape (name + time + ordered `list` of player IDs).
+  // We seed specialPlayerList at position 0–16 then the 7 spotlights at
+  // position 17–23, so featured.list returns all 24 in efootbase /packs order.
+  if (existsSync(PACKS_PATH)) {
+    console.log("phase 4: seeding FeaturedBundle from specialPlayerList + spotlights…");
+    const packsDump = JSON.parse(readFileSync(PACKS_PATH, "utf-8")) as {
+      data: {
+        specialPlayerList: Array<{ name: string; time: number; list: number[] }>;
+        packs: Array<{ name: string; time: number; list: number[] }>;
+      };
+    };
+    const spl = packsDump.data?.specialPlayerList ?? [];
+    const spotlights = packsDump.data?.packs ?? [];
+    // Build a Set of all player ids in the dump for existence filtering.
+    const playerIdSet = new Set(rows.map((r) => (r.id != null ? String(r.id) : "")));
+
+    let bundleCount = 0;
+    let bundleCardCount = 0;
+    // Iterate both arrays in order; spotlights use a `spotlight-` slug prefix
+    // so they can't collide with a same-named specialPlayerList bundle.
+    type Entry = { name: string; time: number; list: number[]; slugPrefix: "" | "spotlight-" };
+    const entries: Entry[] = [
+      ...spl.map((s) => ({ name: s.name, time: s.time, list: s.list, slugPrefix: "" as const })),
+      ...spotlights.map((s) => ({ name: s.name, time: s.time, list: s.list, slugPrefix: "spotlight-" as const })),
+    ];
+    for (let i = 0; i < entries.length; i++) {
+      const s = entries[i]!;
+      const slug = s.slugPrefix + slugify(s.name);
+      const releaseDate = s.time > 0 ? new Date(s.time * 1000) : new Date();
+      // Use upsert on slug so re-runs stay idempotent (slug is @unique).
+      const bundle = await prisma.featuredBundle.upsert({
+        where: { slug },
+        create: { name: s.name, slug, releaseDate, position: i },
+        update: { name: s.name, releaseDate, position: i },
+      });
+      bundleCount++;
+
+      // Cards in efootbase `list` order; ordinal preserves that exact order.
+      // Skip any player id not present in players.jsonl (defensive — efootbase
+      // sometimes lists ids that the players endpoint omits).
+      const cardRows: { bundleId: number; playerId: bigint; ordinal: number }[] = [];
+      for (let j = 0; j < s.list.length; j++) {
+        const pid = s.list[j];
+        if (pid == null) continue;
+        if (!playerIdSet.has(String(pid))) continue;
+        cardRows.push({ bundleId: bundle.id, playerId: BigInt(pid), ordinal: j });
+      }
+      if (cardRows.length > 0) {
+        await prisma.featuredBundleCard.createMany({
+          data: cardRows,
+          skipDuplicates: true,
+        });
+        bundleCardCount += cardRows.length;
+      }
+    }
+    console.log(`  featuredBundles upserted: ${bundleCount} (${spl.length} featured + ${spotlights.length} spotlights) | cards: ${bundleCardCount}`);
+  } else {
+    console.log("  ⚠ dump/efootbase/packs.json missing — skipping FeaturedBundle seed");
   }
 
   console.log(`\nseed-efootbase-full: done in ${(Date.now() - t0) / 1000 | 0}s`);

@@ -1,6 +1,10 @@
 // Shared helpers for the web app: card-tier styling, position mapping, stat colors.
-import type { CardType, Position, BaseStat } from "@eflab/shared";
-import { POSITIONS } from "@eflab/shared";
+import type { CardType, Position, BaseStat, PhysiqueField } from "@eflab/shared";
+import {
+  POSITIONS,
+  PLAYING_STYLES,
+  PHYSIQUE_FIELDS,
+} from "@eflab/shared";
 export const CARD_TYPE_LABEL: Record<CardType, string> = {
   STANDARD: "Standard",
   TRENDING: "Trending",
@@ -85,3 +89,60 @@ export const STRENGTH_STATS: BaseStat[] = [
 
 // Position aptitude: 0=full, 1=partial, 2=none.
 export type Aptitude = 0 | 1 | 2;
+
+// Playing-style id → display name (single shared enum for attack + defence;
+// 0 = Basic).
+export function playingStyleLabel(id: number | null | undefined): string {
+  if (id == null) return "Basic";
+  return PLAYING_STYLES[id] ?? "Basic";
+}
+
+// eFootball condition letter → human label. A = Top Form, B = Good Form,
+// C = Normal, D = Poor Form, E = Inj. Matches efootbase player detail "Condition".
+export const CONDITION_LABEL: Record<string, string> = {
+  A: "Top Form",
+  B: "Good Form",
+  C: "Normal",
+  D: "Poor Form",
+  E: "Inj.",
+};
+export function conditionLabel(letter: string | null | undefined): string {
+  if (!letter) return "—";
+  return CONDITION_LABEL[letter.toUpperCase()] ?? letter;
+}
+
+// Stronger-foot enum → label (Konami: 0 = Right, 1 = Left, 2 = Both).
+export function strongerFootLabel(v: number | null | undefined): string {
+  if (v === 1) return "Left";
+  if (v === 2) return "Both";
+  return "Right";
+}
+
+// Physique field → efootbase label (matches the "Body Model" panel on efootbase
+// /players/{baseId}/{playerId}). Keyed by the canonical PhysiqueField slug.
+export const PHYSIQUE_LABEL: Readonly<Record<PhysiqueField, string>> = {
+  neckLength: "Neck Length",
+  neckSize: "Neck Size",
+  shoulderHeight: "Shoulder Height",
+  shoulderWidth: "Shoulder Width",
+  chestMeasurement: "Chest Measurement",
+  waistSize: "Waist Size",
+  armSize: "Arm Size",
+  armLength: "Arm Length",
+  thighSize: "Thigh Size",
+  calfSize: "Calf Size",
+  legLength: "Leg Length",
+};
+
+// efootbase "Body Model" panel render order (mirrors the verbatim efootbase layout).
+export const PHYSIQUE_ORDER: readonly PhysiqueField[] = PHYSIQUE_FIELDS;
+
+// Derived body-model float label + efootbase display label.
+export const DERIVED_LABEL: Readonly<Record<string, string>> = {
+  legCoverage: "Leg Coverage Radius",
+  armCoverage: "Arm Coverage Radius",
+  peakJumpHeight: "Jump Height",
+  torsoCollisionWidth: "Torso Collision",
+  dribbleHeight: "Leg Length Height",
+};
+

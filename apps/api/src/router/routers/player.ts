@@ -5,6 +5,7 @@ import {
   BASE_STATS,
   POSITIONS,
   type BaseStat,
+  type BoosterDTO,
   type CardType,
   type PlayerCardDTO,
   type PlayerListResult,
@@ -150,14 +151,22 @@ function toCardDTO(p: PlayerRowForDto): PlayerCardDTO {
     skills: ((p as PlayerRowWithSkills).skills ?? []).map(ps => ps.skill?.slug ?? "").filter(Boolean),
     boosterId1: p.boosterId1,
     boosterId2: p.boosterId2,
+    booster1: ((p as PlayerRowWithBoosters).booster1) ?? null,
+    booster2: ((p as PlayerRowWithBoosters).booster2) ?? null,
     otherVersions: ((p as PlayerRowWithVersions).otherVersions ?? []).map(v => ({
       id: v.id.toString(), cardType: v.cardType as CardType, ovr: v.ovr, maxOvr: v.maxOvr,
+      registeredPosition: v.registeredPosition,
     })),
     pack: ((p as PlayerRowWithPack).pack as PlayerRowWithPack["pack"]) ?? null,
     communityTier: p.communityTier ?? null,
     // R2 image URLs (optional, populated when caller joins Country for flag).
     flagUrl: ((p as PlayerRowWithFlag).flagUrl) ?? null,
     teamEmblemUrl: ((p as PlayerRowWithFlag).teamEmblemUrl) ?? null,
+    // Display-name + emblem overlays (joined Team/Country/League in the procedure).
+    countryName: ((p as PlayerRowWithExtras).countryName) ?? null,
+    teamName: ((p as PlayerRowWithExtras).teamName) ?? null,
+    leagueName: ((p as PlayerRowWithExtras).leagueName) ?? null,
+    leagueEmblemUrl: ((p as PlayerRowWithExtras).leagueEmblemUrl) ?? null,
   };
 }
 
@@ -173,6 +182,61 @@ async function attachFlagUrls<T extends PlayerRowForDto>(rows: T[]): Promise<T[]
   const flagById = new Map<number, string | null>(countries.map(c => [c.id, c.flagUrl]));
   for (const r of rows) {
     if (r.nationalityId > 0) r.flagUrl = flagById.get(r.nationalityId) ?? null;
+  }
+  return rows;
+}
+
+// All Booster stat columns (matches BASE_STATS order — Booster table mirrors it).
+const BOOSTER_STAT_COLUMNS = [
+  "offensiveAwareness","ballControl","tightPossession","dribbling","lowPass","loftedPass",
+  "finishing","placeKicking","curl","heading","defensiveAwareness","defensiveEngagement",
+  "ballWinning","aggression","kickingPower","speed","acceleration","balance",
+  "physicalContact","jump","gkAwareness","gkCatching","gkParrying","gkReflexes","gkReach",
+  "stamina","weakFootAccuracy",
+] as const;
+
+// Convert a Booster row (from Prisma findMany) → BoosterDTO. Only non-zero stat
+// magnitudes are carried (sparse), so the UI can render "+4 Low Pass" pills.
+// Prisma returns Int? columns as `number | null`; we coerce null→0/undefined.
+function boosterRowToDTO(b: {
+  id: number; name: string; magnitude: number; tier: string;
+  offensiveAwareness?: number | null; ballControl?: number | null; dribbling?: number | null; tightPossession?: number | null;
+  lowPass?: number | null; loftedPass?: number | null; finishing?: number | null; placeKicking?: number | null; curl?: number | null;
+  heading?: number | null; defensiveAwareness?: number | null; defensiveEngagement?: number | null; ballWinning?: number | null;
+  aggression?: number | null; kickingPower?: number | null; speed?: number | null; acceleration?: number | null; balance?: number | null;
+  physicalContact?: number | null; jump?: number | null; gkAwareness?: number | null; gkCatching?: number | null; gkParrying?: number | null;
+  gkReflexes?: number | null; gkReach?: number | null; stamina?: number | null; weakFootAccuracy?: number | null;
+}): BoosterDTO {
+  const stats: Partial<Record<BaseStat, number>> = {};
+  for (const col of BOOSTER_STAT_COLUMNS) {
+    const v = (b as Record<string, unknown>)[col];
+    if (typeof v === "number" && v !== 0) {
+      stats[col as BaseStat] = v;
+    }
+  }
+  return { id: b.id, name: b.name, magnitude: b.magnitude, tier: b.tier, stats };
+}
+
+// Batch-resolve Booster rows by the distinct boosterId1/boosterId2 across a list
+// of players, then write the resolved objects back (mirrors attachFlagUrls).
+// Cards reference booster IDs NOT in fixtures/boosters.json — seeder Phase 1c
+// upserts them from the dump, so this lookup can resolve them to real names.
+async function attachBoosters<T extends PlayerRowForDto>(rows: T[]): Promise<T[]> {
+  const idSet = new Set<number>();
+  for (const r of rows) {
+    if (r.boosterId1 != null && r.boosterId1 > 0) idSet.add(r.boosterId1);
+    if (r.boosterId2 != null && r.boosterId2 > 0) idSet.add(r.boosterId2);
+  }
+  if (idSet.size === 0) {
+    for (const r of rows) { (r as PlayerRowWithBoosters).booster1 = null; (r as PlayerRowWithBoosters).booster2 = null; }
+    return rows;
+  }
+  const boosters = await prisma.booster.findMany({ where: { id: { in: Array.from(idSet) } } });
+  const byId = new Map<number, BoosterDTO>(boosters.map(b => [b.id, boosterRowToDTO(b)]));
+  for (const r of rows) {
+    const rb = r as PlayerRowWithBoosters;
+    rb.booster1 = (r.boosterId1 != null && r.boosterId1 > 0) ? (byId.get(r.boosterId1) ?? null) : null;
+    rb.booster2 = (r.boosterId2 != null && r.boosterId2 > 0) ? (byId.get(r.boosterId2) ?? null) : null;
   }
   return rows;
 }
@@ -214,7 +278,9 @@ function orderByFor(sort: string, order: "asc" | "desc"): Record<string, "asc" |
 }
 
 export const playerRouter = router({
-  // Trending players: top 18 distinct star players across Epic, Big Time, Show Time, Highlight
+  // Latest players: 18 card mới nhất theo releaseDate DESC (DISTINCT ON baseId
+  // lấy version mới nhất của mỗi player). Tham chiếu efootbase "Latest Players" —
+  // sort đơn giản theo ngày release, không ưu tiên artwork tier.
   trending: publicProcedure.query(async () => {
     const rows = await prisma.$queryRaw<
       Array<{
@@ -226,16 +292,17 @@ export const playerRouter = router({
         maxOvr: number;
         registeredPosition: number;
         condition: string;
+        playingStyleAttack: number;
+        playingStyleDefense: number;
       }>
     >`
-      SELECT id, "baseId", name, "cardType", ovr, "maxOvr", "registeredPosition", condition
+      SELECT id, "baseId", name, "cardType", ovr, "maxOvr", "registeredPosition", condition, "playingStyleAttack", "playingStyleDefense"
       FROM (
-        SELECT DISTINCT ON ("baseId") id, "baseId", name, "cardType", ovr, "maxOvr", "registeredPosition", condition
+        SELECT DISTINCT ON ("baseId") id, "baseId", name, "cardType", ovr, "maxOvr", "registeredPosition", condition, "playingStyleAttack", "playingStyleDefense", "releaseDate"
         FROM "Player"
-        WHERE "cardType" IN ('EPIC', 'BIG_TIME', 'SHOW_TIME', 'HIGHLIGHT')
-        ORDER BY "baseId", "maxOvr" DESC
+        ORDER BY "baseId", "releaseDate" DESC, "maxOvr" DESC
       ) sub
-      ORDER BY "maxOvr" DESC, ovr DESC
+      ORDER BY "releaseDate" DESC, "maxOvr" DESC, ovr DESC
       LIMIT 18
     `;
     return rows.map((r) => ({
@@ -247,6 +314,8 @@ export const playerRouter = router({
       maxOvr: r.maxOvr,
       registeredPosition: r.registeredPosition,
       condition: r.condition,
+      playingStyleAttack: r.playingStyleAttack,
+      playingStyleDefense: r.playingStyleDefense,
     }));
   }),
 
@@ -295,6 +364,7 @@ export const playerRouter = router({
         }),
       ]);
       const rowsWithFlag = await attachFlagUrls(rows as PlayerRowForDto[]);
+      await attachBoosters(rowsWithFlag);
       return {
         items: rowsWithFlag.map(toCardDTO),
         total,
@@ -311,28 +381,52 @@ export const playerRouter = router({
       include: {
         skills: { include: { skill: true } },
         packCards: { include: { pack: { select: { id: true, name: true } } } },
+        team: { select: {
+          id: true, name: true, emblemUrl: true,
+          country: { select: { id: true, name: true } },
+          league: { select: { id: true, name: true, emblemUrl: true } },
+        } },
       },
     });
     if (!p) return null;
     // Fetch other versions sharing the same baseId (excluding self).
     const others = await prisma.player.findMany({
       where: { baseId: p.baseId, NOT: { id: p.id } },
-      select: { id: true, cardType: true, ovr: true, maxOvr: true },
+      select: { id: true, cardType: true, ovr: true, maxOvr: true, registeredPosition: true },
       orderBy: { ovr: "desc" },
     });
     const packRel = (p as PlayerRowWithPack).packCards?.[0]?.pack ?? null;
-    // Attach Country.flagUrl (R2) by looking up nationalityId.
+    // Resolve the player's Country (for the flag + name). We have the team's
+    // nested country from the include above, but Player.nationalityId is the
+    // player's *nationality* which may differ from the team's country (e.g. a
+    // Brazilian playing for a Spanish club) — so look up by nationalityId.
     let flagUrl: string | null = null;
+    let countryName: string | null = null;
     if (p.nationalityId > 0) {
       const c = await prisma.country.findUnique({
         where: { id: p.nationalityId },
-        select: { flagUrl: true },
+        select: { flagUrl: true, name: true },
       });
       flagUrl = c?.flagUrl ?? null;
+      countryName = c?.name ?? null;
     }
-    return toCardDTO({
-      ...(p as unknown as PlayerRowForDto), skills: (p as PlayerRowWithSkills).skills, otherVersions: others, pack: packRel, flagUrl,
-    } as PlayerRowForDto);
+    const team = (p as { team?: { id: number; name: string; emblemUrl: string | null; country: { id: number; name: string } | null; league: { id: number; name: string; emblemUrl: string | null } | null } }).team
+      ?? null;
+    const row: PlayerRowForDto = {
+      ...(p as unknown as PlayerRowForDto),
+      skills: (p as PlayerRowWithSkills).skills,
+      otherVersions: others,
+      pack: packRel,
+      flagUrl,
+      teamEmblemUrl: team?.emblemUrl ?? null,
+      countryName,
+      teamName: team?.name ?? null,
+      leagueName: team?.league?.name ?? null,
+      leagueEmblemUrl: team?.league?.emblemUrl ?? null,
+    } as PlayerRowForDto;
+    // Resolve Booster rows for boosterId1/boosterId2 (real names from the dump).
+    await attachBoosters([row]);
+    return toCardDTO(row);
   }),
 
   // Fuzzy search by name — returns top N matches.
@@ -341,7 +435,18 @@ export const playerRouter = router({
   search: publicProcedure.input(playerSearchInput).query(async ({ input }) => {
     const q = input.q.replace(/\s+/g, " ").trim();
     // Prisma can't express the `%` similarity operator directly; use $queryRaw with
-    // parameter binding. Order first by similarity desc, then OVR desc as a tiebreak.
+    // parameter binding.
+    //
+    // Ranking (fixed 2026-10-08):
+    //   tier 0 = exact substring match on name          ("Cristiano Ronaldo" ⊆ "Cristiano Ronaldo")
+    //   tier 1 = exact substring match on accentedName
+    //   tier 2 = unaccent-stripped substring match       (so "Schär" ⊆ "Fabian Schär")
+    //   tier 3 = pg_trgm `similarity()` fuzzy            (catches "Schar" / "Schârrrr")
+    // Within a tier, fall back to similarity() desc → ovr desc. This puts the real
+    // CR7 / Bellingham on top instead of letting 1-word "Cristiano" / "Ronaldo"
+    // / "Gillingham" drown the exact match — which broke /compare player pick
+    // (limit 5 truncated the true match that ranked CASE=0 then DESC-sunk below
+    // 0.4-fuzzy noise). See DB trace notes in session 2026-10-08.
     const rows: Array<Record<string, unknown>> = await prisma.$queryRaw`
       SELECT id::text, "baseId"::text, name, "accentedName", "japName", "chineseName",
              "cardType"::text, ovr, "maxOvr", "registeredPosition",
@@ -356,8 +461,10 @@ export const playerRouter = router({
         CASE
           WHEN name ILIKE '%' || ${q} || '%' THEN 0
           WHEN "accentedName" ILIKE '%' || ${q} || '%' THEN 1
-          ELSE similarity(coalesce("accentedName", name), ${q})
-        END DESC,
+          WHEN unaccent(coalesce("accentedName", name)) ILIKE '%' || ${q} || '%' THEN 2
+          ELSE 3
+        END ASC,
+        similarity(coalesce("accentedName", name), ${q}) DESC,
         ovr DESC
       LIMIT ${input.limit}
     ` as Array<Record<string, unknown>>;
@@ -381,9 +488,29 @@ export const playerRouter = router({
   compare: publicProcedure.input(compareInput).query(async ({ input }) => {
     const rows = await prisma.player.findMany({
       where: { id: { in: input.cardIds } },
-      include: { skills: { include: { skill: { select: { slug: true, name: true } } } } },
+      include: {
+        skills: { include: { skill: { select: { slug: true, name: true } } } },
+        team: { select: {
+          id: true, name: true, emblemUrl: true,
+          country: { select: { id: true, name: true } },
+          league: { select: { id: true, name: true, emblemUrl: true } },
+        } },
+      },
     });
-    const rowsWithFlag = await attachFlagUrls(rows as PlayerRowForDto[]);
+    let rowsWithFlag = await attachFlagUrls(rows as PlayerRowForDto[]);
+    // Attach team/league display names + emblems for the compare header.
+    rowsWithFlag = rowsWithFlag.map((r) => {
+      const team = (r as { team?: { name: string; emblemUrl: string | null; country: { name: string } | null; league: { name: string; emblemUrl: string | null } | null } }).team;
+      return {
+        ...r,
+        teamEmblemUrl: team?.emblemUrl ?? null,
+        countryName: null,
+        teamName: team?.name ?? null,
+        leagueName: team?.league?.name ?? null,
+        leagueEmblemUrl: team?.league?.emblemUrl ?? null,
+      };
+    });
+    await attachBoosters(rowsWithFlag);
     return rowsWithFlag.map(toCardDTO);
   }),
 });
@@ -396,7 +523,7 @@ interface PlayerRowWithSkills {
   }>;
 }
 interface PlayerRowWithVersions {
-  otherVersions?: Array<{ id: bigint; cardType: string; ovr: number; maxOvr: number }>;
+  otherVersions?: Array<{ id: bigint; cardType: string; ovr: number; maxOvr: number; registeredPosition: number }>;
 }
 interface PlayerRowWithPack {
   packCards?: Array<{ pack?: { id: string; name: string } }>;
@@ -407,7 +534,20 @@ interface PlayerRowWithFlag {
   flagUrl?: string | null;
   teamEmblemUrl?: string | null;
 }
-type PlayerRowForDto = Record<string, unknown> & PlayerRowWithSkills & PlayerRowWithVersions & PlayerRowWithPack & PlayerRowWithFlag & {
+// Optional display-name + emblem overlays (set by the procedure after joining the
+// player's Team → League for the detail page's "Card Info" + 3-badge strip).
+interface PlayerRowWithExtras {
+  countryName?: string | null;
+  teamName?: string | null;
+  leagueName?: string | null;
+  leagueEmblemUrl?: string | null;
+}
+// Optional resolved booster objects (set by attachBoosters before toCardDTO).
+interface PlayerRowWithBoosters {
+  booster1?: BoosterDTO | null;
+  booster2?: BoosterDTO | null;
+}
+type PlayerRowForDto = Record<string, unknown> & PlayerRowWithSkills & PlayerRowWithVersions & PlayerRowWithPack & PlayerRowWithFlag & PlayerRowWithExtras & PlayerRowWithBoosters & {
   id: bigint;
   baseId: bigint;
   name: string;

@@ -17,9 +17,11 @@
 //   emblems/team/{sha256}.png                (795 unique — hash, not ID)
 //
 // Card render (efootbase DNA §10): 4-layer composite — bg + face + frame + condition.
-// Backgrounds/frames/conditions dumped by scripts/fetch_card_assets.py (probe-verified
-// 2026-10-07). Standard/Trending/Highlight/Strike_Arena/Legendary have NO dedicated
-// background → PlayerCard falls back to a CSS gradient by card-type accent color.
+// Backgrounds/frames/conditions dumped by scripts/fetch_card_assets.py (browser-UA,
+// 2026-10-07). Art depends on card_type + featured-pack-slug (see the verified rules
+// in the `packHintArt` table below). Cards whose slug doesn't carry an art signal
+// fall back to a per-cardType default; cards with no default render a CSS gradient
+// coloured by the card-type accent (Standard/Big_Time-Selection/Show_Time/Legendary).
 //
 // Note: flag/emblem URLs CANNOT be constructed from IDs — efootbase uses SHA256
 // hash filenames. Those must come from DB: Country.flagUrl / Team.emblemUrl /
@@ -47,61 +49,113 @@ export function playerCardDynamicUrl(playerId: string | number): string {
 }
 
 // ---- Layered composite layers (efootbase DNA §10) ----
+//
+// Art resolution model (verified against efootbase 2026-10-07):
+// efootbase's card label ≠ eflab's CardType enum — efootbase uses richer labels
+// ("Epic - Big Time", "Icons", "Trending", "POTD", "Selection", "Highlight",
+// "Strike Arena", "Big Time", "Show Time") and the rendered art depends on a
+// COMBINATION of card_type + featured-pack-slug, not card_type alone. Verified
+// samples (efootbase.com/players/{baseId}/{playerId}):
+//
+//   efCT | eflab CardType | featured slug           | efootbase label      | bg                 | frame
+//   -----|----------------|-------------------------|----------------------|--------------------|------------------------------------
+//   0    | STANDARD       | (none)                  | Standard             | —                  | —
+//   1    | TRENDING       | fc-barcelona-73-74      | Icons                | Epic_2026/_2027    | Epic Frame (Cyan Booster)
+//   3    | EPIC  potw      | potw-20-oct-22          | Trending             | —                  | POTW-Worldwide-Card [Booster]
+//   3    | EPIC  potd      | potd-international-cup  | POTD Int'l Cup Day N | POTD_WC_26         | POTD_WC_26_Frame
+//   4    | BIG_TIME       | european-club-champ...  | Selection            | —                  | —
+//   5    | HIGHLIGHT  bt  | big-time-argentina-...  | Epic - Big Time event| Big_Time_WC_26     | Big_Time_WC_26_Frame
+//   5    | HIGHLIGHT  ep  | madrid-chamartin-...   | Epic - Big Time legend| Epic_2027         | Epic Frame (Cyan Booster)
+//   6    | SHOW_TIME      | gracias-leo             | Highlight            | —                  | —
+//   7    | LEGENDARY      | strike-arena            | Strike Arena         | —                  | —
 
-// Card-type → efootbase background filename (probe-verified 2026-10-07).
-// Standard/Trending/Highlight/Strike_Arena/Legendary have no dedicated bg → null
-// → PlayerCard renders a CSS gradient fallback colored by the card-type accent.
+/** Pack-slug hint → [bg file, frame file] (both nullable). Returns the most
+ *  specific match if the slug carries an art signal, else null (fall back to
+ *  the cardType default map). Slug examples: "big-time-argentina-15-jul-26",
+ *  "potw-national-teams-4-jul-24", "potd-international-cup-day-11". */
+function packHintArt(slug: string): { bg: string | null; frame: string | null } | null {
+  const s = slug.toLowerCase();
+
+  // POTD (Player of the Day) — full bg + frame
+  if (s.includes("potd-") || s.includes("/potd") || s.startsWith("potd")) {
+    return { bg: "POTD_WC_26", frame: "POTD_WC_26_Frame" };
+  }
+  // POTW (Player of the Week) — frame only, no bg (Trending)
+  if (s.includes("potw-") || s.startsWith("potw")) {
+    return { bg: null, frame: "POTW-Worldwide-Card [Booster]" };
+  }
+  // Big Time event packs (e.g. "Big Time Argentina 15 Jul '26") — full Big_Time art
+  if (s.includes("big-time") || s.includes("big_time") || s.includes("big time")) {
+    return { bg: "Big_Time_WC_26", frame: "Big_Time_WC_26_Frame" };
+  }
+  // Show Time event packs
+  if (s.includes("show-time") || s.includes("show_time") || s.includes("show time")) {
+    return { bg: "Show_Time_2027", frame: "Show_Time_WC_26_Frame" };
+  }
+  return null;
+}
+
+// NOTE: the "Cyan Booster" frame names (e.g. "Show Time Frame (Cyan Booster)")
+// probed 2026-10-07 do NOT exist on efootbase — efootbase returns an HTML 404
+// page (8054 bytes) for those URLs. The valid efootbase frame filenames are the
+// underscored WC_26 / Single_Booster variants (verified by direct fetch +
+// `file` on every frames/ asset on R2). Never reference the spaced
+// "(Cyan Booster)" frame names — they were a wrong guess in the first asset
+// fetch and the 8054-byte HTML responses got uploaded to R2. To clean them
+// out of the R2 bucket, delete the 3 corrupted keys:
+//   frames/Big Time Frame (Cyan Booster).webp
+//   frames/Show Time Frame (Cyan Booster).webp
+//   frames/Epic Frame (Cyan Booster).webp
+
+/** CardType → default art when the pack slug doesn't carry an art signal.
+ *  Matches efootbase's per-card_type default render for un-hinted packs.
+ *  Verified 2026-10-07 against efootbase samples:
+ *    SHOW_TIME (Haaland "english-league-25-26-seasons-best") → Show_Time_2026 bg
+ *      + Show Time Frame (Cyan Booster). Label "Highlight".
+ *    BIG_TIME (Salah "european-club-championship-16-jun-22") → no bg (gradient),
+ *      no frame. Label "Selection".
+ *    EPIC + potw slug → POTW-Worldwide-Card [Booster] frame, no bg. Label "Trending".
+ *    HIGHLIGHT historical (Kaká "madrid-chamartin-b-09-10") → Epic_2027 +
+ *      Epic Frame (Cyan Booster). Label "Epic - Big Time".
+ *    TRENDING "Icons" (Messi "fc-barcelona-18-19-limited") → no bg, no frame.
+ *    LEGENDARY "Strike Arena" → no bg, no frame. */
 const CARD_BG_FILES: Partial<Record<CardType, string>> = {
-  BIG_TIME: "Big_Time_WC_26",
-  EPIC: "Epic_2027",
+  // card_type=6 "Show Time" (e.g. Haaland Season's Best) — Show_Time bg
   SHOW_TIME: "Show_Time_2027",
+  // card_type=5 "Epic - Big Time" historical (Kaká "Madrid Chamartin B 09-10")
+  // renders Epic_2027 + Epic Frame (Cyan Booster) by default
+  HIGHLIGHT: "Epic_2027",
+};
+const CARD_FRAME_FILES: Partial<Record<CardType, string>> = {
+  SHOW_TIME: "Show_Time_WC_26_Frame",
+  HIGHLIGHT: "Epic_Frame_Single_Booster",
+  // card_type=3 "Epic" with a potw pack slug → POTW frame (Trending). Without
+  // a potw slug, EPIC renders bare (no frame) — the slug hint in packHintArt
+  // handles the potw case; this default only applies when the slug is null or
+  // doesn't match a known event, so EPIC is intentionally absent here.
 };
 
-/** Layer 1: card background by card type or pack name/id fallback. */
+/** Layer 1: card background. Resolves pack-slug hint first (POTD/Big-Time/Show-Time
+ *  events carry explicit art), else falls back to the cardType default. Null →
+ *  PlayerCard renders a CSS gradient coloured by the card-type accent. */
 export function cardBgUrl(cardType: CardType, packNameOrId?: string | null): string | null {
   if (packNameOrId) {
-    const s = packNameOrId.toLowerCase();
-    if (s.includes("big-time") || s.includes("big time") || s.includes("big_time")) {
-      return r2Url("card-backgrounds/Big_Time_WC_26.webp");
-    }
-    if (s.includes("show-time") || s.includes("show time") || s.includes("show_time")) {
-      return r2Url("card-backgrounds/Show_Time_2027.webp");
-    }
-    if (s.includes("epic")) {
-      return r2Url("card-backgrounds/Epic_2027.webp");
-    }
-    if (s.includes("potd") || s.includes("potw")) {
-      return r2Url("card-backgrounds/POTD_WC_26.webp");
-    }
+    const art = packHintArt(packNameOrId);
+    if (art && art.bg) return r2Url(`card-backgrounds/${art.bg}.webp`);
+    // slug carried a signal but bg is null (POTW: frame-only) → honor that
+    if (art) return null;
   }
   const file = CARD_BG_FILES[cardType];
   return file ? r2Url(`card-backgrounds/${file}.webp`) : null;
 }
 
-// Card-type → frame filename. WC/Special variants prioritized (most distinctive).
-// Frame is optional per layer; when null, the face renders without a frame.
-const CARD_FRAME_FILES: Partial<Record<CardType, string>> = {
-  BIG_TIME: "Big_Time_WC_26_Frame",
-  EPIC: "Epic_Frame_Single_Booster",
-  SHOW_TIME: "Show_Time_WC_26_Frame",
-};
-
-/** Layer 3: card frame by card type or pack name/id fallback. */
+/** Layer 3: card frame. Same resolution order as cardBgUrl. Frame is optional;
+ *  null means the face renders bare (no frame overlay). */
 export function cardFrameUrl(cardType: CardType, packNameOrId?: string | null): string | null {
   if (packNameOrId) {
-    const s = packNameOrId.toLowerCase();
-    if (s.includes("big-time") || s.includes("big time") || s.includes("big_time")) {
-      return r2Url("frames/Big_Time_WC_26_Frame.webp");
-    }
-    if (s.includes("show-time") || s.includes("show time") || s.includes("show_time")) {
-      return r2Url("frames/Show_Time_WC_26_Frame.webp");
-    }
-    if (s.includes("epic")) {
-      return r2Url("frames/Epic_Frame_Single_Booster.webp");
-    }
-    if (s.includes("potd") || s.includes("potw")) {
-      return r2Url("frames/POTD_WC_26_Frame.webp");
-    }
+    const art = packHintArt(packNameOrId);
+    if (art && art.frame) return r2Url(`frames/${art.frame}.webp`);
+    if (art) return null;
   }
   const file = CARD_FRAME_FILES[cardType];
   return file ? r2Url(`frames/${file}.webp`) : null;
@@ -114,5 +168,15 @@ export function conditionUrl(letter: string): string {
 
 /** Emblem by R2 key path (e.g. "emblems/team/{hash}.png"). Prefer reading Team.emblemUrl from DB. */
 export function emblemByKey(r2Key: string): string {
+  return r2Url(r2Key);
+}
+
+/** Manager card art by manager id. 65 images bundled in efootbase APK, mirrored to R2. */
+export function managerImageUrl(managerId: string | number | bigint): string {
+  return r2Url(`managers/${managerId}.webp`);
+}
+
+/** League emblem by R2 key path. Prefer reading League.emblemUrl from DB. */
+export function leagueEmblemByKey(r2Key: string): string {
   return r2Url(r2Key);
 }
