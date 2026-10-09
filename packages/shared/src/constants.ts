@@ -412,6 +412,7 @@ export function statTierColor(value: number): {
 // 60+ sort fields exposed to the directory (matches pesdb's sort list).
 export type SortField =
   | "recentlyAdded"
+  | "releaseDate"
   | "playerId"
   | "name"
   | "namePrint"
@@ -440,6 +441,7 @@ export type SortField =
   | `rating${Capitalize<Position>}`;
 
 export const SORT_FIELDS: readonly string[] = [
+  "releaseDate",
   "recentlyAdded",
   "playerId",
   "name",

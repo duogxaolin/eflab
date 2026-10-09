@@ -245,7 +245,7 @@ async function attachBoosters<T extends PlayerRowForDto>(rows: T[]): Promise<T[]
 // some derive from synthetic computations (sumOfAbilities, averageAbility).
 function orderByFor(sort: string, order: "asc" | "desc"): Record<string, "asc" | "desc"> {
   const direction = order;
-  if (sort === "recentlyAdded") return { id: "desc" };
+  if (sort === "releaseDate" || sort === "recentlyAdded") return { releaseDate: direction };
   if (sort === "playerId") return { id: direction };
   if (sort === "name" || sort === "namePrint") return { name: direction };
   if (sort === "japName") return { japName: direction };

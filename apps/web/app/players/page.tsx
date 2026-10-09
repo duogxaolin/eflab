@@ -55,8 +55,9 @@ const DEFENCE_STYLES = [
 const ALL_PLAYING_STYLES = [...ATTACK_STYLES, ...DEFENCE_STYLES];
 
 const SORT_OPTIONS: Array<{ value: string; label: string }> = [
-  { value: "ovr", label: "OVR Rating" },
   { value: "maxOvr", label: "Max OVR" },
+  { value: "ovr", label: "OVR Rating" },
+  { value: "releaseDate", label: "Release Date" },
   { value: "age", label: "Age" },
   { value: "height", label: "Height" },
   { value: "speed", label: "Speed" },
