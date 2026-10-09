@@ -289,7 +289,7 @@ function PlayersContent() {
             {activePopover === "style" && (
               <div className="absolute left-0 top-full mt-2 z-50 p-3 rounded-2xl bg-[#18181b] border border-white/10 shadow-2xl w-[calc(100vw-32px)] sm:w-[480px]">
                 {/* Header with title and Reset */}
-                <div className="flex items-center justify-between pb-2 mb-2.5 border-b border-white/10 text-xs font-semibold text-white">
+                <div className="flex items-center justify-between pb-2 mb-2 border-b border-white/10 text-xs font-semibold text-white">
                   <span>Playing Style</span>
                   {playingStyle && (
                     <button
@@ -305,6 +305,23 @@ function PlayersContent() {
                     </button>
                   )}
                 </div>
+
+                {/* All Styles full-width pill */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPlayingStyle("");
+                    setPage(1);
+                    setActivePopover(null);
+                  }}
+                  className={`w-full text-center py-1.5 px-3 rounded-full text-xs font-semibold transition-colors cursor-pointer mb-2.5 ${
+                    !playingStyle
+                      ? "bg-[var(--color-accent)] text-black font-bold shadow-sm"
+                      : "bg-white/[0.06] hover:bg-white/[0.12] text-white/90"
+                  }`}
+                >
+                  All Styles
+                </button>
 
                 {/* 2 Parallel Columns */}
                 <div className="grid grid-cols-2 gap-3.5 max-h-[360px] overflow-y-auto pr-1">
