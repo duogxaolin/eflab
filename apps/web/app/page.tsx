@@ -1,4 +1,5 @@
 "use client";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, useRef, useEffect } from "react";
 import { trpc } from "@/lib/trpc";
@@ -378,11 +379,14 @@ export default function HomePage() {
             <div className="space-y-6">
               {(featuredBundles.data ?? []).map((bundle) => (
                 <section key={bundle.id} className="space-y-2">
-                  <div className="flex items-center justify-between text-xs border-b border-[var(--color-line-separator)]/60 pb-2">
-                    <span className="font-semibold text-sm text-white">
+                  <div className="flex items-baseline justify-between gap-2 border-b border-[var(--color-line-separator)]/60 pb-2">
+                    <Link
+                      href={`/packs/${bundle.id}`}
+                      className="font-medium text-sm text-[var(--color-text-primary)] hover:text-[var(--color-accent)] transition-colors no-underline truncate"
+                    >
                       {bundle.name}
-                    </span>
-                    <span className="font-mono text-[var(--color-text-dim)] text-[11px]">
+                    </Link>
+                    <span className="font-mono text-[var(--color-text-dim)] text-xs shrink-0">
                       {new Date(bundle.releaseDate).toLocaleDateString("en-US", {
                         month: "short",
                         day: "numeric",
@@ -391,9 +395,12 @@ export default function HomePage() {
                     </span>
                   </div>
 
-                  <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-3 px-1 py-2">
+                  {/* Horizontal Scroll / Slide row (efootbase exact style) */}
+                  <div className="flex gap-3 px-1 py-2 overflow-x-auto hide-scrollbar scroll-smooth">
                     {bundle.cards.map((p) => (
-                      <PlayerCard key={p.id} player={p} size="full" showName />
+                      <div key={p.id} className="w-24 shrink-0 sm:w-28">
+                        <PlayerCard player={p} size="md" showName />
+                      </div>
                     ))}
                   </div>
                 </section>
@@ -402,14 +409,21 @@ export default function HomePage() {
               {featuredBundles.isLoading && [0, 1, 2].map((i) => (
                 <div key={i} className="space-y-2">
                   <div className="h-4 w-48 rounded bg-[var(--color-panel)] animate-pulse" />
-                  <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-3 px-1 py-2">
+                  <div className="flex gap-3 px-1 py-2 overflow-x-auto hide-scrollbar">
                     {[...Array(6)].map((_, j) => (
-                      <div key={j} className="aspect-[240/339] rounded-md bg-[var(--color-panel)] animate-pulse" />
+                      <div key={j} className="w-24 shrink-0 sm:w-28 aspect-[240/339] rounded-md bg-[var(--color-panel)] animate-pulse" />
                     ))}
                   </div>
                 </div>
               ))}
             </div>
+
+            <Link
+              href="/packs"
+              className="button button--secondary button--sm w-fit no-underline inline-flex items-center gap-1.5 rounded-lg border border-[var(--color-line)] bg-[var(--color-panel)] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[var(--color-elevated)] transition-colors"
+            >
+              Show all packs
+            </Link>
           </section>
         </div>
 
