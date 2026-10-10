@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useState, useRef, useEffect } from "react";
 import { trpc } from "@/lib/trpc";
 import { PlayerCard } from "@/components/cards/PlayerCard";
+import { PackCarousel } from "@/components/packs/PackCarousel";
 import type { CardPreview } from "@eflab/shared";
 import {
   Search,
@@ -381,33 +382,8 @@ export default function HomePage() {
                 .sort((a, b) => new Date(b.releaseDate).getTime() - new Date(a.releaseDate).getTime())
                 .slice(0, 3)
                 .map((bundle) => (
-                <section key={bundle.id} className="space-y-2">
-                  <div className="flex items-baseline justify-between gap-2 border-b border-[var(--color-line-separator)]/60 pb-2">
-                    <Link
-                      href={`/packs/${bundle.id}`}
-                      className="font-medium text-sm text-[var(--color-text-primary)] hover:text-[var(--color-accent)] transition-colors no-underline truncate"
-                    >
-                      {bundle.name}
-                    </Link>
-                    <span className="font-mono text-[var(--color-text-dim)] text-xs shrink-0">
-                      {new Date(bundle.releaseDate).toLocaleDateString("en-US", {
-                        month: "short",
-                        day: "numeric",
-                        year: "numeric",
-                      })}
-                    </span>
-                  </div>
-
-                  {/* Horizontal Scroll / Slide row (efootbase exact style) */}
-                  <div className="flex gap-3 px-1 py-2 overflow-x-auto hide-scrollbar scroll-smooth">
-                    {bundle.cards.map((p) => (
-                      <div key={p.id} className="w-24 shrink-0 sm:w-28">
-                        <PlayerCard player={p} size="md" showName />
-                      </div>
-                    ))}
-                  </div>
-                </section>
-              ))}
+                  <PackCarousel key={bundle.id} bundle={bundle} autoScroll={true} />
+                ))}
 
               {featuredBundles.isLoading && [0, 1, 2].map((i) => (
                 <div key={i} className="space-y-2">
