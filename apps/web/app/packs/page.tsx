@@ -10,7 +10,9 @@ import { PlayerCard } from "@/components/cards/PlayerCard";
 // releaseDate DESC order. Each section: bundle name + date + ordered card grid.
 export default function PacksPage() {
   const { data: bundles, isLoading } = trpc.featured.list.useQuery();
-  const list = bundles ?? [];
+  const list = [...(bundles ?? [])].sort(
+    (a, b) => new Date(b.releaseDate).getTime() - new Date(a.releaseDate).getTime()
+  );
 
   // Aggregate player/pack counts for the meta chips (matches efootbase header).
   const totalPlayers = list.reduce((acc, b) => acc + b.cards.length, 0);
