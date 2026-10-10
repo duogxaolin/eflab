@@ -377,7 +377,7 @@ export default function HomePage() {
             </h2>
 
             <div className="space-y-6">
-              {(featuredBundles.data ?? []).map((bundle) => (
+              {(featuredBundles.data ?? []).slice(0, 3).map((bundle) => (
                 <section key={bundle.id} className="space-y-2">
                   <div className="flex items-baseline justify-between gap-2 border-b border-[var(--color-line-separator)]/60 pb-2">
                     <Link
