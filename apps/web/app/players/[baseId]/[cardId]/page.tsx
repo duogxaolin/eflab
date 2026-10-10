@@ -380,7 +380,7 @@ export default function PlayerDetailPage() {
       </header>
 
       {/* 2-Column Main Layout */}
-      <div className="grid gap-6 lg:grid-cols-[280px_1fr] items-start">
+      <div className="grid gap-6 lg:grid-cols-[260px_minmax(0,1fr)] items-start">
         {/* ================= LEFT COLUMN ================= */}
         <aside className="space-y-4">
           {/* Card */}
@@ -546,7 +546,7 @@ export default function PlayerDetailPage() {
         </aside>
 
         {/* ================= RIGHT COLUMN ================= */}
-        <div className="space-y-6">
+        <div className="space-y-6 min-w-0">
           {/* Card 1: Overview & Attributes */}
           <div className="card card--secondary rounded-xl bg-[var(--color-panel)] border border-[var(--color-line)] p-5 sm:p-6 space-y-6">
             {/* Tabs */}
@@ -577,18 +577,32 @@ export default function PlayerDetailPage() {
               </button>
             </div>
 
-            {/* Bio summary */}
-            <p className="text-xs text-[var(--color-text-secondary)] leading-relaxed">
-              {p.name}'s "{packTitle}" card is rated {p.ovr}
-              {p.maxOvr > p.ovr ? `, peaking at ${p.maxOvr} when trained` : ""}. He is a{" "}
-              {p.height}cm ({Math.round(p.height / 2.54 / 12)}'{Math.round((p.height / 2.54) % 12)})" tall{" "}
-              {posLabel} with {playstyleAtk} & {playstyleDef} playstyle
-              {p.countryName ? `, from ${p.countryName}` : ""}
-              {p.teamName ? `, playing in the ${p.teamName} team` : ""}.
-              {" "}It features {skillNames.length} player skills
-              {skillNames.length > 0 ? `: ${skillNames.slice(0, 6).join(", ")}` : ""}
-              {skillNames.length > 6 ? ` and ${skillNames.length - 6} more.` : "."}
-            </p>
+            {/* Tab content */}
+            {activeTab === "overview" && (
+              <p className="text-xs text-[var(--color-text-secondary)] leading-relaxed">
+                {p.name}'s "{packTitle}" card is rated {p.ovr}
+                {p.maxOvr > p.ovr ? `, peaking at ${p.maxOvr} when trained` : ""}. He is a{" "}
+                {p.height}cm ({Math.round(p.height / 2.54 / 12)}'{Math.round((p.height / 2.54) % 12)})" tall{" "}
+                {posLabel} with {playstyleAtk} & {playstyleDef} playstyle
+                {p.countryName ? `, from ${p.countryName}` : ""}
+                {p.teamName ? `, playing in the ${p.teamName} team` : ""}.
+                {" "}It features {skillNames.length} player skills
+                {skillNames.length > 0 ? `: ${skillNames.slice(0, 6).join(", ")}` : ""}
+                {skillNames.length > 6 ? ` and ${skillNames.length - 6} more.` : "."}
+              </p>
+            )}
+
+            {activeTab === "insights" && (
+              <p className="text-xs text-[var(--color-text-secondary)] py-2 leading-relaxed">
+                AI insights and trends — coming soon.
+              </p>
+            )}
+
+            {activeTab === "notes" && (
+              <p className="text-xs text-[var(--color-text-secondary)] py-2 leading-relaxed">
+                Community notes and tips — coming soon.
+              </p>
+            )}
 
             {/* Vital Metrics Bar */}
             <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-[var(--color-text-secondary)] py-2 border-y border-[var(--color-line)]/60 font-mono">
@@ -603,18 +617,6 @@ export default function PlayerDetailPage() {
               <span>🎯 WF Accuracy {"★".repeat(Math.min(5, p.weakFootAccuracy))}</span>
               <span>·</span>
               <span>👟 WF Usage {"★".repeat(Math.min(5, p.weakFootUsage))}</span>
-            </div>
-
-            {/* Category icons bar */}
-            <div className="flex flex-wrap items-center justify-between gap-2 pt-1 pb-1 border-b border-[var(--color-line-separator)]">
-              <div className="flex items-center gap-3 text-xs font-mono text-[var(--color-text-secondary)]">
-                {ALL_TRAINING_CATEGORIES.map((c) => (
-                  <span key={c.key} className="inline-flex items-center gap-1">
-                    <span>{c.icon}</span>
-                    <span className="text-white font-bold">{points[c.key] ?? 0}</span>
-                  </span>
-                ))}
-              </div>
             </div>
 
             {/* Booster Pills Bar — render the resolved Booster objects (dump has
@@ -661,10 +663,10 @@ export default function PlayerDetailPage() {
             <div className="grid md:grid-cols-3 gap-6 pt-1">
               {/* Attacking */}
               <StatSection title="Attacking" stats={ATTACKING_STATS} dto={p} useMax />
-              {/* Strength */}
-              <StatSection title="Strength" stats={STRENGTH_STATS} dto={p} useMax />
               {/* Defending */}
               <StatSection title="Defending" stats={DEFENDING_STATS} dto={p} useMax />
+              {/* Strength */}
+              <StatSection title="Strength" stats={STRENGTH_STATS} dto={p} useMax />
             </div>
 
             {/* Skills */}
