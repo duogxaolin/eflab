@@ -351,207 +351,184 @@ export default function PlayerDetailPage() {
         <li className="breadcrumbs__item text-white text-xs font-medium">{packTitle}</li>
       </ol>
 
-      {/* Hero Header — real OVR (base) + position + playstyle */}
-      <header className="efb-player-hero space-y-2">
-        <div className="flex items-center gap-3 flex-wrap">
-          <h1 className="text-3xl font-bold sm:text-4xl text-white tracking-tight">{p.name}</h1>
-          <span className="chip chip--accent chip--lg tabular-nums">
-            <span className="chip__label">{p.ovr} OVR</span>
-          </span>
-          {p.maxOvr > p.ovr && (
-            <span className="text-xs text-[var(--color-text-dim)] font-mono tabular-nums">
-              Max {p.maxOvr}
-            </span>
-          )}
-        </div>
-        <div className="efb-player-hero__subtitle flex items-center gap-2 text-xs sm:text-sm text-[var(--color-text-secondary)] flex-wrap">
-          <span className="font-bold text-white">{posLabel}</span>
-          <span className="text-[var(--color-text-dim)]">·</span>
-          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-rose-500/15 text-rose-300 font-semibold text-xs">
-            <span>⛿</span>
-            <span>{playstyleAtk}</span>
-          </span>
-          <span className="text-[var(--color-text-dim)]">·</span>
-          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-sky-500/15 text-sky-300 font-semibold text-xs">
-            <span>🛡</span>
-            <span>{playstyleDef}</span>
-          </span>
-        </div>
-      </header>
+      {/* ================= SECTION 1: HERO CLUSTER (EFHUB-ALIGNED) ================= */}
+      <div className="grid grid-cols-1 lg:grid-cols-[auto_1fr_260px] gap-6 items-start">
+        {/* Col 1: Card Cluster (Badges + PlayerCard + 5 Specs Chips + Boosters) */}
+        <div className="flex flex-col gap-3 shrink-0 mx-auto lg:mx-0">
+          <div className="grid grid-cols-[auto_195px_auto] items-stretch gap-2.5">
+            {/* Sub-col 1: 4 vertical emblems/badges */}
+            <div className="flex shrink-0 flex-col justify-between py-0.5">
+              {/* Country badge */}
+              <div
+                className="flex size-11 items-center justify-center overflow-hidden rounded-xl border border-[var(--color-line)] bg-[var(--color-panel)] shadow-sm"
+                title={p.countryName ?? "Nationality"}
+              >
+                {p.flagUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={p.flagUrl} alt="" className="size-8 object-contain" />
+                ) : (
+                  <span className="text-xs text-[var(--color-text-dim)]">🌍</span>
+                )}
+              </div>
 
-      {/* 2-Column Main Layout */}
-      <div className="grid gap-6 lg:grid-cols-[260px_minmax(0,1fr)] items-start">
-        {/* ================= LEFT COLUMN ================= */}
-        <aside className="space-y-4">
-          {/* Card */}
-          <div className="w-[200px] mx-auto">
-            <PlayerCard player={p} size="full" showDetails />
+              {/* Team emblem badge */}
+              <div
+                className="flex size-11 items-center justify-center overflow-hidden rounded-xl border border-[var(--color-line)] bg-[var(--color-panel)] shadow-sm p-1"
+                title={p.teamName ?? "Team"}
+              >
+                {p.teamEmblemUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={p.teamEmblemUrl} alt="" className="size-8 object-contain" />
+                ) : (
+                  <span className="text-xs text-[var(--color-text-dim)]">⚽</span>
+                )}
+              </div>
+
+              {/* League emblem badge */}
+              <div
+                className="flex size-11 items-center justify-center overflow-hidden rounded-xl border border-[var(--color-line)] bg-[var(--color-panel)] shadow-sm p-1"
+                title={p.leagueName ?? "League"}
+              >
+                {p.leagueEmblemUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={p.leagueEmblemUrl} alt="" className="h-6 w-auto object-contain" />
+                ) : (
+                  <span className="text-[10px] text-[var(--color-text-dim)] font-bold">🏆</span>
+                )}
+              </div>
+
+              {/* Manager proficiency circle/badge */}
+              <div
+                className="flex size-11 items-center justify-center overflow-hidden rounded-xl border border-[var(--color-line)] bg-[var(--color-panel)] shadow-sm"
+                title="Manager Proficiency"
+              >
+                <span className="font-mono text-base font-bold text-[var(--color-text-secondary)]">
+                  {managerProficiency}
+                </span>
+              </div>
+            </div>
+
+            {/* Sub-col 2: Player Card with Cyan Glowing Frame */}
+            <div className="w-[195px] shrink-0">
+              <div className="relative w-full rounded-xl transition-all duration-300 shadow-[0_0_20px_rgba(6,182,212,0.3)] hover:shadow-[0_0_30px_rgba(6,182,212,0.5)]">
+                <PlayerCard player={p} size="full" showDetails />
+              </div>
+            </div>
+
+            {/* Sub-col 3: 5 Compact Specs Chips (Height, Weight, Age, Foot, Condition) */}
+            <div className="flex shrink-0 flex-col justify-between py-0.5">
+              {/* Height */}
+              <div className="w-[78px] rounded-lg border border-[var(--color-line)] bg-[var(--color-panel)] px-2 py-1.5 text-center shadow-sm">
+                <p className="text-[9px] font-semibold uppercase tracking-wider text-[var(--color-text-dim)]">Height</p>
+                <p className="mt-0.5 font-mono text-xs font-bold text-white">{p.height}cm</p>
+              </div>
+
+              {/* Weight */}
+              <div className="w-[78px] rounded-lg border border-[var(--color-line)] bg-[var(--color-panel)] px-2 py-1.5 text-center shadow-sm">
+                <p className="text-[9px] font-semibold uppercase tracking-wider text-[var(--color-text-dim)]">Weight</p>
+                <p className="mt-0.5 font-mono text-xs font-bold text-white">{p.weight}kg</p>
+              </div>
+
+              {/* Age */}
+              <div className="w-[78px] rounded-lg border border-[var(--color-line)] bg-[var(--color-panel)] px-2 py-1.5 text-center shadow-sm">
+                <p className="text-[9px] font-semibold uppercase tracking-wider text-[var(--color-text-dim)]">Age</p>
+                <p className="mt-0.5 font-mono text-xs font-bold text-white">{p.age}</p>
+              </div>
+
+              {/* Foot */}
+              <div className="w-[78px] rounded-lg border border-[var(--color-line)] bg-[var(--color-panel)] px-2 py-1.5 text-center shadow-sm">
+                <p className="text-[9px] font-semibold uppercase tracking-wider text-[var(--color-text-dim)]">Foot</p>
+                <p className="mt-0.5 font-medium text-xs text-white">{strongerFootLabel(p.strongerFoot)}</p>
+              </div>
+
+              {/* Condition */}
+              <div className="w-[78px] rounded-lg border border-[var(--color-line)] bg-[var(--color-panel)] px-2 py-1.5 text-center shadow-sm">
+                <p className="text-[9px] font-semibold uppercase tracking-wider text-[var(--color-text-dim)]">Condition</p>
+                <p className="mt-0.5 font-bold text-xs text-emerald-400">{condLetter ?? "B"}</p>
+              </div>
+            </div>
           </div>
 
-          {/* 3 Badges: nationality flag + team crest + league patch */}
-          <div className="flex items-center justify-center gap-3 pt-1">
-            <div
-              className="size-8 rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] overflow-hidden flex items-center justify-center shadow-md shrink-0"
-              title={p.countryName ?? "—"}
-            >
-              {p.flagUrl ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={p.flagUrl} alt={p.countryName ?? ""} className="size-full object-cover" />
-              ) : (
-                <span className="text-[10px] text-[var(--color-text-dim)]">?</span>
+          {/* Booster Selector Bar */}
+          <div className="flex items-center gap-2">
+            <div className="flex h-9 flex-1 items-center justify-between rounded-lg border border-[var(--color-line)] bg-[var(--color-panel)] px-3 text-xs shadow-sm">
+              <span className="font-semibold text-white/90 truncate">
+                {p.booster1?.name ?? "Booster 1"}
+              </span>
+              {p.booster1 && (
+                <span className="font-mono text-[10px] text-cyan-400 shrink-0 font-bold">
+                  +{p.booster1.magnitude ?? 4}
+                </span>
               )}
             </div>
-
-            <div
-              className="size-8 rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] overflow-hidden flex items-center justify-center shadow-md shrink-0 p-1"
-              title={p.teamName ?? "—"}
-            >
-              {p.teamEmblemUrl ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={p.teamEmblemUrl} alt={p.teamName ?? ""} className="size-full object-contain" />
-              ) : (
-                <span className="text-[10px] text-[var(--color-text-dim)]">?</span>
-              )}
-            </div>
-
-            <div
-              className="h-8 px-1.5 rounded-md border border-[var(--color-line)] bg-[var(--color-panel)] flex items-center justify-center shadow-md shrink-0"
-              title={p.leagueName ?? "—"}
-            >
-              {p.leagueEmblemUrl ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={p.leagueEmblemUrl} alt={p.leagueName ?? ""} className="h-5 w-auto object-contain" />
-              ) : (
-                <span className="text-[9px] text-[var(--color-text-dim)] px-1">{p.leagueName ?? "—"}</span>
+            <div className="flex h-9 flex-1 items-center justify-between rounded-lg border border-[var(--color-line)] bg-[var(--color-panel)] px-3 text-xs shadow-sm">
+              <span className="font-semibold text-white/90 truncate">
+                {p.booster2?.name ?? "Booster 2"}
+              </span>
+              {p.booster2 && (
+                <span className="font-mono text-[10px] text-cyan-400 shrink-0 font-bold">
+                  +{p.booster2.magnitude ?? 1}
+                </span>
               )}
             </div>
           </div>
+        </div>
 
-          {/* Progression Box */}
-          <div className="rounded-xl border border-[var(--color-line)] bg-[var(--color-panel)] p-4 space-y-3">
-            <div className="flex items-center justify-between">
+        {/* Col 2: Player Identity, Playstyles & Tabs (Center Hero Box) */}
+        <div className="flex flex-col gap-3 min-w-0 flex-1">
+          <div className="card card--secondary rounded-xl bg-[var(--color-panel)] border border-[var(--color-line)] p-4 sm:p-5 space-y-3 shadow-sm">
+            <div className="flex items-start justify-between gap-3">
               <div>
-                <h4 className="text-xs font-bold text-white uppercase tracking-wider">Progression</h4>
-                <div className="text-[11px] font-mono text-[var(--color-text-dim)] pt-0.5">
-                  {totalPointsSpent} / {MAX_POINTS_AVAILABLE} pts
+                <div className="flex items-center gap-2.5 flex-wrap">
+                  <h1 className="text-2xl sm:text-3xl font-black text-white uppercase tracking-wider">
+                    {p.name}
+                  </h1>
+                  <span className="chip chip--accent chip--lg tabular-nums">
+                    <span className="chip__label">{p.ovr} OVR</span>
+                  </span>
+                  {p.maxOvr > p.ovr && (
+                    <span className="text-xs text-[var(--color-text-dim)] font-mono tabular-nums">
+                      Max {p.maxOvr}
+                    </span>
+                  )}
+                </div>
+
+                {/* Playstyle badges */}
+                <div className="mt-2 flex items-center gap-2 flex-wrap text-xs">
+                  <span className="font-bold text-white px-2 py-0.5 rounded bg-[var(--color-canvas)] border border-[var(--color-line)]">
+                    {posLabel}
+                  </span>
+                  <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md bg-rose-500/15 text-rose-300 font-semibold text-xs border border-rose-500/20">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src="/icons/playstyle_attack.svg" alt="" className="size-3" />
+                    <span>{playstyleAtk}</span>
+                  </span>
+                  {playstyleDef !== "Basic" && (
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md bg-sky-500/15 text-sky-300 font-semibold text-xs border border-sky-500/20">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src="/icons/playstyle_defence.svg" alt="" className="size-3" />
+                      <span>{playstyleDef}</span>
+                    </span>
+                  )}
+                  <span className="text-[var(--color-text-dim)] font-mono text-[11px] ml-auto">
+                    {packTitle}
+                  </span>
                 </div>
               </div>
 
-              <div className="flex items-center gap-1.5">
-                <button
-                  type="button"
-                  onClick={handleMaxBuild}
-                  className="button button--sm bg-[var(--color-accent)] text-black font-bold hover:opacity-90"
-                >
-                  Max OVR
-                </button>
-                <button
-                  type="button"
-                  onClick={handleResetBuild}
-                  aria-label="Reset"
-                  className="button button--sm button--ghost p-1 text-[var(--color-text-dim)] hover:text-white"
-                >
-                  <RotateCcw className="size-3.5" />
-                </button>
-              </div>
-            </div>
-
-            {/* Select Manager Button */}
-            <button
-              type="button"
-              className="w-full flex items-center gap-2 px-3 py-2 rounded-lg bg-[var(--color-canvas)] border border-[var(--color-line)] text-xs text-white/90 hover:text-white hover:bg-[var(--color-elevated)] transition-colors cursor-pointer"
-            >
-              <User className="size-3.5 text-[var(--color-text-dim)]" />
-              <span>Select Manager</span>
-            </button>
-
-            <ManagerProficiencySlider value={managerProficiency} onChange={setManagerProficiency} />
-
-            <div className="pt-2 border-t border-[var(--color-line-separator)] space-y-3">
-              {ALL_TRAINING_CATEGORIES.map((cat) => (
-                <ProgressionSlider
-                  key={cat.key}
-                  label={cat.label}
-                  value={points[cat.key] ?? 0}
-                  max={20}
-                  onChange={(v) => setPoints((prev) => ({ ...prev, [cat.key]: v }))}
-                />
-              ))}
-            </div>
-          </div>
-
-          {/* Card Info Box */}
-          <div className="card card--secondary rounded-xl bg-[var(--color-panel)] border border-[var(--color-line)] p-4 space-y-2 text-xs text-[var(--color-text-secondary)]">
-            <h4 className="font-bold text-white uppercase tracking-wider text-[11px] mb-2">Card Info</h4>
-            <div className="flex justify-between py-1 border-b border-[var(--color-line-separator)]">
-              <span>Name</span>
-              <span className="font-medium text-white">{p.name}</span>
-            </div>
-            <div className="flex justify-between py-1 border-b border-[var(--color-line-separator)]">
-              <span>Featured</span>
-              <span className="font-medium text-white text-right truncate max-w-[140px]" title={packTitle}>{packTitle}</span>
-            </div>
-            <div className="flex justify-between py-1 border-b border-[var(--color-line-separator)]">
-              <span>Card Type</span>
-              <span className="font-medium text-[var(--color-accent)]">{cardTypeDisplay(p.cardType)}</span>
-            </div>
-            <div className="flex justify-between py-1 border-b border-[var(--color-line-separator)]">
-              <span>Nationality</span>
-              <span className="font-medium text-white">{p.countryName ?? "—"}</span>
-            </div>
-            <div className="flex justify-between py-1 border-b border-[var(--color-line-separator)]">
-              <span>Team</span>
-              <span className="font-medium text-white truncate ml-2 max-w-[150px]" title={p.teamName ?? "—"}>{p.teamName ?? "—"}</span>
-            </div>
-            <div className="flex justify-between py-1 border-b border-[var(--color-line-separator)]">
-              <span>Position</span>
-              <span className="font-mono text-white font-bold">{posLabel}</span>
-            </div>
-            <div className="flex justify-between py-1 border-b border-[var(--color-line-separator)]">
-              <span>Age</span>
-              <span className="font-mono text-white">{p.age}</span>
-            </div>
-            <div className="flex justify-between py-1 border-b border-[var(--color-line-separator)]">
-              <span>Strong Foot</span>
-              <span className="font-medium text-white">{strongerFootLabel(p.strongerFoot)}</span>
-            </div>
-            <div className="flex justify-between py-1 border-b border-[var(--color-line-separator)]">
-              <span>Height</span>
-              <span className="font-mono text-white">{p.height} CM</span>
-            </div>
-            <div className="flex justify-between py-1 border-b border-[var(--color-line-separator)]">
-              <span>Weight</span>
-              <span className="font-mono text-white">{p.weight} KG</span>
-            </div>
-            <div className="flex justify-between py-1 border-b border-[var(--color-line-separator)]">
-              <span>Condition</span>
-              <span className="font-medium text-emerald-400">{conditionLabel(p.condition)}</span>
-            </div>
-            <div className="flex justify-between items-center py-1 border-b border-[var(--color-line-separator)]">
-              <span>Card ID</span>
               <button
                 type="button"
                 onClick={copyCardId}
-                className="font-mono text-white hover:text-[var(--color-accent)] inline-flex items-center gap-1 cursor-pointer"
+                className="text-[var(--color-text-dim)] hover:text-white p-1 rounded transition-colors shrink-0 cursor-pointer"
+                title="Copy Card ID"
               >
-                <span>{p.id}</span>
-                {copiedId ? <Check className="size-3 text-emerald-400" /> : <Copy className="size-3" />}
+                {copiedId ? <Check className="size-4 text-emerald-400" /> : <Copy className="size-4" />}
               </button>
             </div>
-            <div className="flex justify-between py-1">
-              <span>Release Date</span>
-              <span className="font-mono text-[var(--color-text-dim)]">{releaseDateLabel ?? "—"}</span>
-            </div>
-          </div>
-        </aside>
 
-        {/* ================= RIGHT COLUMN ================= */}
-        <div className="space-y-6 min-w-0">
-          {/* Card 1: Overview & Attributes */}
-          <div className="card card--secondary rounded-xl bg-[var(--color-panel)] border border-[var(--color-line)] p-5 sm:p-6 space-y-6">
             {/* Tabs */}
-            <div className="flex items-center justify-between border-b border-[var(--color-line)] pb-2 text-xs font-bold">
-              <div className="flex items-center gap-6">
+            <div className="pt-2 border-t border-[var(--color-line-separator)]">
+              <div className="flex items-center gap-6 border-b border-[var(--color-line)] pb-2 text-xs font-bold">
                 {(["overview", "insights", "notes"] as const).map((tab) => (
                   <button
                     key={tab}
@@ -568,104 +545,138 @@ export default function PlayerDetailPage() {
                 ))}
               </div>
 
-              <button
-                type="button"
-                className="text-[var(--color-text-dim)] hover:text-white p-1 rounded transition-colors"
-                title="Share"
-              >
-                <Share2 className="size-4" />
-              </button>
-            </div>
+              <div className="pt-2.5">
+                {activeTab === "overview" && (
+                  <p className="text-xs text-[var(--color-text-secondary)] leading-relaxed">
+                    {p.name}&apos;s &quot;{packTitle}&quot; card is rated {p.ovr}
+                    {p.maxOvr > p.ovr ? `, peaking at ${p.maxOvr} when trained` : ""}. He is a{" "}
+                    {p.height}cm ({Math.round(p.height / 2.54 / 12)}&apos;{Math.round((p.height / 2.54) % 12)}&quot;) tall{" "}
+                    {posLabel} with {playstyleAtk} playstyle
+                    {p.countryName ? `, from ${p.countryName}` : ""}
+                    {p.teamName ? `, playing for ${p.teamName}` : ""}.
+                    {" "}Features {skillNames.length} skills
+                    {skillNames.length > 0 ? `: ${skillNames.slice(0, 5).join(", ")}...` : "."}
+                  </p>
+                )}
 
-            {/* Tab content */}
-            {activeTab === "overview" && (
-              <p className="text-xs text-[var(--color-text-secondary)] leading-relaxed">
-                {p.name}'s "{packTitle}" card is rated {p.ovr}
-                {p.maxOvr > p.ovr ? `, peaking at ${p.maxOvr} when trained` : ""}. He is a{" "}
-                {p.height}cm ({Math.round(p.height / 2.54 / 12)}'{Math.round((p.height / 2.54) % 12)})" tall{" "}
-                {posLabel} with {playstyleAtk} & {playstyleDef} playstyle
-                {p.countryName ? `, from ${p.countryName}` : ""}
-                {p.teamName ? `, playing in the ${p.teamName} team` : ""}.
-                {" "}It features {skillNames.length} player skills
-                {skillNames.length > 0 ? `: ${skillNames.slice(0, 6).join(", ")}` : ""}
-                {skillNames.length > 6 ? ` and ${skillNames.length - 6} more.` : "."}
-              </p>
-            )}
+                {activeTab === "insights" && (
+                  <p className="text-xs text-[var(--color-text-secondary)] py-2 leading-relaxed">
+                    AI insights and trends — coming soon.
+                  </p>
+                )}
 
-            {activeTab === "insights" && (
-              <p className="text-xs text-[var(--color-text-secondary)] py-2 leading-relaxed">
-                AI insights and trends — coming soon.
-              </p>
-            )}
-
-            {activeTab === "notes" && (
-              <p className="text-xs text-[var(--color-text-secondary)] py-2 leading-relaxed">
-                Community notes and tips — coming soon.
-              </p>
-            )}
-
-            {/* Vital Metrics Bar */}
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-[var(--color-text-secondary)] py-2 border-y border-[var(--color-line)]/60 font-mono">
-              <span>↕ {p.height} CM</span>
-              <span>·</span>
-              <span>⚖ {p.weight} KG</span>
-              <span>·</span>
-              <span>📅 {p.age} years</span>
-              <span>·</span>
-              <span>👟 Strong Foot: {strongerFootLabel(p.strongerFoot)}</span>
-              <span>·</span>
-              <span>🎯 WF Accuracy {"★".repeat(Math.min(5, p.weakFootAccuracy))}</span>
-              <span>·</span>
-              <span>👟 WF Usage {"★".repeat(Math.min(5, p.weakFootUsage))}</span>
-            </div>
-
-            {/* Booster Pills Bar — render the resolved Booster objects (dump has
-                the real name + stat magnitudes; was "Booster #{id}" before
-                2026-10-08 because the Booster table wasn't seeded from dump). */}
-            <div className="flex items-start justify-between gap-3 flex-wrap">
-              <div className="flex flex-col gap-1.5 flex-1 min-w-0">
-                {[p.booster1, p.booster2].filter(Boolean).length === 0 ? (
-                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[var(--color-panel)] border border-[var(--color-line)] text-xs text-[var(--color-text-dim)]">
-                    <Sparkles className="size-3" />
-                    No booster assigned
-                  </span>
-                ) : (
-                  <div className="flex flex-wrap gap-2">
-                    {[p.booster1, p.booster2].filter(Boolean).map((b, i) => (
-                      <div
-                        key={`b-${i}-${b!.id}`}
-                        className="inline-flex flex-col gap-1 px-3 py-1.5 rounded-xl bg-cyan-500/10 border border-cyan-500/25"
-                      >
-                        <span className="inline-flex items-center gap-1.5 text-xs font-bold text-cyan-400">
-                          <Sparkles className="size-3" />
-                          {b!.name}
-                        </span>
-                        {Object.keys(b!.stats).length > 0 && (
-                          <div className="flex flex-wrap gap-1">
-                            {Object.entries(b!.stats).map(([k, v]) => (
-                              <span
-                                key={k}
-                                className="px-1.5 py-0.5 rounded-md bg-cyan-500/10 text-[10px] font-mono text-cyan-300"
-                              >
-                                +{v} {statLabel(k as BaseStat)}
-                              </span>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
+                {activeTab === "notes" && (
+                  <p className="text-xs text-[var(--color-text-secondary)] py-2 leading-relaxed">
+                    Community notes and tips — coming soon.
+                  </p>
                 )}
               </div>
             </div>
 
-            {/* 3 Stat Sections */}
+            {/* Quick metrics footer (WF accuracy / usage + stars) */}
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-[var(--color-line-separator)] text-xs text-[var(--color-text-dim)] font-mono">
+              <div className="flex items-center gap-3">
+                <span>🎯 WF Accuracy: <span className="text-white">{"★".repeat(Math.min(5, p.weakFootAccuracy))}</span></span>
+                <span>👟 WF Usage: <span className="text-white">{"★".repeat(Math.min(5, p.weakFootUsage))}</span></span>
+              </div>
+              <div className="text-[11px]">
+                ID: <span className="font-mono text-white/80">{p.id}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Col 3: Tactical Pitch Map (Right Hero Box) */}
+        <div className="flex flex-col gap-2 shrink-0 w-full lg:w-[260px]">
+          <div className="card card--secondary rounded-xl bg-[var(--color-panel)] border border-[var(--color-line)] p-3 space-y-2 shadow-sm">
+            <div className="flex items-center justify-between text-xs font-bold text-white">
+              <span>Pitch Map</span>
+              <span className="font-mono text-[11px] text-[var(--color-accent)] font-semibold">
+                Best: {bestPos} ({bestRating || p.ovr})
+              </span>
+            </div>
+
+            {/* 3x4 Tactical Pitch grid with exact position ratings */}
+            <div className="grid grid-cols-3 gap-1.5 p-2 rounded-lg bg-[var(--color-canvas)] border border-[var(--color-line)] text-center text-xs font-mono font-bold">
+              {PITCH_SLOTS.map((posKey) => {
+                const apt = p.positionAptitudes[posKey];
+                const rating = p.positionRatings[posKey] ?? 0;
+                const isReg = posKey === regPos;
+                return (
+                  <div
+                    key={posKey}
+                    className={`py-1.5 px-1 rounded transition-colors ${aptitudeColor(apt)} ${
+                      isReg ? "ring-2 ring-[var(--color-accent)] font-black" : ""
+                    }`}
+                  >
+                    <div className="text-[10px] leading-tight">{posKey}</div>
+                    <div className="text-[11px] leading-tight opacity-90">{rating}</div>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="flex items-center justify-between pt-1 text-[11px] text-[var(--color-text-dim)] font-mono">
+              <span>Proficiency:</span>
+              <span className="text-white font-semibold">{fullCount} Full · {halfCount} Half</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* ================= SECTION 2: PROGRESSION & ATTRIBUTES ================= */}
+      <div className="grid gap-6 lg:grid-cols-[280px_minmax(0,1fr)] items-start">
+        {/* Left: Progression Box */}
+        <div className="rounded-xl border border-[var(--color-line)] bg-[var(--color-panel)] p-4 space-y-3 shadow-sm">
+          <div className="flex items-center justify-between">
+            <div>
+              <h4 className="text-xs font-bold text-white uppercase tracking-wider">Progression</h4>
+              <div className="text-[11px] font-mono text-[var(--color-text-dim)] pt-0.5">
+                {totalPointsSpent} / {MAX_POINTS_AVAILABLE} pts
+              </div>
+            </div>
+
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={handleMaxBuild}
+                className="button button--sm bg-[var(--color-accent)] text-black font-bold hover:opacity-90 cursor-pointer"
+              >
+                Max OVR
+              </button>
+              <button
+                type="button"
+                onClick={handleResetBuild}
+                aria-label="Reset"
+                className="button button--sm button--ghost p-1 text-[var(--color-text-dim)] hover:text-white cursor-pointer"
+              >
+                <RotateCcw className="size-3.5" />
+              </button>
+            </div>
+          </div>
+
+          <ManagerProficiencySlider value={managerProficiency} onChange={setManagerProficiency} />
+
+          <div className="pt-2 border-t border-[var(--color-line-separator)] space-y-3">
+            {ALL_TRAINING_CATEGORIES.map((cat) => (
+              <ProgressionSlider
+                key={cat.key}
+                label={cat.label}
+                value={points[cat.key] ?? 0}
+                max={20}
+                onChange={(v) => setPoints((prev) => ({ ...prev, [cat.key]: v }))}
+              />
+            ))}
+          </div>
+        </div>
+
+        {/* Right: 3 Stats Sections + Skills + Body Model */}
+        <div className="space-y-6 min-w-0">
+          {/* Stats Sections Card */}
+          <div className="card card--secondary rounded-xl bg-[var(--color-panel)] border border-[var(--color-line)] p-5 sm:p-6 space-y-6 shadow-sm">
             <div className="grid md:grid-cols-3 gap-6 pt-1">
-              {/* Attacking */}
               <StatSection title="Attacking" stats={ATTACKING_STATS} dto={p} useMax />
-              {/* Defending */}
               <StatSection title="Defending" stats={DEFENDING_STATS} dto={p} useMax />
-              {/* Strength */}
               <StatSection title="Strength" stats={STRENGTH_STATS} dto={p} useMax />
             </div>
 
@@ -697,8 +708,8 @@ export default function PlayerDetailPage() {
             </div>
           </div>
 
-          {/* Card 2: Body Model */}
-          <div className="card card--secondary rounded-xl bg-[var(--color-panel)] border border-[var(--color-line)] p-5 space-y-4">
+          {/* Body Model */}
+          <div className="card card--secondary rounded-xl bg-[var(--color-panel)] border border-[var(--color-line)] p-5 space-y-4 shadow-sm">
             <h3 className="text-sm font-bold text-white">Body Model</h3>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 text-xs">
               {PHYSIQUE_ORDER.map((key) => (
@@ -729,113 +740,34 @@ export default function PlayerDetailPage() {
             </div>
           </div>
 
-          {/* Card 3: Position & Playstyle */}
-          <div className="card card--secondary rounded-xl bg-[var(--color-panel)] border border-[var(--color-line)] p-5 space-y-5">
-            <h3 className="text-sm font-bold text-white">Position & Playstyle</h3>
-
-            {/* 3 KPI Cards */}
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-              <div className="p-3.5 rounded-xl bg-[var(--color-canvas)] border border-[var(--color-line)]">
-                <div className="text-[11px] text-[var(--color-text-dim)] uppercase font-semibold">Best Fit</div>
-                <div className="flex items-baseline gap-2 mt-1">
-                  <span className="text-2xl font-bold text-white">{POSITION_LABEL[bestPos]}</span>
-                  <span className="text-sm font-mono font-bold text-stat-tier-cyan">{bestRating}</span>
-                </div>
-              </div>
-
-              <div className="p-3.5 rounded-xl bg-[var(--color-canvas)] border border-[var(--color-line)]">
-                <div className="text-[11px] text-[var(--color-text-dim)] uppercase font-semibold">At {posLabel}</div>
-                <div className="flex items-baseline gap-2 mt-1">
-                  <span className="text-2xl font-bold text-white">{atRegRating}</span>
-                </div>
-              </div>
-
-              <div className="p-3.5 rounded-xl bg-[var(--color-canvas)] border border-[var(--color-line)]">
-                <div className="text-[11px] text-[var(--color-text-dim)] uppercase font-semibold">Proficiency</div>
-                <div className="flex items-baseline gap-2 mt-1">
-                  <span className="text-2xl font-bold text-[var(--color-accent)]">{fullCount} Full</span>
-                  <span className="text-xs text-[var(--color-text-dim)]">· {halfCount} Half</span>
-                </div>
-              </div>
-            </div>
-
-            {/* Pitch + Tactical details */}
-            <div className="grid gap-5 lg:grid-cols-2 items-start">
-              {/* Pitch grid */}
-              <div className="p-4 rounded-xl bg-[var(--color-canvas)] border border-[var(--color-line)]">
-                <div className="text-xs font-semibold text-white mb-3">Pitch Map</div>
-                <div className="grid grid-cols-3 gap-2 text-center text-xs font-mono font-bold">
-                  {PITCH_SLOTS.map((posKey) => {
-                    const apt = p.positionAptitudes[posKey];
-                    const rating = p.positionRatings[posKey] ?? 0;
-                    const isReg = posKey === regPos;
-                    return (
-                      <div
-                        key={posKey}
-                        className={`p-2.5 rounded ${aptitudeColor(apt)} ${isReg ? "ring-2 ring-[var(--color-accent)]" : ""}`}
-                      >
-                        <div>{posKey}</div>
-                        <div className="text-[10px] opacity-80">{rating}</div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* Tactical details */}
-              <div className="space-y-4">
-                <div className="p-4 rounded-xl bg-[var(--color-canvas)] border border-[var(--color-line)] space-y-2">
-                  <div className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-rose-500/15 text-rose-300 font-bold text-xs">
-                    <span>⛿</span>
-                    <span>{playstyleAtk}</span>
-                  </div>
-                  {playstyleDesc && (
-                    <p className="text-xs text-[var(--color-text-secondary)] leading-relaxed">{playstyleDesc}</p>
-                  )}
-                  <div className="flex flex-wrap gap-1.5 pt-1">
-                    {POSITIONS
-                      .filter((k) => p.positionAptitudes[k] === 0)
-                      .map((role) => (
-                        <span key={role} className="px-2 py-0.5 rounded bg-white/5 text-[10px] font-mono font-bold text-white">
-                          {role}
-                        </span>
-                      ))}
-                  </div>
-                </div>
-
-                {/* AI Playing Styles (the 6 playstyle flags the player has set). */}
-                <div className="p-4 rounded-xl bg-[var(--color-canvas)] border border-[var(--color-line)] space-y-2">
-                  <div className="text-xs font-bold text-white">AI Playing Styles</div>
-                  <div className="flex flex-wrap gap-1.5">
-                    {(
-                      [
-                        ["trickster", "Trickster"],
-                        ["mazingRun", "Mazing Run"],
-                        ["speedingBullet", "Speeding Bullet"],
-                        ["incisiveRun", "Incisive Run"],
-                        ["longBallExpert", "Long Ball Expert"],
-                        ["earlyCross", "Early Cross"],
-                      ] as const
-                    )
-                      .filter(([key]) => p.playstyles[key])
-                      .map(([key, label]) => (
-                        <span
-                          key={key}
-                          className="px-2.5 py-1 rounded-md bg-[var(--color-panel)] border border-[var(--color-line)] text-xs text-white"
-                        >
-                          {label}
-                        </span>
-                      ))}
-                    {Object.values(p.playstyles).every(Boolean) === false &&
-                      Object.values(p.playstyles).every((v) => !v) && (
-                        <span className="text-xs text-[var(--color-text-dim)]">None.</span>
-                      )}
-                  </div>
-                </div>
-              </div>
+          {/* AI Playing Styles */}
+          <div className="card card--secondary rounded-xl bg-[var(--color-panel)] border border-[var(--color-line)] p-5 space-y-3 shadow-sm">
+            <h3 className="text-sm font-bold text-white">AI Playing Styles</h3>
+            <div className="flex flex-wrap gap-1.5">
+              {(
+                [
+                  ["trickster", "Trickster"],
+                  ["mazingRun", "Mazing Run"],
+                  ["speedingBullet", "Speeding Bullet"],
+                  ["incisiveRun", "Incisive Run"],
+                  ["longBallExpert", "Long Ball Expert"],
+                  ["earlyCross", "Early Cross"],
+                ] as const
+              )
+                .filter(([key]) => p.playstyles[key])
+                .map(([key, label]) => (
+                  <span
+                    key={key}
+                    className="px-2.5 py-1 rounded-md bg-[var(--color-canvas)] border border-[var(--color-line)] text-xs text-white"
+                  >
+                    {label}
+                  </span>
+                ))}
+              {Object.values(p.playstyles).every((v) => !v) && (
+                <span className="text-xs text-[var(--color-text-dim)]">None.</span>
+              )}
             </div>
           </div>
-
           {/* Card 4: Other versions */}
           <div className="card card--secondary rounded-xl bg-[var(--color-panel)] border border-[var(--color-line)] p-5 space-y-4">
             <h3 className="text-sm font-bold text-white">Other versions of {p.name}</h3>
