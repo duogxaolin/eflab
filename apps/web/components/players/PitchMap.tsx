@@ -1,13 +1,11 @@
 "use client";
 import type { Position } from "@eflab/shared";
-import { statTierClass } from "@/lib/card-display";
 
 export interface PitchMapProps {
   positionAptitudes: Record<string, number>;
   positionRatings: Record<string, number>;
   registeredPosition: Position | string;
   className?: string;
-  compact?: boolean;
 }
 
 function cellBg(aptitude: number | undefined): string {
@@ -45,22 +43,22 @@ function PitchCell({
 
   return (
     <div
-      className={`relative flex items-center justify-center rounded-[6px] transition-colors ${cellBg(
+      className={`relative flex items-center justify-center rounded-lg transition-all shadow-sm ${cellBg(
         apt
       )} ${isReg ? "ring-2 ring-[var(--color-accent)] ring-offset-1 ring-offset-[#18181b]" : ""} ${
-        layout === "stack" ? "flex-col gap-1 p-1" : "flex-row gap-1.5 px-2 py-1"
+        layout === "stack" ? "flex-col gap-1.5 p-1.5" : "flex-row gap-2 px-2.5 py-1"
       } w-full h-full`}
       title={`${pos}: ${rating} OVR (${apt === 0 ? "Full" : apt === 1 ? "Half" : "None"})`}
     >
       <span
-        className={`text-[10px] font-black uppercase tracking-wider leading-none ${
-          isFull ? "text-black" : "text-white/60"
+        className={`text-[11px] font-black uppercase tracking-wider leading-none ${
+          isFull ? "text-black" : "text-white/70"
         }`}
       >
         {pos}
       </span>
       <span
-        className={`inline-block px-1 py-0.5 rounded-[4px] bg-black/80 font-mono text-[11px] font-bold leading-none tabular-nums shadow-sm ${cellRatingColor(
+        className={`inline-block px-1.5 py-0.5 rounded-[4px] bg-black/85 font-mono text-[11px] font-bold leading-none tabular-nums shadow-sm ${cellRatingColor(
           rating
         )}`}
       >
@@ -80,7 +78,7 @@ export function PitchMap({
     <div className={`flex flex-col items-center ${className}`}>
       {/* Proficiency Legend */}
       <div
-        className="flex items-center justify-end gap-3 text-[11px] text-[var(--color-text-dim)] font-mono w-full max-w-[340px] mb-2 px-1"
+        className="flex items-center justify-end gap-3.5 text-xs text-[var(--color-text-dim)] font-mono w-full max-w-[350px] mb-2.5 px-1"
         role="list"
         aria-label="Position proficiency levels"
       >
@@ -98,14 +96,14 @@ export function PitchMap({
         </span>
       </div>
 
-      {/* Pitch Diagram (3 columns: Left Wing (82px), Center (168px), Right Wing (82px)) */}
+      {/* Pitch Diagram (3 columns: Left Wing, Center Spine, Right Wing with generous spacing) */}
       <div
-        className="flex flex-row gap-[3px] p-2 rounded-xl bg-gradient-to-b from-[#18181b] via-[#14161f] to-[#10121a] border border-white/10 shadow-xl"
-        style={{ width: "340px", height: "310px" }}
+        className="flex flex-row gap-2 p-2.5 rounded-2xl bg-gradient-to-b from-[#18181b] via-[#14161f] to-[#10121a] border border-white/10 shadow-2xl"
+        style={{ width: "350px", height: "320px" }}
       >
         {/* Left Column (LWF, LMF, LB) */}
-        <div className="flex flex-col justify-between gap-[3px] h-full" style={{ width: "82px" }}>
-          <div className="h-[96px]">
+        <div className="flex flex-col justify-between gap-2 h-full" style={{ width: "82px" }}>
+          <div className="flex-1">
             <PitchCell
               pos="LWF"
               aptitudes={positionAptitudes}
@@ -114,7 +112,7 @@ export function PitchMap({
               layout="stack"
             />
           </div>
-          <div className="h-[96px]">
+          <div className="flex-1">
             <PitchCell
               pos="LMF"
               aptitudes={positionAptitudes}
@@ -123,7 +121,7 @@ export function PitchMap({
               layout="stack"
             />
           </div>
-          <div className="h-[96px]">
+          <div className="flex-1">
             <PitchCell
               pos="LB"
               aptitudes={positionAptitudes}
@@ -135,9 +133,9 @@ export function PitchMap({
         </div>
 
         {/* Center Column (CF/SS, AMF/CMF/DMF, CB/GK) */}
-        <div className="flex flex-col justify-between gap-[3px] h-full flex-1">
+        <div className="flex flex-col justify-between gap-2 h-full flex-1">
           {/* Attack row: CF & SS */}
-          <div className="flex gap-[3px] h-[96px]">
+          <div className="flex gap-2 flex-1">
             <div className="flex-1">
               <PitchCell
                 pos="CF"
@@ -159,8 +157,8 @@ export function PitchMap({
           </div>
 
           {/* Midfield row: AMF, CMF, DMF */}
-          <div className="flex flex-col gap-[3px] h-[96px]">
-            <div className="h-[30px]">
+          <div className="flex flex-col gap-1.5 flex-1 justify-between">
+            <div className="flex-1">
               <PitchCell
                 pos="AMF"
                 aptitudes={positionAptitudes}
@@ -169,7 +167,7 @@ export function PitchMap({
                 layout="row"
               />
             </div>
-            <div className="h-[30px]">
+            <div className="flex-1">
               <PitchCell
                 pos="CMF"
                 aptitudes={positionAptitudes}
@@ -178,7 +176,7 @@ export function PitchMap({
                 layout="row"
               />
             </div>
-            <div className="h-[30px]">
+            <div className="flex-1">
               <PitchCell
                 pos="DMF"
                 aptitudes={positionAptitudes}
@@ -190,7 +188,7 @@ export function PitchMap({
           </div>
 
           {/* Defence & GK row: CB & GK */}
-          <div className="flex gap-[3px] h-[96px]">
+          <div className="flex gap-2 flex-1">
             <div className="flex-1">
               <PitchCell
                 pos="CB"
@@ -213,8 +211,8 @@ export function PitchMap({
         </div>
 
         {/* Right Column (RWF, RMF, RB) */}
-        <div className="flex flex-col justify-between gap-[3px] h-full" style={{ width: "82px" }}>
-          <div className="h-[96px]">
+        <div className="flex flex-col justify-between gap-2 h-full" style={{ width: "82px" }}>
+          <div className="flex-1">
             <PitchCell
               pos="RWF"
               aptitudes={positionAptitudes}
@@ -223,7 +221,7 @@ export function PitchMap({
               layout="stack"
             />
           </div>
-          <div className="h-[96px]">
+          <div className="flex-1">
             <PitchCell
               pos="RMF"
               aptitudes={positionAptitudes}
@@ -232,7 +230,7 @@ export function PitchMap({
               layout="stack"
             />
           </div>
-          <div className="h-[96px]">
+          <div className="flex-1">
             <PitchCell
               pos="RB"
               aptitudes={positionAptitudes}

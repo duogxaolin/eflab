@@ -359,13 +359,13 @@ export default function PlayerDetailPage() {
       </ol>
 
       {/* ================= SECTION 1: HERO CLUSTER (EFHUB-ALIGNED) ================= */}
-      <div className="grid grid-cols-1 lg:grid-cols-[auto_1fr_350px] gap-6 items-start">
-        {/* Col 1: Card Cluster (Badges + PlayerCard + 5 Specs Chips + Boosters) */}
+      {/* ================= SECTION 1: HERO TOP ROW ================= */}
+      <div className="grid grid-cols-1 lg:grid-cols-[auto_minmax(0,1fr)] gap-6 items-start">
+        {/* Col 1: Card Cluster (Badges + 195px PlayerCard + 5 Specs Chips + Boosters) */}
         <div className="flex flex-col gap-3 shrink-0 mx-auto lg:mx-0">
           <div className="grid grid-cols-[auto_195px_auto] items-stretch gap-2.5">
             {/* Sub-col 1: 4 vertical emblems/badges */}
             <div className="flex shrink-0 flex-col justify-between py-0.5">
-              {/* Country badge */}
               <div
                 className="flex size-11 items-center justify-center overflow-hidden rounded-xl border border-[var(--color-line)] bg-[var(--color-panel)] shadow-sm"
                 title={p.countryName ?? "Nationality"}
@@ -378,7 +378,6 @@ export default function PlayerDetailPage() {
                 )}
               </div>
 
-              {/* Team emblem badge */}
               <div
                 className="flex size-11 items-center justify-center overflow-hidden rounded-xl border border-[var(--color-line)] bg-[var(--color-panel)] shadow-sm p-1"
                 title={p.teamName ?? "Team"}
@@ -391,7 +390,6 @@ export default function PlayerDetailPage() {
                 )}
               </div>
 
-              {/* League emblem badge */}
               <div
                 className="flex size-11 items-center justify-center overflow-hidden rounded-xl border border-[var(--color-line)] bg-[var(--color-panel)] shadow-sm p-1"
                 title={p.leagueName ?? "League"}
@@ -404,7 +402,6 @@ export default function PlayerDetailPage() {
                 )}
               </div>
 
-              {/* Manager proficiency circle/badge */}
               <div
                 className="flex size-11 items-center justify-center overflow-hidden rounded-xl border border-[var(--color-line)] bg-[var(--color-panel)] shadow-sm"
                 title="Manager Proficiency"
@@ -424,31 +421,26 @@ export default function PlayerDetailPage() {
 
             {/* Sub-col 3: 5 Compact Specs Chips (Height, Weight, Age, Foot, Condition) */}
             <div className="flex shrink-0 flex-col justify-between py-0.5">
-              {/* Height */}
               <div className="w-[78px] rounded-lg border border-[var(--color-line)] bg-[var(--color-panel)] px-2 py-1.5 text-center shadow-sm">
                 <p className="text-[9px] font-semibold uppercase tracking-wider text-[var(--color-text-dim)]">Height</p>
                 <p className="mt-0.5 font-mono text-xs font-bold text-white">{p.height}cm</p>
               </div>
 
-              {/* Weight */}
               <div className="w-[78px] rounded-lg border border-[var(--color-line)] bg-[var(--color-panel)] px-2 py-1.5 text-center shadow-sm">
                 <p className="text-[9px] font-semibold uppercase tracking-wider text-[var(--color-text-dim)]">Weight</p>
                 <p className="mt-0.5 font-mono text-xs font-bold text-white">{p.weight}kg</p>
               </div>
 
-              {/* Age */}
               <div className="w-[78px] rounded-lg border border-[var(--color-line)] bg-[var(--color-panel)] px-2 py-1.5 text-center shadow-sm">
                 <p className="text-[9px] font-semibold uppercase tracking-wider text-[var(--color-text-dim)]">Age</p>
                 <p className="mt-0.5 font-mono text-xs font-bold text-white">{p.age}</p>
               </div>
 
-              {/* Foot */}
               <div className="w-[78px] rounded-lg border border-[var(--color-line)] bg-[var(--color-panel)] px-2 py-1.5 text-center shadow-sm">
                 <p className="text-[9px] font-semibold uppercase tracking-wider text-[var(--color-text-dim)]">Foot</p>
                 <p className="mt-0.5 font-medium text-xs text-white">{strongerFootLabel(p.strongerFoot)}</p>
               </div>
 
-              {/* Condition */}
               <div className="w-[78px] rounded-lg border border-[var(--color-line)] bg-[var(--color-panel)] px-2 py-1.5 text-center shadow-sm">
                 <p className="text-[9px] font-semibold uppercase tracking-wider text-[var(--color-text-dim)]">Condition</p>
                 <p className="mt-0.5 font-bold text-xs text-emerald-400">{condLetter ?? "B"}</p>
@@ -481,9 +473,10 @@ export default function PlayerDetailPage() {
           </div>
         </div>
 
-        {/* Col 2: Player Identity, Playstyles & Tabs (Center Hero Box) */}
-        <div className="flex flex-col gap-3 min-w-0 flex-1">
-          <div className="card card--secondary rounded-xl bg-[var(--color-panel)] border border-[var(--color-line)] p-4 sm:p-5 space-y-3 shadow-sm">
+        {/* Col 2: Player Identity, Tabs & Progression (Full Width on Right) */}
+        <div className="flex flex-col gap-6 min-w-0 flex-1">
+          {/* Identity & Tabs Card */}
+          <div className="card card--secondary rounded-xl bg-[var(--color-panel)] border border-[var(--color-line)] p-5 sm:p-6 space-y-4 shadow-sm">
             <div className="flex items-start justify-between gap-3">
               <div>
                 <div className="flex items-center gap-2.5 flex-wrap">
@@ -591,203 +584,174 @@ export default function PlayerDetailPage() {
               </div>
             </div>
           </div>
-        </div>
 
-        {/* Col 3: Tactical Pitch Map (Right Hero Box) */}
-        {/* Col 3: Tactical Pitch Map (Right Hero Box - efootbase exact design) */}
-        <div className="flex flex-col gap-2 shrink-0 w-full lg:w-[350px]">
-          <div className="card card--secondary rounded-xl bg-[var(--color-panel)] border border-[var(--color-line)] p-3 space-y-2 shadow-sm">
-            <div className="flex items-center justify-between text-xs font-bold text-white px-1">
-              <span>Position &amp; Playstyle</span>
-              <span className="font-mono text-[11px] text-[var(--color-accent)] font-semibold">
-                Best: {POSITION_LABEL[bestPos]} ({bestRating || p.ovr})
-              </span>
+          {/* Progression Box */}
+          <div className="rounded-xl border border-[var(--color-line)] bg-[var(--color-panel)] p-5 space-y-4 shadow-sm">
+            <div className="flex items-center justify-between">
+              <div>
+                <h4 className="text-xs font-bold text-white uppercase tracking-wider">Progression</h4>
+                <div className="text-[11px] font-mono text-[var(--color-text-dim)] pt-0.5">
+                  {totalPointsSpent} / {MAX_POINTS_AVAILABLE} pts
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleMaxBuild}
+                  className="button button--sm bg-[var(--color-accent)] text-black font-bold hover:opacity-90 cursor-pointer px-3 py-1 rounded-lg text-xs"
+                >
+                  Max OVR
+                </button>
+                <button
+                  type="button"
+                  onClick={handleResetBuild}
+                  aria-label="Reset"
+                  className="button button--sm button--ghost p-1.5 rounded-lg text-[var(--color-text-dim)] hover:text-white cursor-pointer"
+                >
+                  <RotateCcw className="size-3.5" />
+                </button>
+              </div>
             </div>
 
-            <PitchMap
-              positionAptitudes={p.positionAptitudes}
-              positionRatings={p.positionRatings}
-              registeredPosition={regPos}
-            />
+            <ManagerProficiencySlider value={managerProficiency} onChange={setManagerProficiency} />
 
-            <div className="flex items-center justify-between pt-1 text-[11px] text-[var(--color-text-dim)] font-mono border-t border-[var(--color-line-separator)] px-1">
-              <span>Proficiency:</span>
-              <span className="text-white font-semibold">{fullCount} Full · {halfCount} Half</span>
+            <div className="pt-2 border-t border-[var(--color-line-separator)] grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+              {ALL_TRAINING_CATEGORIES.map((cat) => (
+                <ProgressionSlider
+                  key={cat.key}
+                  label={cat.label}
+                  value={points[cat.key] ?? 0}
+                  max={20}
+                  onChange={(v) => setPoints((prev) => ({ ...prev, [cat.key]: v }))}
+                />
+              ))}
             </div>
           </div>
         </div>
       </div>
 
-      {/* ================= SECTION 2: PROGRESSION & ATTRIBUTES ================= */}
-      <div className="grid gap-6 lg:grid-cols-[280px_minmax(0,1fr)] items-start">
-        {/* Left: Progression Box */}
-        <div className="rounded-xl border border-[var(--color-line)] bg-[var(--color-panel)] p-4 space-y-3 shadow-sm">
-          <div className="flex items-center justify-between">
-            <div>
-              <h4 className="text-xs font-bold text-white uppercase tracking-wider">Progression</h4>
-              <div className="text-[11px] font-mono text-[var(--color-text-dim)] pt-0.5">
-                {totalPointsSpent} / {MAX_POINTS_AVAILABLE} pts
-              </div>
-            </div>
+      {/* ================= SECTION 2: STATS SECTIONS ================= */}
+      <div className="card card--secondary rounded-xl bg-[var(--color-panel)] border border-[var(--color-line)] p-5 sm:p-6 space-y-6 shadow-sm">
+        <div className="grid md:grid-cols-3 gap-6 pt-1">
+          <StatSection title="Attacking" stats={ATTACKING_STATS} dto={p} useMax />
+          <StatSection title="Defending" stats={DEFENDING_STATS} dto={p} useMax />
+          <StatSection title="Strength" stats={STRENGTH_STATS} dto={p} useMax />
+        </div>
+      </div>
 
-            <div className="flex items-center gap-1.5">
-              <button
-                type="button"
-                onClick={handleMaxBuild}
-                className="button button--sm bg-[var(--color-accent)] text-black font-bold hover:opacity-90 cursor-pointer"
-              >
-                Max OVR
-              </button>
-              <button
-                type="button"
-                onClick={handleResetBuild}
-                aria-label="Reset"
-                className="button button--sm button--ghost p-1 text-[var(--color-text-dim)] hover:text-white cursor-pointer"
-              >
-                <RotateCcw className="size-3.5" />
-              </button>
+      {/* ================= SECTION 3: POSITION & PLAYSTYLE (EFOOTBASE EXACT LAYOUT) ================= */}
+      <div className="card card--secondary rounded-xl bg-[var(--color-panel)] border border-[var(--color-line)] p-5 sm:p-6 space-y-5 shadow-sm">
+        <h3 className="text-sm font-bold text-white uppercase tracking-wider">Position &amp; Playstyle</h3>
+
+        {/* 3 KPI Cards on top */}
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <div className="p-3.5 rounded-xl bg-[var(--color-canvas)] border border-[var(--color-line)]">
+            <div className="text-[11px] text-[var(--color-text-dim)] uppercase font-semibold">Best Fit</div>
+            <div className="flex items-baseline gap-2 mt-1">
+              <span className="text-2xl font-bold text-white">{POSITION_LABEL[bestPos]}</span>
+              <span className="text-sm font-mono font-bold text-stat-tier-cyan">{bestRating || p.ovr}</span>
             </div>
           </div>
 
-          <ManagerProficiencySlider value={managerProficiency} onChange={setManagerProficiency} />
+          <div className="p-3.5 rounded-xl bg-[var(--color-canvas)] border border-[var(--color-line)]">
+            <div className="text-[11px] text-[var(--color-text-dim)] uppercase font-semibold">At {posLabel}</div>
+            <div className="flex items-baseline gap-2 mt-1">
+              <span className="text-2xl font-bold text-white">{atRegRating}</span>
+            </div>
+          </div>
 
-          <div className="pt-2 border-t border-[var(--color-line-separator)] space-y-3">
-            {ALL_TRAINING_CATEGORIES.map((cat) => (
-              <ProgressionSlider
-                key={cat.key}
-                label={cat.label}
-                value={points[cat.key] ?? 0}
-                max={20}
-                onChange={(v) => setPoints((prev) => ({ ...prev, [cat.key]: v }))}
-              />
-            ))}
+          <div className="p-3.5 rounded-xl bg-[var(--color-canvas)] border border-[var(--color-line)]">
+            <div className="text-[11px] text-[var(--color-text-dim)] uppercase font-semibold">Proficiency</div>
+            <div className="flex items-baseline gap-2 mt-1">
+              <span className="text-2xl font-bold text-[var(--color-accent)]">{fullCount} Full</span>
+              <span className="text-xs text-[var(--color-text-dim)]">· {halfCount} Half</span>
+            </div>
           </div>
         </div>
 
-        {/* Right: 3 Stats Sections + Skills + Body Model */}
-        <div className="space-y-6 min-w-0">
-          {/* Stats Sections Card */}
-          <div className="card card--secondary rounded-xl bg-[var(--color-panel)] border border-[var(--color-line)] p-5 sm:p-6 space-y-6 shadow-sm">
-            <div className="grid md:grid-cols-3 gap-6 pt-1">
-              <StatSection title="Attacking" stats={ATTACKING_STATS} dto={p} useMax />
-              <StatSection title="Defending" stats={DEFENDING_STATS} dto={p} useMax />
-              <StatSection title="Strength" stats={STRENGTH_STATS} dto={p} useMax />
+        {/* 2 Columns: Left Pitch Map (350px) + Right Tactical Playstyles */}
+        <div className="grid gap-6 lg:grid-cols-[350px_minmax(0,1fr)] items-start pt-1">
+          {/* Left: The Spacious Pitch Map */}
+          <div className="flex justify-center mx-auto lg:mx-0">
+            <PitchMap
+              positionAptitudes={p.positionAptitudes}
+              positionRatings={p.positionRatings}
+              registeredPosition={regPos}
+            />
+          </div>
+
+          {/* Right: Tactical Details matching efootbase screenshot */}
+          <div className="space-y-4">
+            {/* Attack Playstyle Card */}
+            <div className="p-4 rounded-xl bg-[var(--color-canvas)] border border-[var(--color-line)] space-y-2">
+              <div className="flex items-center gap-2">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src="/icons/playstyle_attack.svg" alt="" className="size-4" />
+                <span className="font-bold text-sm text-white">{playstyleAtk}</span>
+              </div>
+              {playstyleDesc && (
+                <p className="text-xs text-[var(--color-text-secondary)] leading-relaxed">{playstyleDesc}</p>
+              )}
+              <div className="flex flex-wrap gap-1.5 pt-1">
+                {POSITIONS
+                  .filter((k) => p.positionAptitudes[k] === 0)
+                  .map((role) => (
+                    <span key={role} className="px-2 py-0.5 rounded bg-white/5 text-[10px] font-mono font-bold text-white border border-white/5">
+                      {role}
+                    </span>
+                  ))}
+              </div>
             </div>
 
-            {/* Skills */}
-            <div className="pt-4 border-t border-[var(--color-line)] space-y-3">
-              <h3 className="text-xs font-bold uppercase tracking-wider text-white">Skills</h3>
-              <div className="flex flex-wrap gap-2">
-                {premiumSkills.map((s) => (
-                  <span
-                    key={s}
-                    className="inline-flex items-center gap-1.5 px-3 py-1 rounded-md bg-amber-500/15 border border-amber-500/40 text-xs font-bold text-amber-300"
-                  >
-                    <Sparkles className="size-3.5" />
-                    <span>{s}</span>
-                  </span>
-                ))}
-                {otherSkills.map((s) => (
-                  <span
-                    key={s}
-                    className="px-2.5 py-1 rounded-md bg-[var(--color-canvas)] border border-[var(--color-line)] text-xs text-white"
-                  >
-                    {s}
-                  </span>
-                ))}
-                {skillNames.length === 0 && (
-                  <span className="text-xs text-[var(--color-text-dim)]">No skills recorded.</span>
+            {/* Defence Playstyle Card */}
+            {playstyleDef !== "Basic" && (
+              <div className="p-4 rounded-xl bg-[var(--color-canvas)] border border-[var(--color-line)] space-y-2">
+                <div className="flex items-center gap-2">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src="/icons/playstyle_defence.svg" alt="" className="size-4" />
+                  <span className="font-bold text-sm text-white">{playstyleDef}</span>
+                </div>
+                <div className="flex flex-wrap gap-1.5 pt-1">
+                  {POSITIONS
+                    .filter((k) => p.positionAptitudes[k] === 0)
+                    .map((role) => (
+                      <span key={role} className="px-2 py-0.5 rounded bg-white/5 text-[10px] font-mono font-bold text-white border border-white/5">
+                        {role}
+                      </span>
+                    ))}
+                </div>
+              </div>
+            )}
+
+            {/* AI Playing Styles */}
+            <div className="p-4 rounded-xl bg-[var(--color-canvas)] border border-[var(--color-line)] space-y-2">
+              <div className="text-xs font-bold text-white">AI Playing Styles</div>
+              <div className="flex flex-wrap gap-1.5">
+                {(
+                  [
+                    ["trickster", "Trickster"],
+                    ["mazingRun", "Mazing Run"],
+                    ["speedingBullet", "Speeding Bullet"],
+                    ["incisiveRun", "Incisive Run"],
+                    ["longBallExpert", "Long Ball Expert"],
+                    ["earlyCross", "Early Cross"],
+                  ] as const
+                )
+                  .filter(([key]) => p.playstyles[key])
+                  .map(([key, label]) => (
+                    <span
+                      key={key}
+                      className="px-2.5 py-1 rounded-md bg-[var(--color-panel)] border border-[var(--color-line)] text-xs text-white"
+                    >
+                      {label}
+                    </span>
+                  ))}
+                {Object.values(p.playstyles).every((v) => !v) && (
+                  <span className="text-xs text-[var(--color-text-dim)]">None.</span>
                 )}
               </div>
             </div>
-          </div>
-
-          {/* Body Model */}
-          <div className="card card--secondary rounded-xl bg-[var(--color-panel)] border border-[var(--color-line)] p-5 space-y-4 shadow-sm">
-            <h3 className="text-sm font-bold text-white">Body Model</h3>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 text-xs">
-              {PHYSIQUE_ORDER.map((key) => (
-                <div
-                  key={key}
-                  className="flex items-center justify-between p-2 rounded-lg bg-[var(--color-canvas)] border border-[var(--color-line)]"
-                >
-                  <span className="text-[var(--color-text-secondary)]">{PHYSIQUE_LABEL[key]}</span>
-                  <span className="font-mono font-bold text-white px-2 py-0.5 rounded bg-[var(--color-panel)]">
-                    {p.physique[key]}
-                  </span>
-                </div>
-              ))}
-              {(["legCoverage", "armCoverage", "peakJumpHeight", "torsoCollisionWidth", "dribbleHeight"] as const).map((key) => {
-                const v = p.derived[key];
-                return (
-                  <div
-                    key={key}
-                    className="flex items-center justify-between p-2 rounded-lg bg-[var(--color-canvas)] border border-[var(--color-line)]"
-                  >
-                    <span className="text-[var(--color-text-secondary)]">{DERIVED_LABEL[key]}</span>
-                    <span className="font-mono font-bold text-white px-2 py-0.5 rounded bg-[var(--color-panel)]">
-                      {typeof v === "number" && v !== 0 ? v.toFixed(1) : v}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* AI Playing Styles */}
-          <div className="card card--secondary rounded-xl bg-[var(--color-panel)] border border-[var(--color-line)] p-5 space-y-3 shadow-sm">
-            <h3 className="text-sm font-bold text-white">AI Playing Styles</h3>
-            <div className="flex flex-wrap gap-1.5">
-              {(
-                [
-                  ["trickster", "Trickster"],
-                  ["mazingRun", "Mazing Run"],
-                  ["speedingBullet", "Speeding Bullet"],
-                  ["incisiveRun", "Incisive Run"],
-                  ["longBallExpert", "Long Ball Expert"],
-                  ["earlyCross", "Early Cross"],
-                ] as const
-              )
-                .filter(([key]) => p.playstyles[key])
-                .map(([key, label]) => (
-                  <span
-                    key={key}
-                    className="px-2.5 py-1 rounded-md bg-[var(--color-canvas)] border border-[var(--color-line)] text-xs text-white"
-                  >
-                    {label}
-                  </span>
-                ))}
-              {Object.values(p.playstyles).every((v) => !v) && (
-                <span className="text-xs text-[var(--color-text-dim)]">None.</span>
-              )}
-            </div>
-          </div>
-          {/* Card 4: Other versions */}
-          <div className="card card--secondary rounded-xl bg-[var(--color-panel)] border border-[var(--color-line)] p-5 space-y-4">
-            <h3 className="text-sm font-bold text-white">Other versions of {p.name}</h3>
-            {p.otherVersions.length === 0 ? (
-              <p className="text-xs text-[var(--color-text-dim)]">No other versions recorded.</p>
-            ) : (
-              <div className="flex items-center gap-3 overflow-x-auto pb-2 scrollbar-thin">
-                {p.otherVersions.map((ver) => {
-                  const vPos = positionOf(ver.registeredPosition);
-                  const vPosLabel = vPos === "—" ? "—" : POSITION_LABEL[vPos];
-                  return (
-                    <Link
-                      key={ver.id}
-                      href={`/players/${p.baseId}/${ver.id}`}
-                      className="w-28 shrink-0 rounded-xl bg-[var(--color-canvas)] border border-[var(--color-line)] p-2.5 text-center hover:border-[var(--color-accent)] transition-all no-underline block group"
-                    >
-                      <div className="font-mono text-base font-bold text-[var(--color-accent)]">{ver.ovr}</div>
-                      <div className="text-[11px] font-mono text-white/70 uppercase">{vPosLabel}</div>
-                      <div className="mt-2 text-[10px] text-[var(--color-text-dim)] truncate px-1 rounded bg-[var(--color-panel)] py-0.5">
-                        {cardTypeDisplay(ver.cardType)}
-                      </div>
-                    </Link>
-                  );
-                })}
-              </div>
-            )}
           </div>
         </div>
       </div>
