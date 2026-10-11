@@ -4,6 +4,7 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import { trpc } from "@/lib/trpc";
 import { PlayerCard } from "@/components/cards/PlayerCard";
+import { PitchMap } from "@/components/players/PitchMap";
 import {
   POSITIONS,
   type BaseStat,
@@ -314,14 +315,20 @@ export default function PlayerDetailPage() {
   // Best-fit position (highest rating excluding the registered position, which
   // efootbase shows separately as "At X").
   const regPos: Position = POSITIONS[p.registeredPosition] ?? "GK";
+  const atRegRating = p.positionRatings[regPos] ?? p.ovr;
   let bestPos: Position = regPos;
-  let bestRating = 0;
+  let bestRating = atRegRating;
   for (const k of POSITIONS) {
     if (k === regPos) continue;
-    const v = p.positionRatings[k] ?? 0;
-    if (v > bestRating) { bestRating = v; bestPos = k; }
+    const apt = p.positionAptitudes[k];
+    if (apt === 0 || apt === 1) {
+      const v = p.positionRatings[k] ?? 0;
+      if (v > bestRating) {
+        bestRating = v;
+        bestPos = k;
+      }
+    }
   }
-  const atRegRating = p.positionRatings[regPos] ?? p.ovr;
   // Proficiency: full aptitudes (0) + half aptitudes (1).
   const fullCount = POSITIONS.filter((k) => p.positionAptitudes[k] === 0).length;
   const halfCount = POSITIONS.filter((k) => p.positionAptitudes[k] === 1).length;
@@ -352,7 +359,7 @@ export default function PlayerDetailPage() {
       </ol>
 
       {/* ================= SECTION 1: HERO CLUSTER (EFHUB-ALIGNED) ================= */}
-      <div className="grid grid-cols-1 lg:grid-cols-[auto_1fr_260px] gap-6 items-start">
+      <div className="grid grid-cols-1 lg:grid-cols-[auto_1fr_350px] gap-6 items-start">
         {/* Col 1: Card Cluster (Badges + PlayerCard + 5 Specs Chips + Boosters) */}
         <div className="flex flex-col gap-3 shrink-0 mx-auto lg:mx-0">
           <div className="grid grid-cols-[auto_195px_auto] items-stretch gap-2.5">
@@ -587,36 +594,23 @@ export default function PlayerDetailPage() {
         </div>
 
         {/* Col 3: Tactical Pitch Map (Right Hero Box) */}
-        <div className="flex flex-col gap-2 shrink-0 w-full lg:w-[260px]">
+        {/* Col 3: Tactical Pitch Map (Right Hero Box - efootbase exact design) */}
+        <div className="flex flex-col gap-2 shrink-0 w-full lg:w-[350px]">
           <div className="card card--secondary rounded-xl bg-[var(--color-panel)] border border-[var(--color-line)] p-3 space-y-2 shadow-sm">
-            <div className="flex items-center justify-between text-xs font-bold text-white">
-              <span>Pitch Map</span>
+            <div className="flex items-center justify-between text-xs font-bold text-white px-1">
+              <span>Position &amp; Playstyle</span>
               <span className="font-mono text-[11px] text-[var(--color-accent)] font-semibold">
-                Best: {bestPos} ({bestRating || p.ovr})
+                Best: {POSITION_LABEL[bestPos]} ({bestRating || p.ovr})
               </span>
             </div>
 
-            {/* 3x4 Tactical Pitch grid with exact position ratings */}
-            <div className="grid grid-cols-3 gap-1.5 p-2 rounded-lg bg-[var(--color-canvas)] border border-[var(--color-line)] text-center text-xs font-mono font-bold">
-              {PITCH_SLOTS.map((posKey) => {
-                const apt = p.positionAptitudes[posKey];
-                const rating = p.positionRatings[posKey] ?? 0;
-                const isReg = posKey === regPos;
-                return (
-                  <div
-                    key={posKey}
-                    className={`py-1.5 px-1 rounded transition-colors ${aptitudeColor(apt)} ${
-                      isReg ? "ring-2 ring-[var(--color-accent)] font-black" : ""
-                    }`}
-                  >
-                    <div className="text-[10px] leading-tight">{posKey}</div>
-                    <div className="text-[11px] leading-tight opacity-90">{rating}</div>
-                  </div>
-                );
-              })}
-            </div>
+            <PitchMap
+              positionAptitudes={p.positionAptitudes}
+              positionRatings={p.positionRatings}
+              registeredPosition={regPos}
+            />
 
-            <div className="flex items-center justify-between pt-1 text-[11px] text-[var(--color-text-dim)] font-mono">
+            <div className="flex items-center justify-between pt-1 text-[11px] text-[var(--color-text-dim)] font-mono border-t border-[var(--color-line-separator)] px-1">
               <span>Proficiency:</span>
               <span className="text-white font-semibold">{fullCount} Full · {halfCount} Half</span>
             </div>
