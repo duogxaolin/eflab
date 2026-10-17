@@ -1,9 +1,13 @@
 "use client";
 import type { Position } from "@eflab/shared";
+import { statTierClass } from "@/lib/card-display";
 
+// Per-position ratings are cross-fill-owned and nullable (design decision 5):
+// a player absent from eFHUB has `null` everywhere and the cell shows "n/a"
+// instead of an invented number.
 export interface PitchMapProps {
   positionAptitudes: Record<string, number>;
-  positionRatings: Record<string, number>;
+  positionRatings: Record<string, number | null | undefined>;
   registeredPosition: Position | string;
   className?: string;
 }
@@ -14,17 +18,21 @@ function cellBg(aptitude: number | undefined): string {
   return "bg-[#262626CC] text-white/40";
 }
 
-function cellRatingColor(rating: number): string {
-  if (rating >= 90) return "text-[#00ffb4]";
-  if (rating >= 80) return "text-[#96ff00]";
-  if (rating >= 70) return "text-[#ffbe00]";
-  return "text-[#ff3200]";
+// Rating text uses the shared `--color-tier-*` tokens (via statTierClass) on
+// the black/85 pill, so the cell keeps the same contrast as the stat rows.
+function cellRatingColor(rating: number | null): string {
+  if (rating === null) return "text-white/50";
+  return statTierClass(rating);
+}
+
+function aptitudeLabel(apt: number | undefined): string {
+  return apt === 0 ? "Full" : apt === 1 ? "Half" : "None";
 }
 
 interface PitchCellProps {
   pos: Position;
   aptitudes: Record<string, number>;
-  ratings: Record<string, number>;
+  ratings: Record<string, number | null | undefined>;
   registeredPosition: string;
   layout?: "stack" | "row";
 }
@@ -37,9 +45,11 @@ function PitchCell({
   layout = "row",
 }: PitchCellProps) {
   const apt = aptitudes[pos];
-  const rating = ratings[pos] ?? 0;
+  const raw = ratings[pos];
+  const rating: number | null = typeof raw === "number" ? raw : null;
   const isReg = pos === registeredPosition;
   const isFull = apt === 0;
+  const ratingText = rating === null ? "n/a" : String(rating);
 
   return (
     <div
@@ -48,7 +58,7 @@ function PitchCell({
       )} ${isReg ? "ring-2 ring-[var(--color-accent)] ring-offset-1 ring-offset-[#18181b]" : ""} ${
         layout === "stack" ? "flex-col gap-1.5 p-1.5" : "flex-row gap-2 px-2.5 py-1"
       } w-full h-full`}
-      title={`${pos}: ${rating} OVR (${apt === 0 ? "Full" : apt === 1 ? "Half" : "None"})`}
+      title={`${pos}: ${rating === null ? "rating not available" : `${rating} OVR`} (${aptitudeLabel(apt)})`}
     >
       <span
         className={`text-[11px] font-black uppercase tracking-wider leading-none ${
@@ -61,8 +71,9 @@ function PitchCell({
         className={`inline-block px-1.5 py-0.5 rounded-[4px] bg-black/85 font-mono text-[11px] font-bold leading-none tabular-nums shadow-sm ${cellRatingColor(
           rating
         )}`}
+        aria-label={rating === null ? `${pos} rating not available` : undefined}
       >
-        {rating}
+        {ratingText}
       </span>
     </div>
   );
@@ -74,171 +85,73 @@ export function PitchMap({
   registeredPosition,
   className = "",
 }: PitchMapProps) {
+  const cell = (pos: Position, layout: "stack" | "row") => (
+    <PitchCell
+      pos={pos}
+      aptitudes={positionAptitudes}
+      ratings={positionRatings}
+      registeredPosition={registeredPosition}
+      layout={layout}
+    />
+  );
   return (
-    <div className={`flex flex-col items-center ${className}`}>
+    <div className={`flex flex-col items-center w-full max-w-[350px] ${className}`}>
       {/* Proficiency Legend */}
       <div
-        className="flex items-center justify-end gap-3.5 text-xs text-[var(--color-text-dim)] font-mono w-full max-w-[350px] mb-2.5 px-1"
+        className="flex items-center justify-end gap-3.5 text-xs text-[var(--color-text-dim)] font-mono w-full mb-2.5 px-1"
         role="list"
         aria-label="Position proficiency levels"
       >
-        <span className="inline-flex items-center gap-1.5">
+        <span className="inline-flex items-center gap-1.5" role="listitem">
           <span className="size-2.5 rounded-sm bg-[#262626CC]" aria-hidden />
           None
         </span>
-        <span className="inline-flex items-center gap-1.5">
+        <span className="inline-flex items-center gap-1.5" role="listitem">
           <span className="size-2.5 rounded-sm bg-[#7DFF1F4D] border border-[#7DFF1F]/30" aria-hidden />
           Half
         </span>
-        <span className="inline-flex items-center gap-1.5">
+        <span className="inline-flex items-center gap-1.5" role="listitem">
           <span className="size-2.5 rounded-sm bg-[#7DFF1FB3]" aria-hidden />
           Full
         </span>
       </div>
 
-      {/* Pitch Diagram (3 columns: Left Wing, Center Spine, Right Wing with generous spacing) */}
+      {/* Pitch Diagram (3 columns: Left Wing, Center Spine, Right Wing). Sized
+          relative to its container so it never forces horizontal scrolling on
+          a phone (the 350px cap comes from the wrapper above). */}
       <div
-        className="flex flex-row gap-2 p-2.5 rounded-2xl bg-gradient-to-b from-[#18181b] via-[#14161f] to-[#10121a] border border-white/10 shadow-2xl"
-        style={{ width: "350px", height: "320px" }}
+        className="flex flex-row gap-2 p-2.5 rounded-2xl bg-gradient-to-b from-[#18181b] via-[#14161f] to-[#10121a] border border-white/10 shadow-2xl w-full"
+        style={{ aspectRatio: "350 / 320" }}
       >
         {/* Left Column (LWF, LMF, LB) */}
-        <div className="flex flex-col justify-between gap-2 h-full" style={{ width: "82px" }}>
-          <div className="flex-1">
-            <PitchCell
-              pos="LWF"
-              aptitudes={positionAptitudes}
-              ratings={positionRatings}
-              registeredPosition={registeredPosition}
-              layout="stack"
-            />
-          </div>
-          <div className="flex-1">
-            <PitchCell
-              pos="LMF"
-              aptitudes={positionAptitudes}
-              ratings={positionRatings}
-              registeredPosition={registeredPosition}
-              layout="stack"
-            />
-          </div>
-          <div className="flex-1">
-            <PitchCell
-              pos="LB"
-              aptitudes={positionAptitudes}
-              ratings={positionRatings}
-              registeredPosition={registeredPosition}
-              layout="stack"
-            />
-          </div>
+        <div className="flex flex-col justify-between gap-2 h-full w-[23%] shrink-0">
+          <div className="flex-1">{cell("LWF", "stack")}</div>
+          <div className="flex-1">{cell("LMF", "stack")}</div>
+          <div className="flex-1">{cell("LB", "stack")}</div>
         </div>
 
         {/* Center Column (CF/SS, AMF/CMF/DMF, CB/GK) */}
-        <div className="flex flex-col justify-between gap-2 h-full flex-1">
-          {/* Attack row: CF & SS */}
+        <div className="flex flex-col justify-between gap-2 h-full flex-1 min-w-0">
           <div className="flex gap-2 flex-1">
-            <div className="flex-1">
-              <PitchCell
-                pos="CF"
-                aptitudes={positionAptitudes}
-                ratings={positionRatings}
-                registeredPosition={registeredPosition}
-                layout="stack"
-              />
-            </div>
-            <div className="flex-1">
-              <PitchCell
-                pos="SS"
-                aptitudes={positionAptitudes}
-                ratings={positionRatings}
-                registeredPosition={registeredPosition}
-                layout="stack"
-              />
-            </div>
+            <div className="flex-1">{cell("CF", "stack")}</div>
+            <div className="flex-1">{cell("SS", "stack")}</div>
           </div>
-
-          {/* Midfield row: AMF, CMF, DMF */}
           <div className="flex flex-col gap-1.5 flex-1 justify-between">
-            <div className="flex-1">
-              <PitchCell
-                pos="AMF"
-                aptitudes={positionAptitudes}
-                ratings={positionRatings}
-                registeredPosition={registeredPosition}
-                layout="row"
-              />
-            </div>
-            <div className="flex-1">
-              <PitchCell
-                pos="CMF"
-                aptitudes={positionAptitudes}
-                ratings={positionRatings}
-                registeredPosition={registeredPosition}
-                layout="row"
-              />
-            </div>
-            <div className="flex-1">
-              <PitchCell
-                pos="DMF"
-                aptitudes={positionAptitudes}
-                ratings={positionRatings}
-                registeredPosition={registeredPosition}
-                layout="row"
-              />
-            </div>
+            <div className="flex-1">{cell("AMF", "row")}</div>
+            <div className="flex-1">{cell("CMF", "row")}</div>
+            <div className="flex-1">{cell("DMF", "row")}</div>
           </div>
-
-          {/* Defence & GK row: CB & GK */}
           <div className="flex gap-2 flex-1">
-            <div className="flex-1">
-              <PitchCell
-                pos="CB"
-                aptitudes={positionAptitudes}
-                ratings={positionRatings}
-                registeredPosition={registeredPosition}
-                layout="stack"
-              />
-            </div>
-            <div className="flex-1">
-              <PitchCell
-                pos="GK"
-                aptitudes={positionAptitudes}
-                ratings={positionRatings}
-                registeredPosition={registeredPosition}
-                layout="stack"
-              />
-            </div>
+            <div className="flex-1">{cell("CB", "stack")}</div>
+            <div className="flex-1">{cell("GK", "stack")}</div>
           </div>
         </div>
 
         {/* Right Column (RWF, RMF, RB) */}
-        <div className="flex flex-col justify-between gap-2 h-full" style={{ width: "82px" }}>
-          <div className="flex-1">
-            <PitchCell
-              pos="RWF"
-              aptitudes={positionAptitudes}
-              ratings={positionRatings}
-              registeredPosition={registeredPosition}
-              layout="stack"
-            />
-          </div>
-          <div className="flex-1">
-            <PitchCell
-              pos="RMF"
-              aptitudes={positionAptitudes}
-              ratings={positionRatings}
-              registeredPosition={registeredPosition}
-              layout="stack"
-            />
-          </div>
-          <div className="flex-1">
-            <PitchCell
-              pos="RB"
-              aptitudes={positionAptitudes}
-              ratings={positionRatings}
-              registeredPosition={registeredPosition}
-              layout="stack"
-            />
-          </div>
+        <div className="flex flex-col justify-between gap-2 h-full w-[23%] shrink-0">
+          <div className="flex-1">{cell("RWF", "stack")}</div>
+          <div className="flex-1">{cell("RMF", "stack")}</div>
+          <div className="flex-1">{cell("RB", "stack")}</div>
         </div>
       </div>
     </div>

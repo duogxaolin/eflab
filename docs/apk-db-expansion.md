@@ -6,7 +6,7 @@
 
 ### 1a. efootbase APK (Flutter, `com.wildpluto.efbase` v1.9.7)
 
-Flutter app. Trong `flutter_assets/.env` có `EFBASE_API_KEY=L-}i@R-KwsGk&nB;C4)RBSB+_AQsTSK5Sxa&d:>oz54`.
+Flutter app. Trong `flutter_assets/.env` có `EFBASE_API_KEY=<redacted>`.
 
 API thật (verify với key) chỉ có **4 endpoint**:
 

@@ -3,9 +3,9 @@ import type {
   BaseStat,
   CardType,
   ManagerTactic,
-  PhysiqueField,
   Position,
-  DerivedField,
+  PositionProficiency,
+  TrainingCategory,
 } from "./constants";
 
 // BigInt helpers — IDs serialize as strings via SuperJSON but are BigInt in TS.
@@ -13,76 +13,58 @@ export type PlayerId = bigint;
 export type ManagerId = bigint;
 
 // Serialized DTO shapes (what tRPC returns after SuperJSON). BigInt → string.
-/** Minimal fields needed to render a PlayerCard in a list/grid (trending, pack grid, etc.).
- *  Full PlayerCardDTO is for the detail page. Pack.byId returns this lighter shape. */
+/** Everything a PlayerCard tile needs in a list/grid (player.list, trending,
+ *  featured bundles, pack grids, skill holders): identity, card type, OVR/Max
+ *  OVR, position, condition, nationality flag (R2) and the two playing-style
+ *  ids for the "Attack / Defence" label. `player.list` returns exactly this
+ *  shape (design decision 14); the detail and compare views get the full
+ *  PlayerCardDTO. */
 export interface CardPreview {
   id: string;
   baseId: string;
   name: string;
   cardType: CardType;
   ovr: number;
+  maxOvr: number;
   registeredPosition: number;
   condition: string;
-  /** Max achievable OVR (base card's maxOvr). Used by the detail-page card render
-   *  for the bottom-left "MAX NN" efootbase badge (efootbase dna §10 detail).
-   *  Optional on CardPreview because some lightweight producers (featured bundle
-   *  cards, pack cards, skill listings) don't select it — PlayerCardDTO always
-   *  carries it. Added 2026-10-08 (was PlayerCardDTO-only — the detail-card
-   *  render was missing efootbase's MAX badges). */
-  maxOvr?: number;
-  /** Nationality flag URL (R2) for the detail-card nation overlay. PlayerCardDTO
-   *  always carries it (joined from Country.flagUrl in the API); CardPreview
-   *  only needs it when rendered in the detail context (showDetails=true). Most
-   *  grid producers don't join Country, so optional here. */
+  /** Nationality flag URL (R2, rebased onto R2_PUBLIC_BASE by the API) for the
+   *  nation overlay on detail-style cards. Producers that do not join Country
+   *  (featured bundles, pack grids, skill holders) leave it undefined. */
   flagUrl?: string | null;
   nationalityId?: number;
-  /** Playing-style ids (numeric, see PLAYING_STYLES). When present, PlayerCard
-   *  renders the 2-line "Attack: X / Defence: Y" label under the card name
-   *  (matches efootbase grid/list cards). Optional — lightweight producers that
-   *  don't select these just omit the label. Added 2026-10-09. */
+  /** Playing-style ids (numeric, see PLAYING_STYLES). Optional for lightweight
+   *  producers that do not select them. */
   playingStyleAttack?: number;
   playingStyleDefense?: number;
 }
 
+/** Full card for the detail page and the compare view. Fields the web app never
+ *  rendered (shirt numbers, country2, form, datapack, physique, derived physics,
+ *  tactic compat, alternate-script names) were dropped in eflab-parity-fixes
+ *  (design decision 14); they still exist in the database. */
 export interface PlayerCardDTO extends CardPreview {
-  accentedName: string | null;
-  japName: string | null;
-  chineseName: string | null;
-  shirt: string | null;
-  shirtNational: string | null;
-  country2Id: number | null;
+  nationalityId: number;
   height: number;
   weight: number;
   age: number;
   strongerFoot: number;
-  registeredPosition: number;
   playingStyleAttack: number;
   playingStyleDefense: number;
-  cardType: CardType;
-  featuredPackId: string | null;
-  ovr: number;
-  maxOvr: number;
-  condition: string;
-  form: number;
-  injuryResistance: number;
   weakFootUsage: number;
   weakFootAccuracy: number;
   releaseDate: string | null;
-  datapackId: number;
+  /** Real max level of the card (efootbase `level_cap`) — drives the MAX LEVEL badge. */
+  levelCap: number;
   // 26 base stats
   stats: Record<BaseStat, number>;
   // 26 max stats
   maxStats: Record<BaseStat, number>;
   // 13 position aptitudes (0/1/2 = registered/secondary/none)
   positionAptitudes: Record<Position, number>;
-  // 13 position OVR ratings
-  positionRatings: Record<Position, number>;
-  // 11 physique
-  physique: Record<PhysiqueField, number>;
-  // 5 derived
-  derived: Pick<Record<DerivedField, number>, "legCoverage" | "armCoverage" | "peakJumpHeight" | "torsoCollisionWidth" | "dribbleHeight">;
-  // 5 player tactic compat
-  tactics: Pick<Record<ManagerTactic, number>, "possessionGame" | "quickCounter" | "longBallCounter" | "outWide" | "longBall">;
+  // 13 per-position OVR ratings from the eFHUB cross-fill; null when the player
+  // is absent from eFHUB (the Pitch Map shows "n/a", never an invented 40).
+  positionRatings: Record<Position, number | null>;
   // AI playstyle flags
   playstyles: {
     trickster: boolean;
@@ -109,25 +91,14 @@ export interface PlayerCardDTO extends CardPreview {
     cardType: CardType;
     ovr: number;
     maxOvr: number;
-    /** registeredPosition — needed to render the position badge under each
-     *  version in the "Other versions of <player>" carousel. Added 2026-10-08
-     *  (was just {id,cardType,ovr,maxOvr} which forced a fallback position). */
     registeredPosition: number;
   }>;
   pack: { id: string; name: string } | null;
-  // community tier (aggregated)
-  communityTier: string | null;
-  // R2 image URLs (populated from Country.flagUrl / Team.emblemUrl / League.emblemUrl
-  // via seed-efootbase-full.ts). When present, the client renders these instead of
-  // constructing efimg URLs from IDs. efootbase uses SHA256 hash filenames → not
-  // ID-derivable → must come from DB.
-  // (flagUrl is inherited from CardPreview — that's where the nation overlay on
-  //  detail cards pulls it from. teamEmblemUrl stays here since the CardPreview
-  //  lightweight card list doesn't need a club emblem.)
+  // R2 image URLs (populated from Team.emblemUrl / League.emblemUrl by the seeder,
+  // rebased onto R2_PUBLIC_BASE by the API). efootbase uses SHA256 hash filenames
+  // → not ID-derivable → must come from the DB. flagUrl is inherited from CardPreview.
   teamEmblemUrl: string | null;
   // Display-name overlays (joined Team/Country/League in the API procedure).
-  // Added 2026-10-08 so the player detail page can show the player's actual
-  // club, nationality, and league without hardcoding Messi/FC Barcelona.
   countryName: string | null;
   teamName: string | null;
   leagueName: string | null;
@@ -144,6 +115,9 @@ export interface ManagerDTO {
   age: number;
   adaptability: number;
   affinity: number;
+  /** R2 card art (65 efootbase managers), rebased onto R2_PUBLIC_BASE; null for
+   *  the eFHUB-only managers that have no art. */
+  imageUrl: string | null;
   tactics: Record<ManagerTactic, number>;
   boosts: number[];
 }
@@ -162,6 +136,20 @@ export interface SkillDTO {
   name: string;
   description: string;
   category: string;
+  /** Number of cards that have this skill (grouped count of PlayerSkill). 0 for
+   *  catalogue skills no dump card carries. */
+  playerCount: number;
+}
+
+/** Paginated holders of one skill (skill.players). `items` is the slim card
+ *  shape; `total` is the full holder count so the index can show "N cards" and
+ *  a top-N call (small `limit`) still knows the real total. */
+export interface SkillPlayersResult {
+  items: CardPreview[];
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
 }
 
 /** Resolved booster (joined by boosterId1/boosterId2 from the Booster table).
@@ -177,36 +165,52 @@ export interface BoosterDTO {
 
 export type SortDirection = "asc" | "desc";
 
+/** player.list result — slim card previews (design decision 14). */
 export interface PlayerListResult {
-  items: PlayerCardDTO[];
+  items: CardPreview[];
   total: number;
   page: number;
   limit: number;
   totalPages: number;
 }
 
-// Build simulator types
+// Build simulator types (player-progression-simulator). No manager field: no
+// dataset ties a manager to a stat or overall change.
 export interface BuildConfig {
   playerId: string;
-  level: number;
+  /** Selected max level, 1..levelCap — the budget is `maxLevel − 1` points. */
   maxLevel: number;
-  trainingPoints: Record<string, number>; // category → points allocated
-  boosters: boolean[]; // [booster1Active, booster2Active]
-  managerId: string | null;
+  /** Position the overall is estimated for (defaults to the registered one). */
+  position: Position;
+  /** Stat points bought per training category (ten categories). */
+  trainingPoints: Record<TrainingCategory, number>;
+  /** [Booster 1 active, Booster 2 active]. */
+  boosters: [boolean, boolean];
 }
 
 // Computed build result returned by the simulator.
 export interface BuildResult {
+  /** The config as applied (maxLevel clamped to the card's level cap). */
   config: BuildConfig;
-  // projected stats after training + boosters + manager tactic
-  projectedStats: Record<BaseStat, number>;
-  projectedMaxOvr: number;
-  // breakdown of contributions
   base: Record<BaseStat, number>;
   trainingDeltas: Record<BaseStat, number>;
   boosterDeltas: Record<BaseStat, number>;
-  managerDeltas: Record<BaseStat, number>;
+  /** base + training + active boosters, not capped at 99. */
+  projectedStats: Record<BaseStat, number>;
+  /** Training points at the selected max level (`maxLevel − 1`). */
+  pointsAvailable: number;
+  /** Cost of the allocation in points (multiples of 0.5). */
+  pointsUsed: number;
   remainingPoints: number;
+  withinBudget: boolean;
+  /** Estimated overall at `config.position` (rounded) and its raw value. */
+  estimatedOvr: number;
+  estimatedOvrExact: number;
+  /** Proficiency of the card at `config.position` that the estimate assumes
+   *  ("full" when no aptitudes were given); half / none apply the fitted penalty. */
+  proficiency: PositionProficiency;
+  /** Goalkeeper card with Aerial points: Jump is card-specific, not projected. */
+  jumpNotProjected: boolean;
 }
 
 // ---- Phase 2: community + profiles + feed + tier lists ----

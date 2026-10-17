@@ -1,5 +1,7 @@
 # tournaments-leaderboard Specification
 
+> **Status: removed from the web UI on 2026-10-07** (`/tournaments` is gone; nothing in the API serves it). Requirements below are kept as the historical record.
+
 ## Purpose
 Read-only tournament leaderboard page — the efhub `/tournaments` equivalent. No live integration this phase; rankings sourced from seeded data.
 ## Requirements

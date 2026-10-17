@@ -4,27 +4,24 @@ import {
   POSITIONS,
   PLAYING_STYLES,
   PHYSIQUE_FIELDS,
+  CARD_TYPE_LABELS,
 } from "@eflab/shared";
-export const CARD_TYPE_LABEL: Record<CardType, string> = {
-  STANDARD: "Standard",
-  TRENDING: "Trending",
-  EPIC: "Epic",
-  BIG_TIME: "Big Time",
-  HIGHLIGHT: "Highlight",
-  SHOW_TIME: "Show Time",
-  STRIKE_ARENA: "Strike Arena",
-  LEGENDARY: "Legendary",
-};
 
-export const CARD_TYPE_COLOR_VAR: Record<CardType, string> = {
+// Display label per card type. Single source of truth is `CARD_TYPE_LABELS` in
+// @eflab/shared (derived from efootbase's own `players_meta.json`); this alias
+// keeps the historical `CARD_TYPE_LABEL` import name working for existing pages.
+export const CARD_TYPE_LABEL: Readonly<Record<CardType, string>> = CARD_TYPE_LABELS;
+
+// Card-type accent colour (stripe / badge text / placeholder tint). Keyed by the
+// shared `CardType` enum — one token per enum value in globals.css `@theme`.
+export const CARD_TYPE_COLOR_VAR: Readonly<Record<CardType, string>> = {
   STANDARD: "var(--color-card-standard)",
-  TRENDING: "var(--color-card-trending)",
-  EPIC: "var(--color-card-epic)",
-  BIG_TIME: "var(--color-card-big-time)",
-  HIGHLIGHT: "var(--color-card-highlight)",
-  SHOW_TIME: "var(--color-card-show-time)",
-  STRIKE_ARENA: "var(--color-card-strike-arena)",
   LEGENDARY: "var(--color-card-legendary)",
+  TRENDING: "var(--color-card-trending)",
+  SELECTION: "var(--color-card-selection)",
+  EPIC: "var(--color-card-epic)",
+  HIGHLIGHT: "var(--color-card-highlight)",
+  STRIKE_ARENA: "var(--color-card-strike-arena)",
 };
 
 // Konami registered-position index → POSITIONS.
@@ -55,23 +52,29 @@ export function statTierBg(value: number): string {
   return "bg-[var(--color-tier-low)]";
 }
 
+// Stat labels that are not a plain camelCase → "Title Case" split (game naming
+// differs from the internal key, or the key carries an acronym).
+const STAT_LABEL_OVERRIDES: Partial<Record<BaseStat, string>> = {
+  placeKicking: "Set Piece Taking",
+  ballWinning: "Tackling",
+  gkAwareness: "GK Awareness",
+  gkCatching: "GK Catching",
+  gkParrying: "GK Parrying",
+  gkReflexes: "GK Reflexes",
+  gkReach: "GK Reach",
+};
+
+/** Split a camelCase key into capitalised words: "defensiveAwareness" →
+ *  "Defensive Awareness", "kickingPower" → "Kicking Power". A leading
+ *  upper-case key ("DefensiveAwareness") splits the same way. */
+export function splitCamelCase(key: string): string {
+  return key
+    .replace(/([a-z\d])([A-Z])/g, "$1 $2")
+    .replace(/^./, (c) => c.toUpperCase());
+}
+
 export function statLabel(key: BaseStat): string {
-  const map: Partial<Record<BaseStat, string>> = {
-    offensiveAwareness: "Offensive Awareness",
-    ballControl: "Ball Control",
-    tightPossession: "Tight Possession",
-    lowPass: "Low Pass",
-    loftedPass: "Lofted Pass",
-    placeKicking: "Set Piece Taking",
-    gkAwareness: "GK Awareness",
-    gkCatching: "GK Catching",
-    gkParrying: "GK Parrying",
-    gkReflexes: "GK Reflexes",
-    gkReach: "GK Reach",
-    ballWinning: "Tackling",
-    defensiveEngagement: "Defensive Engagement",
-  };
-  return map[key] ?? (key[0] ? key[0].toUpperCase() + key.slice(1) : key);
+  return STAT_LABEL_OVERRIDES[key] ?? splitCamelCase(key);
 }
 
 // Map BASE_STATS to rows.

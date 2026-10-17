@@ -1,5 +1,7 @@
 # articles Specification
 
+> **Status: removed from the web UI on 2026-10-07** (`/articles` routes and `lib/articles.ts` deleted; eflab follows efootbase's 4-page scope). The `pages` API router remains unused. Requirements below are kept as the historical record.
+
 ## Purpose
 MDX-based editorial and datamine-leak article pages with category filter — the efhub `/articles` equivalent.
 ## Requirements

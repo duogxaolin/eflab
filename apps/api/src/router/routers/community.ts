@@ -3,14 +3,44 @@
 // the old hardcoded seed-user behavior is gone.
 import { prisma } from "@eflab/db";
 import {
+  BASE_STATS,
   buildSaveInput,
   buildSimulateInput,
-  simulateBuild,
+  positionFromIndex,
   reviewInput,
+  simulateBuild,
   tierVoteInput,
+  type BaseStat,
+  type BoosterLike,
   type BuildResult,
 } from "@eflab/shared";
+import { TRPCError } from "@trpc/server";
 import { publicProcedure, protectedProcedure, router } from "../trpc.js";
+
+// Resolve the two booster slots of a card to sparse stat vectors (only the
+// non-zero stat columns, like `boosterRowToDTO` in the player router). An id
+// without a Booster row resolves to null — the engine then applies nothing.
+async function boosterSlots(
+  boosterId1: number | null,
+  boosterId2: number | null,
+): Promise<[BoosterLike | null, BoosterLike | null]> {
+  const ids = [boosterId1, boosterId2].filter((id): id is number => id != null && id > 0);
+  const byId = new Map<number, BoosterLike>();
+  if (ids.length > 0) {
+    const rows = await prisma.booster.findMany({ where: { id: { in: ids } } });
+    for (const row of rows) {
+      const r = row as unknown as Record<string, unknown>;
+      const stats: Partial<Record<BaseStat, number>> = {};
+      for (const s of BASE_STATS) {
+        const v = r[s];
+        if (typeof v === "number" && v !== 0) stats[s] = v;
+      }
+      byId.set(row.id, { stats });
+    }
+  }
+  const slot = (id: number | null) => (id != null && id > 0 ? (byId.get(id) ?? null) : null);
+  return [slot(boosterId1), slot(boosterId2)];
+}
 
 export const communityRouter = router({
   // Tier vote for a player card — upserts by (userId, playerId). Requires auth.
@@ -67,14 +97,17 @@ export const communityRouter = router({
     };
   }),
 
-  // Save a build (public). Training points stored as JSON. Requires auth.
+  // Save a build. Requires auth. `Build.level` stores the selected max level,
+  // `trainingPoints` the stat points per training category and `boosters` the
+  // two slot toggles. The Build model has no position column and this change
+  // adds no migration, so the position the overall was estimated for is not
+  // persisted (the saved build is listed by level + note only). No manager.
   saveBuild: protectedProcedure.input(buildSaveInput).mutation(async ({ input, ctx }) => {
     const build = await prisma.build.create({
       data: {
         authorId: ctx.session.id,
         playerId: input.playerId,
-        managerId: input.managerId ?? null,
-        level: input.level,
+        level: input.maxLevel,
         trainingPoints: input.trainingPoints as object,
         boosters: input.boosters as object,
         note: input.note ?? null,
@@ -105,64 +138,30 @@ export const communityRouter = router({
     };
   }),
 
-  // Headless build simulator — runs the same progression engine exposed for server-side compute.
+  // Headless build simulator — the same progression engine the detail page
+  // runs client-side (@eflab/shared progression.ts). maxLevel defaults to the
+  // card's level cap, position to its registered position.
   simulate: publicProcedure.input(buildSimulateInput).query(async ({ input }): Promise<BuildResult> => {
     const player = await prisma.player.findUnique({ where: { id: input.playerId } });
-    if (!player) throw new Error("player not found");
-    const baseStats = Object.fromEntries(
-      (["offensiveAwareness","ballControl","dribbling","tightPossession","lowPass","loftedPass","finishing","heading","placeKicking","curl","speed","acceleration","kickingPower","jump","physicalContact","balance","stamina","defensiveAwareness","ballWinning","defensiveEngagement","aggression","gkAwareness","gkCatching","gkParrying","gkReflexes","gkReach"] as const).map(k => [k, (player as unknown as Record<string, number>)[k] ?? 40]),
-    ) as Record<string, number>;
-    const boosters = [];
-    if (input.boosters[0] && player.boosterId1) {
-      const b = await prisma.booster.findUnique({ where: { id: player.boosterId1 } });
-      if (b) boosters.push({
-        id: b.id, name: b.name,
-        stats: Object.fromEntries(Object.entries(b as unknown as Record<string, number>)
-          .filter(([k, v]) => ["offensiveAwareness","ballControl","dribbling","tightPossession","lowPass","loftedPass","finishing","heading","placeKicking","curl","speed","acceleration","kickingPower","jump","physicalContact","balance","stamina","defensiveAwareness","ballWinning","defensiveEngagement","aggression","gkAwareness","gkCatching","gkParrying","gkReflexes","gkReach","weakFootAccuracy"].includes(k) && typeof v === "number" && v > 0)),
-      });
-    }
-    if (input.boosters[1] && player.boosterId2) {
-      const b = await prisma.booster.findUnique({ where: { id: player.boosterId2 } });
-      if (b) boosters.push({
-        id: b.id, name: b.name,
-        stats: Object.fromEntries(Object.entries(b as unknown as Record<string, number>)
-          .filter(([k, v]) => ["offensiveAwareness","ballControl","dribbling","tightPossession","lowPass","loftedPass","finishing","heading","placeKicking","curl","speed","acceleration","kickingPower","jump","physicalContact","balance","stamina","defensiveAwareness","ballWinning","defensiveEngagement","aggression","gkAwareness","gkCatching","gkParrying","gkReflexes","gkReach","weakFootAccuracy"].includes(k) && typeof v === "number" && v > 0)),
-      });
-    }
-    let managerTactics: Record<string, number> | undefined;
-    if (input.managerId) {
-      const m = await prisma.manager.findUnique({ where: { id: input.managerId } });
-      if (m) {
-        managerTactics = {
-          possessionGame: (m as unknown as Record<string, number>).possessionGame ?? 0,
-          quickCounter: (m as unknown as Record<string, number>).quickCounter ?? 0,
-          longBallCounter: (m as unknown as Record<string, number>).longBallCounter ?? 0,
-          outWide: (m as unknown as Record<string, number>).outWide ?? 0,
-          longBall: (m as unknown as Record<string, number>).longBall ?? 0,
-          overload: (m as unknown as Record<string, number>).overload ?? 0,
-        };
-      }
-    }
-    const playerTactics = {
-      possessionGame: (player as unknown as Record<string, number>).possessionGame ?? 0,
-      quickCounter: (player as unknown as Record<string, number>).quickCounter ?? 0,
-      longBallCounter: (player as unknown as Record<string, number>).longBallCounter ?? 0,
-      outWide: (player as unknown as Record<string, number>).outWide ?? 0,
-      longBall: (player as unknown as Record<string, number>).longBall ?? 0,
-    };
+    if (!player) throw new TRPCError({ code: "NOT_FOUND", message: "Player not found" });
+    const row = player as unknown as Record<string, unknown>;
+    const base = Object.fromEntries(
+      BASE_STATS.map((s) => [s, typeof row[s] === "number" ? (row[s] as number) : 40]),
+    ) as Record<BaseStat, number>;
+    const registeredPosition = positionFromIndex(player.registeredPosition);
+    const boosters = await boosterSlots(player.boosterId1, player.boosterId2);
     return simulateBuild({
-      base: baseStats as never,
+      base,
+      levelCap: player.levelCap,
+      registeredPosition,
       config: {
         playerId: input.playerId.toString(),
-        level: input.level,
-        maxLevel: input.maxLevel,
+        maxLevel: input.maxLevel ?? player.levelCap,
+        position: input.position ?? registeredPosition,
         trainingPoints: input.trainingPoints,
         boosters: input.boosters,
-        managerId: input.managerId?.toString() ?? null,
       },
-      boosters: boosters as never,
-      managerTactics,
-      playerTactics,
+      boosters,
     });
   }),
 });

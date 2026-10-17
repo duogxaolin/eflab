@@ -13,19 +13,25 @@ const inter = Inter({
   display: "swap",
 });
 
+const SITE_NAME = "eFootLab";
+const SITE_TITLE = "eFootLab — eFootball player database, compare, packs and skills";
+const SITE_DESCRIPTION =
+  "eFootLab is a fan-made eFootball player database: every card with real stats, side-by-side compare, the latest packs and the full skill list.";
+
 export const metadata: Metadata = {
-  title: { default: "eFootBase — The eFootball 2027 Player Database", template: "%s · eFootBase" },
-  description:
-    "The eFootball 2027 player database — layered card renders, side-by-side compare, packs and skills. Fan-made companion for eFootball.",
-  keywords: ["eFootball", "database", "eFootBase", "PES", "player cards", "compare", "packs", "skills"],
-  authors: [{ name: "eFootBase" }],
+  applicationName: SITE_NAME,
+  title: { default: SITE_TITLE, template: `%s · ${SITE_NAME}` },
+  description: SITE_DESCRIPTION,
+  keywords: ["eFootball", "player database", "eFootLab", "player cards", "compare", "packs", "skills"],
+  authors: [{ name: SITE_NAME }],
+  icons: { icon: "/eflab-mark.svg" },
   openGraph: {
     type: "website",
-    title: "eFootBase — The eFootball 2027 Player Database",
-    description: "Fan-made eFootball 2027 player database with layered card renders and compare.",
-    siteName: "eFootBase",
+    title: SITE_TITLE,
+    description: SITE_DESCRIPTION,
+    siteName: SITE_NAME,
   },
-  twitter: { card: "summary_large_image", title: "eFootBase", description: "Fan-made eFootball player database" },
+  twitter: { card: "summary", title: SITE_TITLE, description: SITE_DESCRIPTION },
   robots: { index: true, follow: true },
 };
 
@@ -39,7 +45,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en" className={inter.variable} suppressHydrationWarning>
       <body className="min-h-screen text-[var(--color-text-primary)]">
-        {/* efootbase aurora gradient backdrop (fixed, pointer-events:none, z -10) */}
+        {/* aurora gradient backdrop (fixed, pointer-events:none, behind the app) */}
         <div className="efb-backdrop efb-backdrop--app" aria-hidden>
           <div
             className="efb-backdrop__aurora"

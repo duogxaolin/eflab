@@ -127,23 +127,75 @@ export const POSITIONS = [
 ] as const;
 export type Position = (typeof POSITIONS)[number];
 
+// Position proficiency of a card at a position, derived from its aptitude code
+// (`PlayerCardDTO.positionAptitudes`: 0 = full / registered, 1 = half /
+// secondary, 2 = none). The progression engine's overall estimate is fitted at
+// full proficiency and applies a fitted penalty for the other two levels
+// (ovrWeights.ts `OVR_PROFICIENCY_ADJUST`).
+export const POSITION_PROFICIENCIES = ["full", "half", "none"] as const;
+export type PositionProficiency = (typeof POSITION_PROFICIENCIES)[number];
+export const proficiencyFromAptitude = (aptitude: number | null | undefined): PositionProficiency =>
+  aptitude === 0 ? "full" : aptitude === 1 ? "half" : "none";
+export const PROFICIENCY_LABELS: Readonly<Record<PositionProficiency, string>> = {
+  full: "full",
+  half: "half",
+  none: "none",
+};
+
 // 12-position familiarity heatmap (excludes the registered position from the "grid" slots;
 // efootbase shows 12 markers on the pitch). We surface all 13 aptitudes but visually present 12
 // on the pitch diagram (GK is usually separate). For the heatmap we use the 12 outfield slots.
 export const HEATMAP_POSITIONS: readonly Position[] = POSITIONS;
 
-// Card types / player tiers.
+// Card types — one value per efootbase `card_type` code, in code order. The Prisma
+// `CardType` enum (packages/db/prisma/schema.prisma) mirrors this list exactly.
+//   code 0 STANDARD · 1 LEGENDARY · 3 TRENDING · 4 SELECTION · 5 EPIC ·
+//   6 HIGHLIGHT · 7 STRIKE_ARENA   (code 2 is unused in the 2026-10 dump)
 export const CARD_TYPES = [
   "STANDARD",
-  "TRENDING",
-  "EPIC",
-  "BIG_TIME",
-  "HIGHLIGHT",
-  "SHOW_TIME",
-  "STRIKE_ARENA",
   "LEGENDARY",
+  "TRENDING",
+  "SELECTION",
+  "EPIC",
+  "HIGHLIGHT",
+  "STRIKE_ARENA",
 ] as const;
 export type CardType = (typeof CARD_TYPES)[number];
+
+// Display label per card type — the label efootbase itself declares for the code in
+// dump/efootbase/players_meta.json (`card_type.values[code]`), so the UI never shows a
+// raw enum name. Two codes have no usable meta label and are resolved from the pack
+// names of the cards that carry them (the seeder re-validates this on every run):
+//   · code 4 — meta repeats "Legendary", but every code-4 card comes from a 2022
+//     club/league "Selection" pack (Piqué, Salah, Mbappé…), and efootbase's own card
+//     page labels them "Selection".
+//   · code 7 — meta is blank; all 42 cards come from the "Strike Arena" pack.
+// "Big Time" and "Show Time" are pack campaigns, not card-type codes: Big Time cards
+// are EPIC (code 5) and Show Time cards are HIGHLIGHT (code 6) in the dump, so a
+// filter for "Epic & Big Time" is simply the EPIC type; the campaign is only visible
+// in `featuredPackId` / the pack name.
+export const CARD_TYPE_LABELS: Readonly<Record<CardType, string>> = {
+  STANDARD: "Standard",
+  LEGENDARY: "Legendary",
+  TRENDING: "Trending",
+  SELECTION: "Selection",
+  EPIC: "Epic",
+  HIGHLIGHT: "Highlight",
+  STRIKE_ARENA: "Strike Arena",
+};
+
+// efootbase `card_type` code → CardType. Source of truth for the seeder; the seeder
+// additionally asserts that `players_meta.json` still carries the labels above for
+// every code and that pack names agree, so a changed dump fails loudly.
+export const CARD_TYPE_BY_EFOOTBASE_CODE: Readonly<Record<number, CardType>> = {
+  0: "STANDARD",
+  1: "LEGENDARY",
+  3: "TRENDING",
+  4: "SELECTION",
+  5: "EPIC",
+  6: "HIGHLIGHT",
+  7: "STRIKE_ARENA",
+};
 
 // 67 skills (canonical eFootball skill set — matches efootbase's 67 skill pages).
 // Ordered by category. Each has a slug derived from its name.
@@ -232,7 +284,13 @@ export const SKILL_IDS = [
 ] as const;
 export type SkillId = (typeof SKILL_IDS)[number];
 
-// 8 training categories for the build simulator progression engine.
+// 10 training categories of the progression engine (player-progression-simulator).
+// Recovered from the eFHUB `player export` table: `MAX<stat> − <stat>` equals
+// the category's group value for every stat of the category on all 44,103
+// cards (exceptions: goalkeeper Jump, which carries a card-specific offset —
+// see progression.ts — and one outfield card, hub PlayerID 179425, whose Jump
+// rises one point more than its Aerial value). Order = the hub's
+// `MAX<Group>Group` columns.
 export const TRAINING_CATEGORIES = [
   "Shooting",
   "Passing",
@@ -241,9 +299,41 @@ export const TRAINING_CATEGORIES = [
   "LowerBody",
   "Aerial",
   "Defending",
-  "Goalkeeping",
+  "GK1",
+  "GK2",
+  "GK3",
 ] as const;
 export type TrainingCategory = (typeof TRAINING_CATEGORIES)[number];
+
+// Category → the stats it raises, one stat point each per stat point bought.
+export const TRAINING_STATS: Readonly<Record<TrainingCategory, readonly BaseStat[]>> = {
+  Shooting: ["finishing", "placeKicking", "curl"],
+  Passing: ["lowPass", "loftedPass"],
+  Dribbling: ["dribbling", "ballControl", "tightPossession"],
+  Dexterity: ["offensiveAwareness", "acceleration", "balance"],
+  LowerBody: ["kickingPower", "speed", "stamina"],
+  Aerial: ["heading", "physicalContact", "jump"],
+  Defending: ["defensiveAwareness", "defensiveEngagement", "ballWinning", "aggression"],
+  GK1: ["gkAwareness"],
+  // eFHUB calls the second GK2 stat GKClearing — it is efootbase's gk_parrying,
+  // i.e. the `gkParrying` BaseStat (see STAT_ALIAS_MAP).
+  GK2: ["gkParrying", "gkReach"],
+  GK3: ["gkCatching", "gkReflexes"],
+};
+
+// Display labels (efootbase progression sheet wording).
+export const TRAINING_CATEGORY_LABELS: Readonly<Record<TrainingCategory, string>> = {
+  Shooting: "Shooting",
+  Passing: "Passing",
+  Dribbling: "Dribbling",
+  Dexterity: "Dexterity",
+  LowerBody: "Lower Body",
+  Aerial: "Aerial",
+  Defending: "Defending",
+  GK1: "GK 1",
+  GK2: "GK 2",
+  GK3: "GK 3",
+};
 
 // 6 manager tactic masteries.
 export const MANAGER_TACTICS = [
@@ -409,7 +499,17 @@ export function statTierColor(value: number): {
   return { tier: "low", color: "#64748b" }; // slate
 }
 
-// 60+ sort fields exposed to the directory (matches pesdb's sort list).
+// Sort fields exposed to the directory. Every entry is backed by a real Player
+// column (see packages/db/prisma/schema.prisma and `orderByFor` in the API's
+// player router). The pesdb-style sorts that had no column behind them
+// (squadNumber, nationalShirtNumber, sumOfAbilities, averageAbility, legCoverage,
+// armCoverage, peakJumpHeight, torsoCollisionWidth, club) were removed in
+// eflab-parity-fixes rather than silently falling back to OVR. `playerValue`
+// stays because `Player.marketValue` now carries the dump's `player_value`.
+//   releaseDate / recentlyAdded → releaseDate · playerId → id · name/namePrint →
+//   name · japName · chineseName · nationality → nationalityId · ovr · maxOvr ·
+//   age · height · weight · maxLevel → levelCap · playerValue → marketValue ·
+//   26 base stats · 26 max stats · 13 per-position ratings (ratingGk … ratingCf).
 export type SortField =
   | "recentlyAdded"
   | "releaseDate"
@@ -418,9 +518,6 @@ export type SortField =
   | "namePrint"
   | "japName"
   | "chineseName"
-  | "squadNumber"
-  | "nationalShirtNumber"
-  | "club"
   | "nationality"
   | "ovr"
   | "maxOvr"
@@ -429,18 +526,11 @@ export type SortField =
   | "weight"
   | "maxLevel"
   | "playerValue"
-  | "sumOfAbilities"
-  | "averageAbility"
   | BaseStat
   | `max${Capitalize<BaseStat>}`
-  | "physicalContact"
-  | "legCoverage"
-  | "armCoverage"
-  | "peakJumpHeight"
-  | "torsoCollisionWidth"
-  | `rating${Capitalize<Position>}`;
+  | `rating${Capitalize<Lowercase<Position>>}`;
 
-export const SORT_FIELDS: readonly string[] = [
+export const SORT_FIELDS: readonly SortField[] = [
   "releaseDate",
   "recentlyAdded",
   "playerId",
@@ -448,9 +538,6 @@ export const SORT_FIELDS: readonly string[] = [
   "namePrint",
   "japName",
   "chineseName",
-  "squadNumber",
-  "nationalShirtNumber",
-  "club",
   "nationality",
   "ovr",
   "maxOvr",
@@ -459,15 +546,9 @@ export const SORT_FIELDS: readonly string[] = [
   "weight",
   "maxLevel",
   "playerValue",
-  "sumOfAbilities",
-  "averageAbility",
   ...BASE_STATS,
-  ...BASE_STATS.map((s) => `max${(s[0] ?? "o").toUpperCase()}${s.slice(1)}`),
-  "legCoverage",
-  "armCoverage",
-  "peakJumpHeight",
-  "torsoCollisionWidth",
-  ...POSITIONS.map((p) => `rating${p[0]}${p.slice(1).toLowerCase()}`),
+  ...BASE_STATS.map((s) => `max${(s[0] ?? "o").toUpperCase()}${s.slice(1)}` as `max${Capitalize<BaseStat>}`),
+  ...POSITIONS.map((p) => `rating${p[0]}${p.slice(1).toLowerCase()}` as `rating${Capitalize<Lowercase<Position>>}`),
 ];
 
 // Helper for type-level capitalize.

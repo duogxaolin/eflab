@@ -1,5 +1,7 @@
 # tier-list-creator Specification
 
+> **Status: removed from the web UI on 2026-10-07; API remains** (`tierList` router and TierList/TierVote tables are unused by the web; `Player.communityTier` badges now come from the eFHUB cross-fill instead). Requirements below are kept as the historical record.
+
 ## Purpose
 Drag-and-drop tier list builder (S/A/B/C/D tiers), community tier list browser, and consensus tier aggregation on player cards.
 ## Requirements

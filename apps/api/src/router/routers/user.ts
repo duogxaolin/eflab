@@ -15,6 +15,7 @@ import type {
   UserTierVoteDTO,
   FollowDTO,
 } from "@eflab/shared";
+import { TRPCError } from "@trpc/server";
 import { publicProcedure, protectedProcedure, router } from "../trpc.js";
 
 async function loadUserByUsername(username: string, viewerId: string | null): Promise<UserDTO | null> {
@@ -61,8 +62,8 @@ export const userRouter = router({
       where: { username: input.username },
       select: { id: true },
     });
-    if (!target) throw new Error("USER_NOT_FOUND");
-    if (target.id === me) throw new Error("CANNOT_FOLLOW_SELF");
+    if (!target) throw new TRPCError({ code: "NOT_FOUND", message: "User not found" });
+    if (target.id === me) throw new TRPCError({ code: "BAD_REQUEST", message: "You cannot follow yourself" });
     // Guard the increment on whether the Follow edge already exists — repeated
     // follow calls must NOT keep raising the counters (mirrors unfollow side).
     const existing = await prisma.follow.findUnique({
@@ -86,7 +87,7 @@ export const userRouter = router({
       where: { username: input.username },
       select: { id: true },
     });
-    if (!target) throw new Error("USER_NOT_FOUND");
+    if (!target) throw new TRPCError({ code: "NOT_FOUND", message: "User not found" });
     const existing = await prisma.follow.findUnique({
       where: { followerId_followingId: { followerId: me, followingId: target.id } },
       select: { followerId: true },

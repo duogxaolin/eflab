@@ -6,37 +6,52 @@ import {
   POSITIONS,
   SORT_FIELDS,
   TRAINING_CATEGORIES,
+  type TrainingCategory,
 } from "./constants";
 
 // BigInt-friendly id transformer. SuperJSON handles bigint at the wire layer, but Zod
-// parses the request (strings) so we coerce.
+// parses the request (strings) so we coerce. Bounded to a Postgres int8
+// (≤ 9223372036854775807) so an oversized id is a BAD_REQUEST from Zod, never a
+// Prisma/Postgres error turned into a 500.
+export const INT8_MAX = 9223372036854775807n;
 export const bigIntString = z
   .string()
-  .regex(/^\d{1,20}$/, "expected numeric id")
-  .transform((v) => BigInt(v));
+  .regex(/^\d{1,19}$/, "expected numeric id")
+  .transform((v) => BigInt(v))
+  .refine((v) => v <= INT8_MAX, { message: "id out of range" });
 
-// 11-dimension player filter schema.
+// Postgres int4 bound for integer filters (ids, style ids, foot) — anything larger
+// is rejected by Zod instead of blowing up inside the query engine.
+export const INT4_MAX = 2147483647;
+const int4 = z.coerce.number().int().min(0).max(INT4_MAX);
+
+// Player filter schema (card type scope, position, styles, ovr ranges, foot,
+// nationality, club/league via Team, skill) + sort/paging.
 export const playerListInput = z.object({
   page: z.coerce.number().int().min(1).max(10000).default(1),
   limit: z.coerce.number().int().min(1).max(200).default(24),
-  sort: z.enum(SORT_FIELDS as [string, ...string[]]).default("ovr"),
+  sort: z.enum(SORT_FIELDS as unknown as [string, ...string[]]).default("ovr"),
   order: z.enum(["asc", "desc"]).default("desc"),
   q: z.string().trim().max(120).optional(),
   cardType: z.enum(CARD_TYPES).optional(),
+  // Card-type scope ("All" = omitted). The /players page sends its visible scope
+  // here; the home "Epic & Big Time" quick filter sends ["EPIC"] (Big Time cards
+  // are stored under EPIC — see CARD_TYPE_LABELS).
+  cardTypeIn: z.array(z.enum(CARD_TYPES)).max(CARD_TYPES.length).optional(),
   position: z.enum(POSITIONS).optional(),
-  playingStyle: z.coerce.number().int().optional(),
-  defensiveStyle: z.coerce.number().int().optional(),
-  ovrMin: z.coerce.number().int().min(40).max(99).optional(),
-  ovrMax: z.coerce.number().int().min(40).max(99).optional(),
-  maxOvrMin: z.coerce.number().int().min(40).max(120).optional(),
-  maxOvrMax: z.coerce.number().int().min(40).max(120).optional(),
+  playingStyle: int4.optional(),
+  defensiveStyle: int4.optional(),
+  ovrMin: z.coerce.number().int().min(0).max(100).optional(),
+  ovrMax: z.coerce.number().int().min(0).max(100).optional(),
+  maxOvrMin: z.coerce.number().int().min(0).max(120).optional(),
+  maxOvrMax: z.coerce.number().int().min(0).max(120).optional(),
   weakFoot: z.enum(["0", "1", "2", "3"]).optional(),
-  strongerFoot: z.coerce.number().int().optional(),
-  nationalityId: z.coerce.number().int().optional(),
-  clubId: z.coerce.number().int().optional(),
-  leagueId: z.coerce.number().int().optional(),
-  skillId: z.coerce.number().int().optional(),
-  cardTypeIn: z.array(z.enum(CARD_TYPES)).optional(),
+  strongerFoot: int4.optional(),
+  nationalityId: int4.optional(),
+  // clubId → Player.teamId; leagueId → Team.leagueId (implemented in the API).
+  clubId: int4.optional(),
+  leagueId: int4.optional(),
+  skillId: int4.optional(),
 });
 export type PlayerListInput = z.infer<typeof playerListInput>;
 
@@ -46,6 +61,9 @@ export const playerByIdInput = z.object({
   cardId: bigIntString,
 });
 
+// Name search (home palette, header, compare picker). Queries shorter than 2
+// characters after normalisation return an empty list (design decision 6); the
+// schema itself still accepts 1 character so a half-typed query is not a 400.
 export const playerSearchInput = z.object({
   q: z.string().trim().min(1).max(120),
   limit: z.coerce.number().int().min(1).max(50).default(10),
@@ -61,7 +79,7 @@ export const compareInput = z.object({
 });
 
 export const managerListInput = z.object({
-  page: z.coerce.number().int().min(1).default(1),
+  page: z.coerce.number().int().min(1).max(10000).default(1),
   limit: z.coerce.number().int().min(1).max(200).default(24),
   sort: z.enum([...MANAGER_TACTICS, "name", "age"] as [string, ...string[]]).default("name"),
   order: z.enum(["asc", "desc"]).default("asc"),
@@ -69,12 +87,12 @@ export const managerListInput = z.object({
   // filter by tactic minimum (e.g. quickCounter >= 88)
   tacticMin: z
     .object({
-      possessionGame: z.coerce.number().int().optional(),
-      quickCounter: z.coerce.number().int().optional(),
-      longBallCounter: z.coerce.number().int().optional(),
-      outWide: z.coerce.number().int().optional(),
-      longBall: z.coerce.number().int().optional(),
-      overload: z.coerce.number().int().optional(),
+      possessionGame: int4.optional(),
+      quickCounter: int4.optional(),
+      longBallCounter: int4.optional(),
+      outWide: int4.optional(),
+      longBall: int4.optional(),
+      overload: int4.optional(),
     })
     .optional(),
 });
@@ -89,14 +107,16 @@ export const managerCompatInput = z.object({
 });
 
 export const skillListInput = z.object({
-  category: z.string().optional(),
+  category: z.string().trim().max(64).optional(),
 });
 
-export const skillByIdInput = z.object({ slug: z.string() });
+export const skillByIdInput = z.object({ slug: z.string().trim().min(1).max(120) });
 
+// Holders of a skill, paginated. A small `limit` (e.g. 4) is the "top cards"
+// call used by the skills index; the order is deterministic (ovr DESC, id DESC).
 export const skillPlayersInput = z.object({
-  slug: z.string(),
-  page: z.coerce.number().int().min(1).default(1),
+  slug: z.string().trim().min(1).max(120),
+  page: z.coerce.number().int().min(1).max(10000).default(1),
   limit: z.coerce.number().int().min(1).max(200).default(24),
 });
 
@@ -104,29 +124,43 @@ export const packListInput = z.object({
   type: z.enum(["special_list", "pack", "all"]).default("all"),
 });
 
-export const packByIdInput = z.object({ id: z.string() });
+export const packByIdInput = z.object({ id: z.string().trim().min(1).max(200) });
 
-// Build simulator input — point allocations + boosters + manager.
+// Featured bundle (efootbase "Latest Packs") by its stable slug — name + release
+// date, e.g. `spanish-league-midfielders-2026-10-05`, `spotlight-leo-messi-2027-…`.
+export const featuredBySlugInput = z.object({ slug: z.string().trim().min(1).max(200) });
+
+// Build simulator input (player-progression-simulator): stat points per
+// training category + booster toggles + max level + position. No manager
+// field (no verifiable data). The engine flags an over-budget allocation
+// (`withinBudget`), so the per-category bound here is only a sanity limit —
+// 99 stat points cost 1,250 training points, far beyond any level cap.
+const MAX_STAT_POINTS_PER_CATEGORY = 99;
 const trainingPointsShape = Object.fromEntries(
-  TRAINING_CATEGORIES.map((cat) => [cat, z.number().int().min(0).max(20).default(0)]),
-) as Record<string, z.ZodDefault<z.ZodNumber>>;
+  TRAINING_CATEGORIES.map((cat) => [cat, z.number().int().min(0).max(MAX_STAT_POINTS_PER_CATEGORY).default(0)]),
+) as Record<TrainingCategory, z.ZodDefault<z.ZodNumber>>;
+export const trainingAllocationInput = z.object(trainingPointsShape);
+// Level caps in the data top out at 77; 200 leaves room for new card types.
+const MAX_LEVEL_LIMIT = 200;
 
 export const buildSimulateInput = z.object({
   playerId: bigIntString,
-  level: z.number().int().min(1).max(100).default(1),
-  maxLevel: z.number().int().min(1).max(100).default(100),
-  trainingPoints: z.object(trainingPointsShape).default(Object.fromEntries(TRAINING_CATEGORIES.map((c) => [c, 0]))),
-  boosters: z.array(z.boolean()).length(2).default([false, false]),
-  managerId: bigIntString.optional(),
+  // Defaults (applied by the API): maxLevel → the card's level cap,
+  // position → the card's registered position.
+  maxLevel: z.number().int().min(1).max(MAX_LEVEL_LIMIT).optional(),
+  position: z.enum(POSITIONS).optional(),
+  trainingPoints: trainingAllocationInput.default({}),
+  // Booster 1 is applied by default, Booster 2 only when toggled.
+  boosters: z.tuple([z.boolean(), z.boolean()]).default([true, false]),
 });
 export type BuildSimulateInput = z.infer<typeof buildSimulateInput>;
 
 export const buildSaveInput = z.object({
   playerId: bigIntString,
-  managerId: bigIntString.optional(),
-  level: z.number().int().min(1),
-  trainingPoints: z.object(trainingPointsShape),
-  boosters: z.array(z.boolean()).length(2),
+  maxLevel: z.number().int().min(1).max(MAX_LEVEL_LIMIT),
+  position: z.enum(POSITIONS),
+  trainingPoints: trainingAllocationInput,
+  boosters: z.tuple([z.boolean(), z.boolean()]),
   note: z.string().trim().max(500).optional(),
   isPublic: z.boolean().default(true),
 });

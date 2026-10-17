@@ -1,5 +1,7 @@
 # community-hub Specification
 
+> **Status: removed from the web UI on 2026-10-07; API remains** (`community` router — builds, reviews, tier votes, `simulate` — and its tables are still registered but unused by the web; the build simulator panel was also removed from the detail page in change `eflab-parity-fixes`). Requirements below are kept as the historical record.
+
 ## Purpose
 The community hub capability provides user authentication, custom build saving and sharing, community tier list creation and voting, and player reviews.
 ## Requirements

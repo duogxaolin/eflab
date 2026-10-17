@@ -1,5 +1,7 @@
 # pro-paywall-scaffold Specification
 
+> **Status: removed from the web UI on 2026-10-07** (`/pro` is gone; the `isPro`/`proUntil` schema fields remain). Requirements below are kept as the historical record.
+
 ## Purpose
 Pro subscription landing page and build gating scaffold (schema fields `isPro`/`proUntil` only — no payment processing this phase).
 ## Requirements

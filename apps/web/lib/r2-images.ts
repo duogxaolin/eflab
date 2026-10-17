@@ -21,7 +21,7 @@
 // 2026-10-07). Art depends on card_type + featured-pack-slug (see the verified rules
 // in the `packHintArt` table below). Cards whose slug doesn't carry an art signal
 // fall back to a per-cardType default; cards with no default render a CSS gradient
-// coloured by the card-type accent (Standard/Big_Time-Selection/Show_Time/Legendary).
+// coloured by the card-type accent (Standard/Selection/Legendary/Strike Arena).
 //
 // Note: flag/emblem URLs CANNOT be constructed from IDs — efootbase uses SHA256
 // hash filenames. Those must come from DB: Country.flagUrl / Team.emblemUrl /
@@ -51,23 +51,23 @@ export function playerCardDynamicUrl(playerId: string | number): string {
 // ---- Layered composite layers (efootbase DNA §10) ----
 //
 // Art resolution model (verified against efootbase 2026-10-07):
-// efootbase's card label ≠ eflab's CardType enum — efootbase uses richer labels
-// ("Epic - Big Time", "Icons", "Trending", "POTD", "Selection", "Highlight",
-// "Strike Arena", "Big Time", "Show Time") and the rendered art depends on a
+// efootbase's card page label is richer than the card_type code — it shows
+// "Epic - Big Time", "Icons", "POTD" etc. — and the rendered art depends on a
 // COMBINATION of card_type + featured-pack-slug, not card_type alone. Verified
-// samples (efootbase.com/players/{baseId}/{playerId}):
+// samples (efootbase.com/players/{baseId}/{playerId}), re-keyed to the
+// code-based CardType names (CARD_TYPE_BY_EFOOTBASE_CODE in @eflab/shared):
 //
-//   efCT | eflab CardType | featured slug           | efootbase label      | bg                 | frame
+//   code | CardType       | featured slug           | efootbase label      | bg                 | frame
 //   -----|----------------|-------------------------|----------------------|--------------------|------------------------------------
 //   0    | STANDARD       | (none)                  | Standard             | —                  | —
-//   1    | TRENDING       | fc-barcelona-73-74      | Icons                | Epic_2026/_2027    | Epic Frame (Cyan Booster)
-//   3    | EPIC  potw      | potw-20-oct-22          | Trending             | —                  | POTW-Worldwide-Card [Booster]
-//   3    | EPIC  potd      | potd-international-cup  | POTD Int'l Cup Day N | POTD_WC_26         | POTD_WC_26_Frame
-//   4    | BIG_TIME       | european-club-champ...  | Selection            | —                  | —
-//   5    | HIGHLIGHT  bt  | big-time-argentina-...  | Epic - Big Time event| Big_Time_WC_26     | Big_Time_WC_26_Frame
-//   5    | HIGHLIGHT  ep  | madrid-chamartin-...   | Epic - Big Time legend| Epic_2027         | Epic Frame (Cyan Booster)
-//   6    | SHOW_TIME      | gracias-leo             | Highlight            | —                  | —
-//   7    | LEGENDARY      | strike-arena            | Strike Arena         | —                  | —
+//   1    | LEGENDARY      | fc-barcelona-73-74      | Icons                | Epic_2026/_2027    | Epic Frame (Cyan Booster)
+//   3    | TRENDING potw  | potw-20-oct-22          | Trending             | —                  | POTW-Worldwide-Card [Booster]
+//   3    | TRENDING potd  | potd-international-cup  | POTD Int'l Cup Day N | POTD_WC_26         | POTD_WC_26_Frame
+//   4    | SELECTION      | european-club-champ...  | Selection            | —                  | —
+//   5    | EPIC  bt       | big-time-argentina-...  | Epic - Big Time event| Big_Time_WC_26     | Big_Time_WC_26_Frame
+//   5    | EPIC  ep       | madrid-chamartin-...   | Epic - Big Time legend| Epic_2027         | Epic Frame (Cyan Booster)
+//   6    | HIGHLIGHT      | gracias-leo             | Highlight            | —                  | —
+//   7    | STRIKE_ARENA   | strike-arena            | Strike Arena         | —                  | —
 
 /** Pack-slug hint → [bg file, frame file] (both nullable). Returns the most
  *  specific match if the slug carries an art signal, else null (fall back to
@@ -109,30 +109,36 @@ function packHintArt(slug: string): { bg: string | null; frame: string | null } 
 
 /** CardType → default art when the pack slug doesn't carry an art signal.
  *  Matches efootbase's per-card_type default render for un-hinted packs.
- *  Verified 2026-10-07 against efootbase samples:
- *    SHOW_TIME (Haaland "english-league-25-26-seasons-best") → Show_Time_2026 bg
- *      + Show Time Frame (Cyan Booster). Label "Highlight".
- *    BIG_TIME (Salah "european-club-championship-16-jun-22") → no bg (gradient),
- *      no frame. Label "Selection".
- *    EPIC + potw slug → POTW-Worldwide-Card [Booster] frame, no bg. Label "Trending".
- *    HIGHLIGHT historical (Kaká "madrid-chamartin-b-09-10") → Epic_2027 +
- *      Epic Frame (Cyan Booster). Label "Epic - Big Time".
- *    TRENDING "Icons" (Messi "fc-barcelona-18-19-limited") → no bg, no frame.
- *    LEGENDARY "Strike Arena" → no bg, no frame. */
+ *  Verified 2026-10-07 against efootbase samples (code-based names):
+ *    HIGHLIGHT code 6 (Haaland "english-league-25-26-seasons-best") → Show_Time
+ *      bg + Show Time frame. Label "Highlight".
+ *    SELECTION code 4 (Salah "european-club-championship-16-jun-22") → no bg
+ *      (gradient), no frame. Label "Selection".
+ *    TRENDING code 3 + potw slug → POTW-Worldwide-Card [Booster] frame, no bg.
+ *    EPIC code 5 historical (Kaká "madrid-chamartin-b-09-10") → Epic_2027 +
+ *      single-booster Epic frame. Label "Epic - Big Time".
+ *    LEGENDARY code 1 "Icons" (Messi "fc-barcelona-18-19-limited") → no bg, no frame.
+ *    STRIKE_ARENA code 7 → no bg, no frame. */
+//
+// NOTE (eflab-parity-fixes): the CardType enum now mirrors efootbase's own
+// `card_type` codes (CARD_TYPE_BY_EFOOTBASE_CODE in @eflab/shared): Show Time
+// cards are HIGHLIGHT (code 6) and Big Time cards are EPIC (code 5). The old
+// BIG_TIME / SHOW_TIME enum names no longer exist, so the defaults below are
+// keyed by the code-based names. The layered composite (cardBgUrl/cardFrameUrl)
+// currently has no caller — PlayerCard renders the single `_dynamic.webp`.
 const CARD_BG_FILES: Partial<Record<CardType, string>> = {
-  // card_type=6 "Show Time" (e.g. Haaland Season's Best) — Show_Time bg
-  SHOW_TIME: "Show_Time_2027",
-  // card_type=5 "Epic - Big Time" historical (Kaká "Madrid Chamartin B 09-10")
-  // renders Epic_2027 + Epic Frame (Cyan Booster) by default
-  HIGHLIGHT: "Epic_2027",
+  // code 6 "Highlight" (Show Time campaign, e.g. Haaland Season's Best) — Show_Time bg
+  HIGHLIGHT: "Show_Time_2027",
+  // code 5 "Epic" (Big Time campaign / historical, Kaká "Madrid Chamartin B 09-10")
+  // renders Epic_2027 + the single-booster Epic frame by default
+  EPIC: "Epic_2027",
 };
 const CARD_FRAME_FILES: Partial<Record<CardType, string>> = {
-  SHOW_TIME: "Show_Time_WC_26_Frame",
-  HIGHLIGHT: "Epic_Frame_Single_Booster",
-  // card_type=3 "Epic" with a potw pack slug → POTW frame (Trending). Without
-  // a potw slug, EPIC renders bare (no frame) — the slug hint in packHintArt
-  // handles the potw case; this default only applies when the slug is null or
-  // doesn't match a known event, so EPIC is intentionally absent here.
+  HIGHLIGHT: "Show_Time_WC_26_Frame",
+  EPIC: "Epic_Frame_Single_Booster",
+  // code 3 "Trending" with a potw pack slug → POTW frame. Without a potw slug,
+  // TRENDING renders bare (no frame) — the slug hint in packHintArt handles the
+  // potw case, so TRENDING is intentionally absent here.
 };
 
 /** Layer 1: card background. Resolves pack-slug hint first (POTD/Big-Time/Show-Time

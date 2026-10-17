@@ -1,5 +1,7 @@
 # new-players Specification
 
+> **Status: removed from the web UI on 2026-10-07** (`/new-players` is gone; the home "Latest Packs" carousel and `/packs` cover new releases through `FeaturedBundle`). Requirements below are kept as the historical record.
+
 ## Purpose
 A page listing the latest player cards grouped by pack release date — the efhub `/new-players` equivalent.
 ## Requirements

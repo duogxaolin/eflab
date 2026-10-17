@@ -4,6 +4,7 @@ import type { ManagerDTO, ManagerId } from "@eflab/shared";
 import { managerListInput, managerByIdInput, managerCompatInput } from "@eflab/shared";
 import { publicProcedure, router } from "../trpc.js";
 import { MANAGER_TACTICS, type ManagerTactic } from "@eflab/shared";
+import { rebaseR2Url } from "../../env.js";
 
 function toManagerDTO(m: ManagerRowForDto): ManagerDTO {
   return {
@@ -15,6 +16,7 @@ function toManagerDTO(m: ManagerRowForDto): ManagerDTO {
     age: m.age,
     adaptability: m.adaptability,
     affinity: m.affinity,
+    imageUrl: rebaseR2Url(m.imageUrl),
     tactics: {
       possessionGame: m.possessionGame,
       quickCounter: m.quickCounter,
@@ -45,8 +47,11 @@ export const managerRouter = router({
         if (min !== undefined) where[tactic] = { gte: min };
       }
     }
-    // sort by one of the six tactics or name/age.
-    const orderBy: Record<string, "asc" | "desc"> = { [input.sort]: input.order } as Record<string, "asc" | "desc">;
+    // sort by one of the six tactics or name/age, id as the deterministic tiebreaker.
+    const orderBy = [
+      { [input.sort]: input.order } as Record<string, "asc" | "desc">,
+      { id: input.order },
+    ];
     const [total, rows] = await prisma.$transaction([
       prisma.manager.count({ where }),
       prisma.manager.findMany({ where, orderBy, skip, take: limit }),
@@ -102,6 +107,7 @@ interface ManagerRowForDto {
   country: number;
   adaptability: number;
   affinity: number;
+  imageUrl: string | null;
   possessionGame: number;
   quickCounter: number;
   longBallCounter: number;

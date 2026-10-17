@@ -1,5 +1,7 @@
 # manager-database Specification
 
+> **Status: removed from the web UI on 2026-10-07; API remains** (`/managers` is gone; the `manager` router stays live and the Manager table is kept current by `pnpm db:refresh` — 1,475 managers with eFHUB tactic ratings — and is exercised by `scripts/smoke-test.sh`). Requirements below are kept as the historical record.
+
 ## Purpose
 The manager database capability catalogs managerial tactical profiles, playstyle ratings, team playstyle bonuses, and squad compatibility rankings.
 ## Requirements

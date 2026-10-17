@@ -7,11 +7,11 @@ import { TRPCError } from "@trpc/server";
 import { signUpInput, signInInput } from "@eflab/shared";
 import { router, publicProcedure } from "../trpc.js";
 import {
-  getSessionFromCookie,
   issueSession,
   revokeSession,
   SESSION_COOKIE,
   SESSION_TTL_SECONDS,
+  sessionCookieFlags,
   parseCookieHeader,
   userToSession,
   hashPassword,
@@ -19,29 +19,13 @@ import {
 } from "../../auth/session.js";
 
 function setSessionCookie(res: { header: (name: string, value: string | string[]) => void }, token: string) {
-  // Cross-origin (web → api) cookie: SameSite=Lax + Secure-when-prod.
-  const isProd = process.env.NODE_ENV === "production";
-  const parts = [
-    `${SESSION_COOKIE}=${token}`,
-    "Path=/",
-    `Max-Age=${SESSION_TTL_SECONDS}`,
-    "HttpOnly",
-    "SameSite=Lax",
-    isProd ? "Secure" : "",
-  ].filter(Boolean);
+  // Cross-origin (web → api) cookie: SameSite=Lax; Secure outside development.
+  const parts = [`${SESSION_COOKIE}=${token}`, `Max-Age=${SESSION_TTL_SECONDS}`, ...sessionCookieFlags()];
   res.header("Set-Cookie", parts.join("; "));
 }
 
 function clearSessionCookie(res: { header: (name: string, value: string | string[]) => void }) {
-  const isProd = process.env.NODE_ENV === "production";
-  const parts = [
-    `${SESSION_COOKIE}=`,
-    "Path=/",
-    "Max-Age=0",
-    "HttpOnly",
-    "SameSite=Lax",
-    isProd ? "Secure" : "",
-  ].filter(Boolean);
+  const parts = [`${SESSION_COOKIE}=`, "Max-Age=0", ...sessionCookieFlags()];
   res.header("Set-Cookie", parts.join("; "));
 }
 
@@ -107,14 +91,17 @@ export const authRouter = router({
         followersCount: true, followingCount: true, emailVerified: true, updatedAt: true, createdAt: true,
       },
     });
-    if (!user) throw new Error("INVALID_CREDENTIALS");
+    // Same UNAUTHORIZED message for unknown email, missing password account and
+    // wrong password — never reveal which one failed.
+    const invalid = () => new TRPCError({ code: "UNAUTHORIZED", message: "Invalid email or password" });
+    if (!user) throw invalid();
     const account = await prisma.account.findUnique({
       where: { providerId_accountId: { providerId: "credential", accountId: user.email } },
       select: { passwordHashed: true },
     });
-    if (!account?.passwordHashed) throw new Error("INVALID_CREDENTIALS");
+    if (!account?.passwordHashed) throw invalid();
     const ok = await verifyPassword({ hash: account.passwordHashed, password: input.password });
-    if (!ok) throw new Error("INVALID_CREDENTIALS");
+    if (!ok) throw invalid();
 
     const { token } = await issueSession(user.id, prisma, {
       ip: ctx.req.ip ?? null,
