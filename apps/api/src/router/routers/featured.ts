@@ -1,9 +1,10 @@
 // featuredRouter — efootbase homepage "Latest Packs" bundles.
-// 24 bundles (17 specialPlayerList + 7 spotlights), each with an ordered card
-// list (efootbase's exact display order, including legend spotlights). Source:
+// 24 bundles in the 2026-10-18 re-dump (16 specialPlayerList + 8 spotlights;
+// the split follows efootbase), each with an ordered card list (efootbase's
+// exact display order, including legend spotlights). Source:
 // dump/efootbase/packs.json → FeaturedBundle + FeaturedBundleCard (ordinal
 // preserves `list` order). Slugs are stable name + release-date slugs
-// (`spanish-league-midfielders-2026-10-05`, `spotlight-…`), never the
+// (`spanish-league-midfielders-2026-10-19`, `spotlight-…`), never the
 // autoincrement id, so links survive a reseed.
 import { prisma } from "@eflab/db";
 import { featuredBySlugInput } from "@eflab/shared";

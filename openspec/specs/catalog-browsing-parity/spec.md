@@ -26,7 +26,7 @@ The players page SHALL default to all card types (no card type pre-selected, mat
 
 #### Scenario: Default scope
 - **WHEN** a user opens `/players` without parameters
-- **THEN** no card type is pre-selected, the result count equals the whole catalogue (48,410 cards), and Trending cards are included.
+- **THEN** no card type is pre-selected, the result count equals the whole catalogue (50,694 cards), and Trending cards are included.
 
 #### Scenario: Dropdown and results agree
 - **WHEN** the home search dropdown lists cards for "cruyff" (9 cards in the 2026-10 data: 7 Epic, 2 Legendary) and the user presses Enter
@@ -44,8 +44,12 @@ The Playing Style filter SHALL use the same style identifiers as the stored data
 - **THEN** the URL carries `playingStyle=<Anchor Man id>` and every returned card has Anchor Man in its attack or defence slot (the style sits in both slots on real cards).
 
 #### Scenario: Unavailable style
-- **WHEN** the Playing Style dialog is open
-- **THEN** Build-up GK, Deep Defender, Press Back and Tough Marker are shown disabled and cannot be sent to the API.
+- **WHEN** the Playing Style dialog is open and efootbase offers a style that no stored card carries
+- **THEN** that style is shown disabled and cannot be sent to the API.
+
+#### Scenario: Styles added after the first dump
+- **WHEN** the Playing Style dialog is open on the 2026-10 re-dump data
+- **THEN** Build-up GK (Attack) and Press Back, Tough Marker and Deep Defender (Defence) are enabled, and selecting one lists exactly the cards that carry it in either slot.
 
 ### Requirement: Page State Lives in the URL
 The players page SHALL reflect its query, card types, filters, sort and page in the URL using efootbase's parameter names where observed — `search`, `card` (repeatable card-type code), `pos` (repeatable), `playingStyle`, `ai`, `nat` (repeatable, internal nation id), `league` (repeatable), `team` (repeatable), `foot`, `base` and `ovr` (Base / Max Overall Rating ranges as `min-max`), `condition`, `form`, `wfa`, `wfu`, `height`, `weight`, `age`, `skill`, `stat` (+ `smax`), `body`, `sort`, `order`, `page` — SHALL write repeated values in a stable order without duplicates, SHALL omit defaults, SHALL still read the older `q`, `type`, `style`, `dstyle`, `ovrMin`/`ovrMax` and `maxOvrMin`/`maxOvrMax` parameters and single-value `pos`, `nat`, `league` and `team` links without writing them in the old form, SHALL drop out-of-range or inverted values instead of sending them, SHALL read the state from the URL on load and on navigation, and SHALL reset to page 1 whenever the query or a filter changes.
@@ -75,7 +79,7 @@ Each home quick filter SHALL produce a players list that matches its label: the 
 
 #### Scenario: Epic & Big Time
 - **WHEN** a user clicks "Epic & Big Time"
-- **THEN** the URL is `/players?card=5` and every returned card is of type Epic (1,083 cards in the 2026-10 data).
+- **THEN** the URL is `/players?card=5` and every returned card is of type Epic (1,094 cards in the 2026-10-18 data).
 
 ### Requirement: Pagination Controls Reach Every Page
 The pagination control SHALL always let the user reach any page, show the current page as active, and scroll the grid back to the top when the page changes.
@@ -96,7 +100,7 @@ Skills pages SHALL display card counts, share and "top cards" computed from the 
 
 #### Scenario: One-Time Pass
 - **WHEN** the Skills page lists One-touch Pass (the display label of the stored skill "One-Time Pass")
-- **THEN** its card count equals the number of players who have that skill (8,909 in the 2026-10 data), and its detail page shows top cards that actually have the skill.
+- **THEN** its card count equals the number of players who have that skill (9,125 in the 2026-10-18 data), and its detail page shows top cards that actually have the skill.
 
 #### Scenario: Skill without holders
 - **WHEN** no card has a given skill

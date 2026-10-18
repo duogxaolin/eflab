@@ -57,7 +57,7 @@ Search inputs SHALL wait for typing to pause before querying, SHALL cancel super
 A name search over the full catalogue SHALL complete in under 50 ms server-side for a typical query, using an index, and the home trending query SHALL NOT scan the full table on every request.
 
 #### Scenario: Search latency
-- **WHEN** the search endpoint is called with "ronaldo" against 48,410 players
+- **WHEN** the search endpoint is called with "ronaldo" against 50,694 players
 - **THEN** the query plan uses an index scan and the server-side execution time is under 50 ms.
 
 ### Requirement: API Robustness

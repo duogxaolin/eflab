@@ -78,7 +78,9 @@ pnpm db:refresh    # db:seed (efootbase dump → Postgres, upsert in one transac
 python3 -I scripts/verify-seed.py   # optional: assert the DB matches the dump
 ```
 
-What `db:refresh` leaves behind (2026-10-17 dump): 48,410 players (48,407 dump + 3 eFHUB-only) · 1,475 managers with tactic ratings · 375 boosters · 2,046 packs · 24 featured bundles (189 cards) · 84 skills / 191,444 player-skill rows · 185 countries · 707 teams · 34 leagues · 10,745 community tier badges.
+What `db:refresh` leaves behind (2026-10-18 re-dump): 50,694 players (50,691 dump + 3 eFHUB-only; newest release 2026-10-15) · 1,475 managers with tactic ratings · 379 boosters · 2,065 packs · 24 featured bundles (166 cards) · 84 skills / 195,607 player-skill rows · 185 countries · 736 teams · 34 leagues · 10,745 community tier badges.
+
+The 2026-10-18/19 re-dump (rewritten `scripts/efootbase_dump.py`) added 2,284 new cards and changed 5,380, and uploaded 9,891 images to R2. efootbase's API lists newest cards first with `sort=time_added&order=desc`, accepts `limit` up to 100, and reports `total_count` / `total_pages` as lookahead values (the end of data is the first short page). Limits: the 2,284 new cards have no eFHUB cross-fill data (stars, reputation, position ratings, tier badge); R2 objects carry a 1-year immutable cache, so the 5,312 overwritten card images may stay stale in caches until purged or versioned; `time_added` does not change on stat edits, so only a full dump finds changed cards.
 
 Seed behaviour:
 
@@ -164,21 +166,23 @@ The shared engine lives in `packages/shared/src/progression.ts` with the fitted 
 See `.env.example` (root) and `apps/web/.env.example`. Summary:
 
 - API: `DATABASE_URL`, `API_PORT`, `API_HOST`, `API_ORIGIN`, `WEB_ORIGIN` (comma-separated CORS allow-list), `NODE_ENV` (set by the scripts), `R2_PUBLIC_BASE` (rebases stored R2 URLs), `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET`, `OAUTH_STATE_SECRET`.
-- Web: `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_R2_PUBLIC_BASE`, `API_INTERNAL_URL`, `NEXT_PUBLIC_GIT_SHA`/`NEXT_PUBLIC_BUILD_UTC` (filled from git by `next.config.ts`).
+- Web: `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_R2_PUBLIC_BASE`, `NEXT_PUBLIC_IMAGE_VERSION` (card image cache version, see below), `API_INTERNAL_URL`, `NEXT_PUBLIC_GIT_SHA`/`NEXT_PUBLIC_BUILD_UTC` (filled from git by `next.config.ts`).
 - Seeders: `EFOOTBASE_DUMP_PATH`, `EFOOTBASE_META_PATH`, `EFOOTBASE_PACKS_PATH`, `EFHUB_DB_PATH`, `SQLITE3_BIN`.
 - Scripts: `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET=efootlab`, `EFBASE_API_KEY` (dump script, via `--env`), `PSQL` (verify-seed).
 
 Changing the R2 domain = set `R2_PUBLIC_BASE` (API) and `NEXT_PUBLIC_R2_PUBLIC_BASE` (web) and rebuild the web app; the database is not rewritten.
 
+Card image URLs carry a cache version (`cards/{id}_dynamic.webp?v=20261019`) because R2 serves them `immutable` for a year and a re-dump overwrites changed card images under the same key. After card images are overwritten in place on R2, bump `DEFAULT_IMAGE_VERSION` in `apps/web/lib/r2-images.ts` (or set `NEXT_PUBLIC_IMAGE_VERSION`) and rebuild the web app.
+
 ## Known limitations
 
 - The Progression panel's overall is an estimate (fitted formula, anchored at the registered position with an anchor chosen post hoc; other positions are unanchored, use the fitted penalty when half / non-proficient, where efootbase reads about 4 / 2–3 higher unless the estimate sits at the floor of 40, and carry a warning); the Manager Proficiency rates between 70/75/80/85/90 have no two-card held-out check and the bonus at level 86 is an unconfirmed exception; Max OVR ignores the bonus (up to 1 displayed point below the best build); there is no manager picker (no per-manager effects — no dataset); the weights follow the game version the eFHUB data reflects and must be regenerated with it; builds are not saved anywhere.
-- 38,337 cards carry `levelCap` 1 in the dump; their max-level view equals the base view and they show a note ("Progression and manager data are not available for this card") instead of the panel.
-- **The dump is stale** (taken 2026-10-06): the newest `releaseDate` in the database is 2026-10-01. Of the 37 distinct card ids linked from efootbase's home page on 2026-10-18 only 8 exist here (29 are newer cards); by base player 33 of 34 are present (only Ricardo Quaresma, base 4526, is missing entirely). Refreshing needs `scripts/efootbase_dump.py` with an API key.
+- 40,516 of the 50,691 dump cards carry `levelCap` 1; their max-level view equals the base view and they show a note ("Progression and manager data are not available for this card") instead of the panel.
+- **Dump freshness**: re-dumped 2026-10-18; the newest `releaseDate` in the database is 2026-10-15 (Ricardo Quaresma, missing from the 2026-10-06 dump, is now present). The cards added by the re-dump have no eFHUB cross-fill data and overwritten card images may be served stale from caches (see above). Refreshing again needs `scripts/efootbase_dump.py` with an API key.
 - **efootbase's filter / sort / search results could not be compared**: its API answers automation with a Cloudflare bot check, so the catalogue filters were verified against our own data only (labels and controls follow the capture).
 - Not modelled because the dump has no such data: efootbase's **Position Training** toggle and **In-Match Roles** (set-piece takers, captain). Body Model (11 physique values + 5 derived metrics), Form and Injury Resistance are stored for every card, returned by `player.byId` / `player.compare` and shown in their detail-page sections.
 - Skill labels and the Showtime / Classic grouping are display-only (`apps/web/lib/skill-labels.ts`); the database keeps the fixture names.
-- **Newer than the dump**: efootbase's Skills filter lists 28 Showtime skills, 5 of which (Beast Drive, Decisive Pass, GK Aerial Claim, GK Rush Out, Sharp Cut) are not in the dump or the `Skill` table — our Showtime group has 23. Four playing styles (Build-up GK, Deep Defender, Press Back, Tough Marker) and the AI style "Long Ranger" are likewise unavailable (listed as such, never given invented ids).
+- **Newer than the dump**: efootbase's Skills filter lists 28 Showtime skills, 5 of which (Beast Drive, Decisive Pass, GK Aerial Claim, GK Rush Out, Sharp Cut) are not in the dump or the `Skill` table — our Showtime group has 23. The AI style "Long Ranger" is likewise unavailable (no column). The four playing styles that post-dated the first dump (Press Back, Tough Marker, Deep Defender, Build-up GK — ids 23, 31, 32, 34) are carried by cards of the 2026-10 re-dump and are offered in the Playing Style filter; their names come from efootbase's English UI strings because the dump's field labels still lack them.
 - Japanese/Chinese name search runs only for non-ASCII queries and is not index-backed.
 - The `/players` Nation filter is shared by internal country id (`nat=14`, repeated for several nations) because the data has no ISO code column; such a link stays valid only while the country ids are unchanged (a re-seed that renumbers them changes its meaning). Position, League and Team links repeat `pos` / `league` / `team` the same way (`/players?pos=SS&pos=CF&league=4&league=12`); old single-value links keep working. Each id list holds at most 50 values: the pickers say so ("At most 50 selections") and disable further options, and a hand-written link with more keeps the 50 smallest ids.
 - Kept on purpose: the `auth` router with Google OAuth (no sign-in UI), the Pack/PackCard and Manager tables (seeded data, no API reads them except the pack name on a card), and `better-auth` (only its crypto helpers are used).

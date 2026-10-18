@@ -390,7 +390,7 @@ model PackCard {
 // release timestamp (`time` → releaseDate), and an ordered list of player cards
 // (`list` array → FeaturedBundleCard.ordinal preserves efootbase's exact display
 // order, including legend spotlights pulled from other packs). Note: this is
-// distinct from Pack/PackCard (seeded from the player `featured` field, 2.046
+// distinct from Pack/PackCard (seeded from the player `featured` field, 2.065
 // historical packs) — FeaturedBundle is efootbase's curated homepage carousel.
 
 model FeaturedBundle {
