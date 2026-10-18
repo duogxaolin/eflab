@@ -1,5 +1,7 @@
 # tier-list-creator Specification
 
+> **API removed in change `remove-dead-surface` (2026-10-18)** — the `tierList` router and the TierList / TierVote tables were deleted; `Player.communityTier` (eFHUB cross-fill) is unaffected.
+
 > **Status: removed from the web UI on 2026-10-07; API remains** (`tierList` router and TierList/TierVote tables are unused by the web; `Player.communityTier` badges now come from the eFHUB cross-fill instead). Requirements below are kept as the historical record.
 
 ## Purpose

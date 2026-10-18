@@ -1,5 +1,7 @@
 # manager-database Specification
 
+> **API removed in change `remove-dead-surface` (2026-10-18)** — the `manager` router was deleted; the Manager table is still seeded (`fixtures/managers.json`) and cross-filled (1,475 managers with eFHUB tactics) as a data asset, verified by `scripts/verify-seed.py`.
+
 > **Status: removed from the web UI on 2026-10-07; API remains** (`/managers` is gone; the `manager` router stays live and the Manager table is kept current by `pnpm db:refresh` — 1,475 managers with eFHUB tactic ratings — and is exercised by `scripts/smoke-test.sh`). Requirements below are kept as the historical record.
 
 ## Purpose

@@ -1,6 +1,6 @@
 # build-simulator Specification
 
-> **Status: removed from the web UI in change `eflab-parity-fixes` (2026-10-17); API remains** (the detail-page Progression sliders, Max OVR preset and Manager Proficiency control were removed because the efootbase dump carries no training rules; `packages/shared/src/progression.ts`, `components/build-simulator/BuildSimulator.tsx` and `community.simulate` remain unused). Requirements below are kept as the historical record.
+> **Status: removed from the web UI in change `eflab-parity-fixes` (2026-10-17); API remains** (the detail-page Progression sliders, Max OVR preset and Manager Proficiency control were removed because the efootbase dump carries no training rules; `packages/shared/src/progression.ts` remained; the headless `components/build-simulator/BuildSimulator.tsx` and `community.simulate` were deleted in change `remove-dead-surface` on 2026-10-18 — the engine now runs only client-side in `ProgressionPanel.tsx`, see `player-progression-simulator`). Requirements below are kept as the historical record.
 
 ## Purpose
 The build simulator capability calculates projected player ratings and simulated attribute growths as users allocate progression points across training categories, toggle booster slots, and pair cards with managers.

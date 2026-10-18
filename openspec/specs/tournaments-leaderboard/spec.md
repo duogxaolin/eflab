@@ -1,5 +1,7 @@
 # tournaments-leaderboard Specification
 
+> **API removed in change `remove-dead-surface` (2026-10-18)** — the `pages.leaderboard` procedure (`pages` router) was deleted.
+
 > **Status: removed from the web UI on 2026-10-07** (`/tournaments` is gone; nothing in the API serves it). Requirements below are kept as the historical record.
 
 ## Purpose

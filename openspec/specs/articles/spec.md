@@ -1,5 +1,7 @@
 # articles Specification
 
+> **API removed in change `remove-dead-surface` (2026-10-18)** — the `pages` router, the MDX article content and the `gray-matter` / `next-mdx-remote` dependencies were deleted; nothing in the repository serves articles any more.
+
 > **Status: removed from the web UI on 2026-10-07** (`/articles` routes and `lib/articles.ts` deleted; eflab follows efootbase's 4-page scope). The `pages` API router remains unused. Requirements below are kept as the historical record.
 
 ## Purpose

@@ -1,5 +1,7 @@
 # new-players Specification
 
+> **API removed in change `remove-dead-surface` (2026-10-18)** — the `pages.newPlayers` procedure (`pages` router) and the `pack` router were deleted; the Pack / PackCard tables stay as data.
+
 > **Status: removed from the web UI on 2026-10-07** (`/new-players` is gone; the home "Latest Packs" carousel and `/packs` cover new releases through `FeaturedBundle`). Requirements below are kept as the historical record.
 
 ## Purpose
