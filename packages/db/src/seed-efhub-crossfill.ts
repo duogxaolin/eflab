@@ -10,7 +10,16 @@
 //                THAT version's ratings (no cross-version leakage);
 //             b) name — art rows (efootbase APK fixtures) still without tactics are
 //                matched by name through ALIASES (eFHUB abbreviates / strips
-//                accents) and get the best-MarketValue version of that name;
+//                accents) and get the best-MarketValue version of that name. An
+//                art row whose card is newer than the eFHUB file therefore
+//                inherits the tactics of ANOTHER card of the same coach — same
+//                person, not necessarily this card's numbers (eFHUB versions of
+//                one coach can differ a lot). efootbase-static-data: neither new
+//                picker card is an eFHUB id; Jürgen Klopp 17609902885263 gets the
+//                single eFHUB Klopp entry (17605071047055 = the older Klopp art
+//                card) and Cristian Chivu 17610171323785 gets the better of eFHUB's
+//                two Chivu entries (17603460437385 = the other Chivu art card,
+//                MarketValue 58, over 103817, MarketValue 7);
 //             c) create — every remaining eFHUB coach name (best version) becomes a
 //                no-art manager, unless an art row already carries that name.
 //           Stale no-art duplicates of an art row are deleted.
@@ -107,6 +116,11 @@ const ALIASES: Readonly<Record<string, string>> = {
   // different coach — the old alias suppressed him).
   "roberto martínez": "r. martinez",
   "vincenzo montella": "v. montella",
+  // efootbase-static-data: the 2026-10 Klopp picker card (17609902885263) is not an
+  // eFHUB coach id; eFHUB strips the umlaut. eFHUB has one Klopp entry
+  // (17605071047055, the older Klopp art card, matched by id), so this alias makes
+  // the new card inherit that card's tactics (see phase 1 b).
+  "jürgen klopp": "jurgen klopp",
 };
 const efhubNameKey = (eflabName: string): string => {
   const key = eflabName.toLowerCase();

@@ -17,6 +17,7 @@ import {
   type CardPreview,
   type Position,
   type PlayerCardDTO,
+  type SkillDTO,
   type TrainingCategory,
 } from "@eflab/shared";
 import {
@@ -30,6 +31,7 @@ import { BodyModel } from "@/components/detail/BodyModel";
 import { StarRating } from "@/components/detail/StarRating";
 import { CategoryRow, KeyStats, StatGrid, type StatHighlight } from "@/components/detail/StatGrid";
 import { isShowtimeSkill, orderSkills, skillDisplayName } from "@/components/detail/skill-display";
+import { SkillChip } from "@/components/detail/SkillChip";
 import { POSITION_LABEL, positionOf, playingStyleLabel } from "@/lib/card-display";
 
 // Player detail page body (efootbase layout, efootbase-parity-round2):
@@ -106,11 +108,12 @@ export function PlayerDetailClient({
     [p, build],
   );
 
-  // Skill slug → stored name (the DTO carries slugs; names live in skill.list).
+  // Skill slug → skill (the DTO carries slugs; name, group, artwork, description
+  // and boosts live in skill.list).
   const skillsQ = trpc.skill.list.useQuery({}, { staleTime: 60 * 60_000 });
-  const skillName = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const s of skillsQ.data ?? []) map.set(s.slug, s.name);
+  const skillBySlug = useMemo(() => {
+    const map = new Map<string, SkillDTO>();
+    for (const s of skillsQ.data ?? []) map.set(s.slug, s);
     return map;
   }, [skillsQ.data]);
 
@@ -137,9 +140,9 @@ export function PlayerDetailClient({
   const packTitle = p.pack?.name ?? CARD_TYPE_LABELS[p.cardType];
   const heightImperial = formatFeetInches(p.height);
 
-  const orderedSkills = orderSkills(p.skills);
-  const skillLabels = orderedSkills.map((slug) => skillDisplayName(slug, skillName.get(slug)));
-  const showtimeCount = orderedSkills.filter(isShowtimeSkill).length;
+  const orderedSkills = orderSkills(p.skills, skillBySlug);
+  const skillLabels = orderedSkills.map((slug) => skillDisplayName(slug, skillBySlug.get(slug)));
+  const showtimeCount = orderedSkills.filter((slug) => isShowtimeSkill(skillBySlug.get(slug))).length;
 
   // Best Fit: highest *known* rating over every position (null ratings are
   // skipped, never treated as 0); falls back to the registered position when
@@ -402,34 +405,28 @@ export function PlayerDetailClient({
               onHighlight={onHighlight}
             />
 
-            {/* Skills — Showtime first (gold), classic after. */}
+            {/* Skills — Showtime first (gold), classic after; each chip opens a
+                popover with the skill's artwork, description and boosts. */}
             <div className="space-y-2 border-t border-[var(--color-line-separator)] pt-4">
               <h3 className="text-xs font-bold text-white uppercase tracking-wider">
                 Skills <span className="font-normal normal-case text-[var(--color-text-dim)]">· {skillLabels.length}{showtimeCount ? ` · ${showtimeCount} Showtime` : ""}</span>
               </h3>
               {skillLabels.length === 0 ? (
                 <p className="text-xs text-[var(--color-text-dim)]">No skills.</p>
+              ) : skillsQ.isPending ? (
+                // Same chip height while the skill list loads (it is cached for an hour).
+                <ul className="flex flex-wrap gap-1.5" aria-busy="true" aria-label="Loading skills">
+                  {orderedSkills.map((slug) => (
+                    <li key={slug} className="h-[24px] w-24 rounded-md bg-[var(--color-elevated)] animate-pulse" />
+                  ))}
+                </ul>
               ) : (
                 <ul className="flex flex-wrap gap-1.5" aria-label="Skills" data-testid="skill-list">
-                  {orderedSkills.map((slug, i) => {
-                    const showtime = isShowtimeSkill(slug);
-                    return (
-                      <li key={slug}>
-                        <Link
-                          href={`/skills/${slug}`}
-                          data-showtime={showtime ? "true" : undefined}
-                          className={`inline-block px-2 py-0.5 rounded-md border text-[11px] no-underline transition-colors ${
-                            showtime
-                              ? "bg-amber-500/10 border-amber-500/40 text-amber-300 hover:bg-amber-500/20"
-                              : "bg-[var(--color-canvas)] border-[var(--color-line)] text-white/90 hover:border-[var(--color-line-active)]"
-                          }`}
-                          title={showtime ? "Showtime skill" : "Classic skill"}
-                        >
-                          {skillLabels[i]}
-                        </Link>
-                      </li>
-                    );
-                  })}
+                  {orderedSkills.map((slug, i) => (
+                    <li key={slug} className="min-w-0 max-w-full">
+                      <SkillChip slug={slug} label={skillLabels[i]!} skill={skillBySlug.get(slug)} />
+                    </li>
+                  ))}
                 </ul>
               )}
             </div>

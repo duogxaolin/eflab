@@ -217,6 +217,44 @@ else
   fail "skill.list → 84 skills" "code=$CODE got=$SKILL_COUNT"
 fi
 
+# 4b. static efootbase data (efootbase-static-data; needs a seed with the
+#     dump/efootbase/static snapshot): 67 grouped skills (23 Showtime + 44 Classic)
+#     each with a description and an R2 icon URL, 17 "Other" entries, no hidden
+#     (unreleased) skill, effects carry eFootLab stat names
+SKILL_STATIC="$(result '"%d %d %d %d %d %d %d" % (
+  sum(1 for s in d if s["group"] == "showtime"),
+  sum(1 for s in d if s["group"] == "classic"),
+  sum(1 for s in d if s["group"] is None),
+  sum(1 for s in d if s["group"] and s["description"] and (s["iconUrl"] or "").endswith(".webp") and "/skills/Skill_" in s["iconUrl"]),
+  sum(1 for s in d if not s["released"] or s["slug"] in ("sharp-cut", "beast-drive", "decisive-pass", "gk-rush-out", "gk-aerial-claim")),
+  sum(1 for s in d if s["effects"]),
+  sum(1 for s in d for e in s["effects"] if e["stat"] in ("tackling", "jumping", "setPieceTaking", "set_piece_taking")))')"
+if [ "$CODE" = "200" ] && [ "$SKILL_STATIC" = "23 44 17 67 0 28 0" ]; then
+  pass "skill.list static data → Showtime 23 · Classic 44 · Other 17 · 67 with description + icon · 0 hidden · 28 with effects (eFootLab stat names)"
+else
+  fail "skill.list static data (expected '23 44 17 67 0 28 0')" "code=$CODE got='$SKILL_STATIC'"
+fi
+trpc_get "skill.byId" '{"slug":"momentum-dribbling"}'
+MD="$(result '"%s|%s|%s|%s" % (d["group"], ",".join("%s+%d" % (e["stat"], e["value"]) for e in d["effects"]), bool(d["activation"]), d["iconUrl"].rsplit("/", 1)[-1])')"
+if [ "$CODE" = "200" ] && [ "$MD" = "showtime|dribbling+6,tightPossession+6,speed+6,acceleration+6|True|Skill_MomentumDribbling.webp" ]; then
+  pass "skill.byId momentum-dribbling → showtime, +6 Dribbling/Tight Possession/Speed/Acceleration, activation, icon"
+else
+  fail "skill.byId momentum-dribbling static data" "code=$CODE got=$MD"
+fi
+ICON_URL="$(result 'd["iconUrl"]')"
+ICON_CODE="$(curl -sS -m 10 -o /dev/null -I -w '%{http_code} %{content_type}' "$ICON_URL" 2>/dev/null || echo 000)"
+if [ "$ICON_CODE" = "200 image/webp" ]; then
+  pass "skill icon on R2 → 200 image/webp"
+else
+  fail "skill icon on R2 → 200 image/webp" "url=$ICON_URL got=$ICON_CODE"
+fi
+trpc_get "skill.byId" '{"slug":"sharp-cut"}'
+if [ "$CODE" = "200" ] && [ "$(result 'd is None')" = "True" ]; then
+  pass "skill.byId of an unreleased skill (sharp-cut) → null (hidden)"
+else
+  fail "skill.byId sharp-cut → null" "code=$CODE body=${BODY:0:160}"
+fi
+
 # 5. card-type enum: every CardType has rows; STRIKE_ARENA non-empty
 for CT in STANDARD LEGENDARY TRENDING SELECTION EPIC HIGHLIGHT STRIKE_ARENA; do
   trpc_get "player.list" "{\"cardType\":\"$CT\",\"limit\":1}"

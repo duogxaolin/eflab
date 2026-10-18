@@ -1,12 +1,18 @@
-// Display-only skill labels and grouping (efootbase-parity-round2, design
-// decision 8). The database keeps the fixture names (packages/db/fixtures/
-// skills.json); this table maps a stored slug to the label efootbase shows
-// and to its Showtime / Classic group, both read from the 2026-10-18 capture of
-// efootbase /wiki/skills (23 Showtime + 44 Classic skills) and the Skills
-// filter dialog. Only names observed there are changed; everything else keeps
-// its stored name. No rarity, rank or stat boost is synthesised.
+// Skill display helpers. Since openspec change efootbase-static-data the API
+// carries efootbase's data per skill (name, description, group, wiki order,
+// icon, stat effects, activation — loaded by the seed from the static snapshot,
+// docs/efootbase-static-snapshot.md), so the grouping and the order come from
+// the data; nothing here infers a group. No rarity, rank or stat boost is
+// synthesised: effects are shown only when efootbase showed them. Within a
+// group the order is efootbase's wiki order (stored sortOrder).
+import { BASE_STATS, type BaseStat, type SkillEffect, type SkillGroup } from "@eflab/shared";
+import { statLabel } from "@/lib/card-display";
 
-/** efootbase label per slug where it differs from the stored name. */
+/**
+ * efootbase label per slug where it differs from the fixture name. The seed now
+ * stores efootbase's name, so these only matter for a database seeded without
+ * the static snapshot (fixture names such as "One-Time Pass").
+ */
 const LABEL_OVERRIDES: Readonly<Record<string, string>> = {
   "one-touch-pass": "One-touch Pass",
   "no-look-pass": "No Look Pass",
@@ -21,71 +27,73 @@ const LABEL_OVERRIDES: Readonly<Record<string, string>> = {
   "s-heading": "Heading",
 };
 
-/** Showtime skills in efootbase's wiki order (23, all with holders in the dump). */
-export const SHOWTIME_SKILL_SLUGS: readonly string[] = [
-  "momentum-dribbling", "acceleration-burst", "magnetic-feet", "tap-trick", "bullet-header",
-  "blitz-curler", "low-screamer", "snap-strike", "phenomenal-finishing", "willpower",
-  "edged-crossing", "game-changing-pass", "visionary-pass", "phenomenal-passing",
-  "gk-directing-defence", "gk-spirit-roar", "long-reach-tackle", "power-tackle", "fortress",
-  "aerial-fort", "attack-trigger", "shadow-hunt", "attacking-surge",
-];
+/** Page sections: efootbase's two groups plus "other" for the catalogue entries
+ *  efootbase does not treat as skills (group null). */
+export type SkillSection = SkillGroup | "other";
 
-/** Classic skills in efootbase's wiki order (44). */
-export const CLASSIC_SKILL_SLUGS: readonly string[] = [
-  "scissors-feint", "double-touch", "flip-flap", "marseille-turn", "sombrero", "chop-turn",
-  "cut-behind-turn", "scotch-move", "sole-control", "s-heading", "long-range-curler",
-  "chip-shot-control", "knuckle-shot", "dipping-shot", "rising-shots", "long-range-shooting",
-  "acrobatic-finishing", "heel-trick", "first-time-shot", "one-touch-pass", "through-passing",
-  "weighted-pass", "pinpoint-crossing", "outside-curler", "rabona", "no-look-pass",
-  "low-lofted-pass", "gk-low-punt", "gk-high-punt", "long-throw", "gk-long-throw",
-  "penalty-specialist", "gk-penalty-saver", "gamesmanship", "man-marking", "track-back",
-  "interception", "blocker", "aerial-superiority", "sliding-tackle", "acrobatic-clear",
-  "captaincy", "super-sub", "fighting-spirit",
-];
-
-export type SkillGroup = "showtime" | "classic" | "other";
-
-export const SKILL_GROUP_LABELS: Readonly<Record<SkillGroup, string>> = {
+export const SKILL_GROUP_LABELS: Readonly<Record<SkillSection, string>> = {
   showtime: "Showtime Skills",
   classic: "Classic Skills",
   // Fixture entries efootbase does not list as skills (AI playing styles, motion
   // styles, set-piece variants); no card in the dump carries them.
   other: "Other catalogue entries",
 };
-export const SKILL_GROUP_ORDER: readonly SkillGroup[] = ["showtime", "classic", "other"];
+export const SKILL_GROUP_ORDER: readonly SkillSection[] = ["showtime", "classic", "other"];
 
-const ORDER: ReadonlyMap<string, number> = new Map(
-  [...SHOWTIME_SKILL_SLUGS, ...CLASSIC_SKILL_SLUGS].map((slug, i) => [slug, i]),
-);
-
-/** The label to show for a skill — efootbase's where observed, else the stored name. */
+/** The label to show for a skill — the stored (efootbase) name, or efootbase's
+ *  spelling when the database still holds a fixture name. */
 export function skillLabel(skill: { slug: string; name: string }): string {
   return LABEL_OVERRIDES[skill.slug] ?? skill.name;
 }
 
 /**
- * The description to show. The 21 fixture blurbs of the former "Premium"
- * category start with an invented tier prefix ("Premium — …", "Premium skill
- * — …"); it is dropped for display (the sentence is then capitalised) so no
- * made-up tier label reaches the page. The stored text is not changed.
+ * The description to show. Without the snapshot, the 21 fixture blurbs of the
+ * former "Premium" category start with an invented tier prefix ("Premium — …");
+ * it is dropped for display so no made-up tier label reaches the page.
  */
 export function skillDescription(skill: { description: string }): string {
   const stripped = skill.description.replace(/^Premium(?: skill)?\s*[—–-]\s*/i, "");
   return stripped.charAt(0).toUpperCase() + stripped.slice(1);
 }
 
-export function skillGroup(slug: string): SkillGroup {
-  if (SHOWTIME_SKILL_SLUGS.includes(slug)) return "showtime";
-  if (CLASSIC_SKILL_SLUGS.includes(slug)) return "classic";
-  return "other";
+/** Section of a skill from its stored group. */
+export function skillGroup(skill: { group: SkillGroup | null }): SkillSection {
+  return skill.group ?? "other";
 }
 
-/** Sort key: efootbase's wiki order for listed skills, then stored name. */
-export function compareSkills(a: { slug: string; name: string }, b: { slug: string; name: string }): number {
-  const ia = ORDER.get(a.slug);
-  const ib = ORDER.get(b.slug);
-  if (ia !== undefined && ib !== undefined) return ia - ib;
-  if (ia !== undefined) return -1;
-  if (ib !== undefined) return 1;
+type Sortable = { slug: string; name: string; group: SkillGroup | null; sortOrder: number | null };
+
+/** Section first (Showtime, Classic, Other — grouped pickers need contiguous
+ *  sections), then efootbase's wiki order, then entries without an order by label. */
+export function compareSkills(a: Sortable, b: Sortable): number {
+  const sa = SKILL_GROUP_ORDER.indexOf(skillGroup(a));
+  const sb = SKILL_GROUP_ORDER.indexOf(skillGroup(b));
+  if (sa !== sb) return sa - sb;
+  if (a.sortOrder !== null && b.sortOrder !== null) return a.sortOrder - b.sortOrder;
+  if (a.sortOrder !== null) return -1;
+  if (b.sortOrder !== null) return 1;
   return skillLabel(a).localeCompare(skillLabel(b));
+}
+
+/** "+6 Dribbling" */
+export function effectLabel(e: SkillEffect): string {
+  return `${e.value > 0 ? "+" : ""}${e.value} ${statLabel(e.stat)}`;
+}
+
+/**
+ * Short form for long effect lists (Super-sub boosts 25 of the 26 stats by +1):
+ * when every effect has the same value and at most three stats are left out,
+ * "+1 to every stat except Stamina"; otherwise null (list the effects).
+ */
+export function effectSummary(effects: readonly SkillEffect[]): string | null {
+  if (effects.length < 8) return null;
+  const v = effects[0]!.value;
+  if (effects.some((e) => e.value !== v)) return null;
+  const boosted = new Set<BaseStat>(effects.map((e) => e.stat));
+  const missing = BASE_STATS.filter((s) => !boosted.has(s));
+  if (missing.length > 3) return null;
+  const sign = v > 0 ? "+" : "";
+  return missing.length === 0
+    ? `${sign}${v} to every stat`
+    : `${sign}${v} to every stat except ${missing.map(statLabel).join(", ")}`;
 }
