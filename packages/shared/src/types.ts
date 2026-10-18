@@ -168,16 +168,25 @@ export interface BuildConfig {
   trainingPoints: Record<TrainingCategory, number>;
   /** [Booster 1 active, Booster 2 active]. */
   boosters: [boolean, boolean];
+  /** Manager Proficiency level 70–90 (efootbase's slider). Omitted → the
+   *  engine default MANAGER_PROFICIENCY_DEFAULT (90, efootbase's default);
+   *  70 gives no bonus. */
+  managerProficiency?: number;
 }
 
 // Computed build result returned by the simulator.
 export interface BuildResult {
-  /** The config as applied (maxLevel clamped to the card's level cap). */
-  config: BuildConfig;
+  /** The config as applied (maxLevel clamped to the card's level cap,
+   *  managerProficiency clamped to 70..90 / defaulted). */
+  config: BuildConfig & { managerProficiency: number };
   base: Record<BaseStat, number>;
   trainingDeltas: Record<BaseStat, number>;
+  /** Manager Proficiency bonus per stat (read off base + training, capped
+   *  so that it never lifts a stat above 99). */
+  proficiencyDeltas: Record<BaseStat, number>;
   boosterDeltas: Record<BaseStat, number>;
-  /** base + training + active boosters, not capped at 99. */
+  /** base + training + proficiency bonus + active boosters; the boosters may
+   *  take a stat above 99. */
   projectedStats: Record<BaseStat, number>;
   /** Training points at the selected max level (`maxLevel − 1`). */
   pointsAvailable: number;
@@ -185,12 +194,19 @@ export interface BuildResult {
   pointsUsed: number;
   remainingPoints: number;
   withinBudget: boolean;
-  /** Estimated overall at `config.position` (rounded) and its raw value. */
+  /** Estimated overall at `config.position` (rounded) and its raw value
+   *  (including the anchor when there is one). */
   estimatedOvr: number;
   estimatedOvrExact: number;
   /** Proficiency of the card at `config.position` that the estimate assumes
    *  ("full" when no aptitudes were given); half / none apply the fitted penalty. */
   proficiency: PositionProficiency;
+  /** Anchor added to the estimate (card overall − formula on its base stats);
+   *  null when the estimate is not anchored (another position than the
+   *  registered one, or no card overall given). */
+  ovrAnchor: number | null;
+  /** True at Manager Proficiency 86, whose bonus rule is an unconfirmed exception. */
+  managerProficiencyUnconfirmed: boolean;
 }
 
 // ---- Auth session (auth.getSession; consumed by apps/web/lib/auth.tsx) ----
