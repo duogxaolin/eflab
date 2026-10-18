@@ -28,6 +28,8 @@ Usage:
   python3 scripts/r2_upload.py --no-resume        # force re-upload (overwrite)
 """
 
+from __future__ import annotations  # py3.9 (system python) cannot evaluate `str | None` at def time
+
 import argparse
 import concurrent.futures
 import json
