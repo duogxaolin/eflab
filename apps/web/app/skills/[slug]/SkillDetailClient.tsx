@@ -6,12 +6,16 @@ import { PlayerCard } from "@/components/cards/PlayerCard";
 import { Pagination } from "@/components/players/Pagination";
 import { QueryErrorState, CardGridSkeleton } from "@/lib/query-state";
 import type { SkillDTO } from "@eflab/shared";
+import { SKILL_GROUP_LABELS, skillDescription, skillGroup, skillLabel } from "@/lib/skill-labels";
 
 const PAGE_SIZE = 24;
 
 export function SkillDetailClient({ slug, initialData }: { slug: string; initialData: SkillDTO }) {
   const detail = trpc.skill.byId.useQuery({ slug }, { initialData });
   const skill = detail.data ?? initialData;
+  // Display label + Showtime/Classic group from the web-only table (lib/skill-labels.ts).
+  const label = skillLabel(skill);
+  const group = skillGroup(skill.slug);
   const [page, setPage] = useState(1);
   const holders = trpc.skill.players.useQuery({ slug, page, limit: PAGE_SIZE }, { placeholderData: (prev) => prev });
   const catalogue = trpc.player.list.useQuery({ page: 1, limit: 1 }, { staleTime: 60 * 60_000 });
@@ -38,15 +42,15 @@ export function SkillDetailClient({ slug, initialData }: { slug: string; initial
           </Link>
           <span className="breadcrumbs__separator text-xs">›</span>
         </li>
-        <li className="breadcrumbs__item text-white text-xs font-medium">{skill.name}</li>
+        <li className="breadcrumbs__item text-white text-xs font-medium">{label}</li>
       </ol>
 
       <div className="space-y-3">
-        <h1 className="text-3xl sm:text-4xl font-extrabold text-[var(--color-text-primary)] tracking-tight">{skill.name}</h1>
-        <p className="text-sm text-[var(--color-text-secondary)] max-w-3xl leading-relaxed">{skill.description}</p>
+        <h1 className="text-3xl sm:text-4xl font-extrabold text-[var(--color-text-primary)] tracking-tight">{label}</h1>
+        <p className="text-sm text-[var(--color-text-secondary)] max-w-3xl leading-relaxed">{skillDescription(skill)}</p>
         <div className="flex items-center gap-2 pt-1">
           <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full bg-[var(--color-panel)] border border-[var(--color-line)] text-xs font-semibold text-[var(--color-text-primary)]">
-            {skill.category}
+            {SKILL_GROUP_LABELS[group]}
           </span>
         </div>
       </div>

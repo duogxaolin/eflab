@@ -8,31 +8,59 @@ import { PlayerCard } from "@/components/cards/PlayerCard";
 import { PackCarousel } from "@/components/packs/PackCarousel";
 import { QueryErrorState } from "@/lib/query-state";
 import { useDebouncedValue, SEARCH_MIN_LENGTH } from "@/lib/use-debounced-value";
-import { CARD_TYPE_LABELS } from "@eflab/shared";
+import { CARD_TYPE_BY_EFOOTBASE_CODE, CARD_TYPE_LABELS } from "@eflab/shared";
 import { Search, Sparkles, Link2, X } from "lucide-react";
 import { CARD_TYPE_COLOR_VAR, positionOf, statTierClass } from "@/lib/card-display";
 import { playerCardUrl } from "@/lib/r2-images";
 
 // Home quick filters (catalog-browsing-parity "Home Quick Filters Do What They
-// Say"). Card-type scope goes through the /players `type` parameter; labels
-// follow efootbase's own naming: Big Time cards are stored under EPIC and Show
-// Time cards under HIGHLIGHT (see CARD_TYPE_LABELS), so "Epic & Big Time" is
-// exactly the EPIC type. "90+ OVR" sends `ovrMin=90` over all card types.
+// Say"). Card-type scope goes through the /players `card=<efootbase code>`
+// parameter (0 Standard · 1 Legendary · 5 Epic · 6 Highlight, see
+// CARD_TYPE_BY_EFOOTBASE_CODE); labels follow efootbase's own naming: Big Time
+// cards are stored under EPIC and Show Time cards under HIGHLIGHT (see
+// CARD_TYPE_LABELS), so "Epic & Big Time" is exactly the EPIC type. The
+// players page itself defaults to all card types, so no `type=all` is needed;
+// "90+ OVR" sends efootbase's `base=90-` (Base Overall Rating ≥ 90).
+const cardParam = (t: keyof typeof CARD_TYPE_LABELS) =>
+  `/players?card=${Object.entries(CARD_TYPE_BY_EFOOTBASE_CODE).find(([, v]) => v === t)?.[0]}`;
 const QUICK_FILTERS: ReadonlyArray<{ label: string; href: string }> = [
-  { label: `${CARD_TYPE_LABELS.EPIC} & Big Time`, href: "/players?type=EPIC" },
-  { label: `${CARD_TYPE_LABELS.HIGHLIGHT} & Show Time`, href: "/players?type=HIGHLIGHT" },
-  { label: CARD_TYPE_LABELS.LEGENDARY, href: "/players?type=LEGENDARY" },
-  { label: "90+ OVR", href: "/players?ovrMin=90&type=all" },
+  { label: `${CARD_TYPE_LABELS.EPIC} & Big Time`, href: cardParam("EPIC") },
+  { label: `${CARD_TYPE_LABELS.HIGHLIGHT} & Show Time`, href: cardParam("HIGHLIGHT") },
+  { label: CARD_TYPE_LABELS.LEGENDARY, href: cardParam("LEGENDARY") },
+  { label: "90+ OVR", href: "/players?base=90-" },
   { label: "Packs", href: "/packs" },
   { label: "Compare", href: "/compare" },
 ];
+
+/** True when the keyboard event comes from a place where typing is expected. */
+function isTypingTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.isContentEditable) return true;
+  const tag = target.tagName;
+  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+}
 
 export default function HomePage() {
   const router = useRouter();
   const [q, setQ] = useState("");
   const [isFocused, setIsFocused] = useState(false);
   const searchRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
   const listboxId = useId();
+
+  // efootbase home: `/` focuses the search box when the user is not already
+  // typing in a field (and no modal, e.g. the ⌘K palette, is open).
+  useEffect(() => {
+    function onSlash(e: KeyboardEvent) {
+      if (e.key !== "/" || e.metaKey || e.ctrlKey || e.altKey || e.defaultPrevented) return;
+      if (isTypingTarget(e.target) || document.querySelector("dialog[open]")) return;
+      e.preventDefault();
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    }
+    window.addEventListener("keydown", onSlash);
+    return () => window.removeEventListener("keydown", onSlash);
+  }, []);
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -70,7 +98,7 @@ export default function HomePage() {
   const submitSearch = (e: React.FormEvent) => {
     e.preventDefault();
     setIsFocused(false);
-    if (q.trim()) router.push(`/players?q=${encodeURIComponent(q.trim())}`);
+    if (q.trim()) router.push(`/players?search=${encodeURIComponent(q.trim())}`);
     else router.push("/players");
   };
 
@@ -107,6 +135,7 @@ export default function HomePage() {
                 <div className="relative flex items-center">
                   <Search className="absolute left-3.5 size-4 text-[var(--color-text-dim)] pointer-events-none" aria-hidden />
                   <input
+                    ref={inputRef}
                     type="search"
                     value={q}
                     onFocus={() => setIsFocused(true)}
@@ -134,8 +163,12 @@ export default function HomePage() {
                         <X className="size-3.5" aria-hidden />
                       </button>
                     )}
-                    <kbd className="hidden sm:inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono text-[var(--color-text-dim)] bg-[var(--color-panel)] border border-[var(--color-line)]">
-                      ⌘K
+                    <kbd
+                      className="hidden sm:inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono text-[var(--color-text-dim)] bg-[var(--color-panel)] border border-[var(--color-line)]"
+                      title="Press / to search"
+                      aria-label="Press slash to search"
+                    >
+                      /
                     </kbd>
                     <button
                       type="submit"
@@ -234,7 +267,7 @@ export default function HomePage() {
                         type="button"
                         onClick={() => {
                           setIsFocused(false);
-                          router.push(`/players?q=${encodeURIComponent(q.trim())}`);
+                          router.push(`/players?search=${encodeURIComponent(q.trim())}`);
                         }}
                         className="flex w-full items-center justify-center py-2 text-xs font-semibold text-[var(--color-accent)] hover:bg-[var(--color-elevated)] transition-colors cursor-pointer"
                       >
@@ -273,12 +306,21 @@ export default function HomePage() {
         </div>
       </section>
 
-      {/* 1. Latest Players (18 cards, releaseDate DESC, distinct base player) */}
+      {/* 1. Latest Players (18 cards, releaseDate DESC, distinct base player).
+          efootbase calls its section "Trending Players", but that list mixes
+          community signals we do not hold; ours is exactly the "New cards"
+          sort of /players de-duplicated by base player, so it keeps the
+          honest "Latest" label and links to that sort. */}
       <section className="space-y-3" aria-labelledby="home-latest-players">
-        <h2 id="home-latest-players" className="flex items-center gap-2 text-lg font-semibold text-white">
-          <Sparkles className="size-4 text-[var(--color-text-secondary)]" aria-hidden />
-          <span>Latest Players</span>
-        </h2>
+        <header className="flex items-center justify-between gap-3">
+          <h2 id="home-latest-players" className="flex items-center gap-2 text-lg font-semibold text-white">
+            <Sparkles className="size-4 text-[var(--color-text-secondary)]" aria-hidden />
+            <span>Latest Players</span>
+          </h2>
+          <Link href={"/players?sort=new" as Route} className="text-xs font-medium text-[var(--color-text-secondary)] hover:text-[var(--color-accent)]" aria-label="Show all: Latest Players">
+            Show all
+          </Link>
+        </header>
 
         {latest.isError ? (
           <QueryErrorState error={latest.error} onRetry={() => void latest.refetch()} title="Could not load the latest players" />

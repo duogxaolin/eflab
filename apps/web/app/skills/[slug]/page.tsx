@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { fetchSkill, isSlug } from "@/lib/api-server";
+import { skillDescription, skillLabel } from "@/lib/skill-labels";
 import { SkillDetailClient } from "./SkillDetailClient";
 
 // Skill page by slug backed by `skill.byId`; rendered per request so `next
@@ -14,10 +15,11 @@ export async function generateMetadata({ params }: { params: Promise<Params> }):
   if (!isSlug(slug)) return { title: "Skill not found" };
   const skill = await fetchSkill(slug);
   if (!skill) return { title: "Skill not found", robots: { index: false } };
+  const label = skillLabel(skill);
   return {
-    title: `${skill.name} skill`,
-    description: `${skill.name} — ${skill.description} ${skill.playerCount.toLocaleString("en-US")} eFootball cards have this skill.`,
-    openGraph: { title: `${skill.name} skill`, type: "website" },
+    title: `${label} skill`,
+    description: `${label} — ${skillDescription(skill)} ${skill.playerCount.toLocaleString("en-US")} eFootball cards have this skill.`,
+    openGraph: { title: `${label} skill`, type: "website" },
   };
 }
 

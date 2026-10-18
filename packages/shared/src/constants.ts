@@ -233,6 +233,105 @@ export function playingStyleName(id: number | null | undefined): string {
   return PLAYING_STYLES[id] ?? "Basic";
 }
 
+// Playing-style filter groups (efootbase-parity-round2, capture of efootbase
+// /players → "Playing Style" dialog, 2026-10-18). efootbase groups the styles
+// by *style*, not by the slot a card stores it in, and filters with one
+// `playingStyle=<id>` parameter — so the API matches a style in either slot
+// (`playingStyleAttack` OR `playingStyleDefense`). The groups list only ids
+// that real cards in the 2026-10 dump carry (read-only counts, 2026-10-18):
+//   attack slot  → ids 1–22 and 35;  defence slot → 7, 8, 9, 16, 17, 24–30, 33.
+// Verified on real cards against the capture: Neuer / Courtois / Provedel
+// store Attacking GK / Defensive GK in the defence slot, Benjamin André and
+// David Bates store The Destroyer there (efootbase shows all of them under
+// "Defence"). Anchor Man (8) and Box-to-Box (7) sit in both groups on
+// efootbase and in both slots in the dump.
+// Styles efootbase offers that no card in the database carries (they appeared
+// after the dump was taken: Romero's cards still carry The Destroyer where
+// efootbase now shows Tough Marker, Doku's defence slot is Basic where
+// efootbase shows Press Back) are listed by name only — no ids are invented.
+export const PLAYING_STYLE_GROUPS: Readonly<Record<"attack" | "defence", readonly number[]>> = {
+  attack: [1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15, 18, 19, 20, 21, 22, 35],
+  defence: [7, 8, 9, 16, 17, 24, 25, 26, 27, 28, 29, 30, 33],
+};
+export const PLAYING_STYLES_UNAVAILABLE: Readonly<Record<"attack" | "defence", readonly string[]>> = {
+  attack: ["Build-up GK"],
+  defence: ["Deep Defender", "Press Back", "Tough Marker"],
+};
+
+// AI playing styles (efootbase "AI Playing Styles" group) → the boolean flag
+// columns of Player. efootbase also lists "Long Ranger", which has no column
+// in the dump and is therefore not offered.
+export const AI_PLAYING_STYLES = [
+  { key: "earlyCross", label: "Early Crosser" },
+  { key: "incisiveRun", label: "Incisive Run" },
+  { key: "longBallExpert", label: "Long Ball Expert" },
+  { key: "mazingRun", label: "Mazing Run" },
+  { key: "speedingBullet", label: "Speeding Bullet" },
+  { key: "trickster", label: "Trickster" },
+] as const;
+export type AiPlayingStyleKey = (typeof AI_PLAYING_STYLES)[number]["key"];
+export const AI_PLAYING_STYLE_KEYS = AI_PLAYING_STYLES.map((s) => s.key) as readonly AiPlayingStyleKey[];
+
+// ---- Player filter vocabularies (efootbase /players sidebar) ----
+// Condition letters as stored (dump `condition` → [E,D,C,B,A]); the filter
+// shows them worst → best with efootbase's aria labels.
+export const CONDITIONS = ["E", "D", "C", "B", "A"] as const;
+export type Condition = (typeof CONDITIONS)[number];
+export const CONDITION_FILTER_LABELS: Readonly<Record<Condition, string>> = {
+  E: "Slump Form",
+  D: "Poor Form",
+  C: "Normal Form",
+  B: "Good Form",
+  A: "Peak Form",
+};
+// Form 0..2 (dump meta: Inconsistent / Standard / Unwavering) — efootbase
+// filters it as 1–3 stars, i.e. stars = value + 1.
+export const FORM_LABELS = ["Inconsistent", "Standard", "Unwavering"] as const;
+// Weak-foot usage / accuracy 0..3 (dump meta) — efootbase filters them as
+// 1–4 stars (stars = value + 1).
+export const WEAK_FOOT_USAGE_LABELS = ["Almost Never", "Rarely", "Occasionally", "Regularly"] as const;
+export const WEAK_FOOT_ACCURACY_LABELS = ["Low", "Medium", "High", "Very High"] as const;
+
+// Range bounds accepted by the list filters (Zod + UI). Wider than the data
+// (height 155–206, weight 41–113, age 15–50, stats 40–105, body 0–14 in the
+// 2026-10 dump) so a future dump never trips a 400; efootbase's sliders use
+// 100–220 / 30–120 / 16–100 / 40–120 / 0–15.
+export const FILTER_RANGE_BOUNDS = {
+  ovr: [0, 100],
+  maxOvr: [0, 120],
+  height: [100, 250],
+  weight: [30, 150],
+  age: [10, 100],
+  stat: [0, 200],
+  physique: [0, 15],
+} as const satisfies Record<string, readonly [number, number]>;
+
+// Sort presets of the players page (efootbase "Sort by" radio group:
+// Trending · New cards · Top rated · High to low · Low to high). The keys are
+// efootbase's own URL values where they were observed (`sort=top`,
+// `sort=highest`, `sort=new`; Trending = parameter absent); `lowest` is our
+// name for the unobserved fifth value. Definitions (all end on the id
+// tiebreaker, see `orderByFor` in the API's player router):
+//   trending → releaseDate DESC (nulls last), maxOvr DESC, id DESC
+//              (the strongest cards of the newest release first — efootbase's
+//              real "Trending" mixes community signals we do not hold)
+//   new      → releaseDate DESC (nulls last), id DESC
+//   top      → maxOvr DESC, id DESC          (max overall rating)
+//   highest  → ovr DESC, id DESC             (base overall rating)
+//   lowest   → ovr ASC, id ASC
+// A preset ignores `order`; the explicit field sorts (SORT_FIELDS) keep it.
+export const SORT_PRESETS = ["trending", "new", "top", "highest", "lowest"] as const;
+export type SortPreset = (typeof SORT_PRESETS)[number];
+export const DEFAULT_SORT_PRESET: SortPreset = "trending";
+export const SORT_PRESET_LABELS: Readonly<Record<SortPreset, string>> = {
+  trending: "Trending",
+  new: "New cards",
+  top: "Top rated",
+  highest: "High to low",
+  lowest: "Low to high",
+};
+export const isSortPreset = (s: string): s is SortPreset => (SORT_PRESETS as readonly string[]).includes(s);
+
 // efootbase playing-style id → short description (from efootbase player detail page).
 // Used on the player detail page tactical box. Keys without a known description are
 // omitted (the UI falls back to just the style name). Sourced from efootbase

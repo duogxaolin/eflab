@@ -4,15 +4,17 @@ import Link from "next/link";
 import { trpc } from "@/lib/trpc";
 import { PlayerCard } from "@/components/cards/PlayerCard";
 import { QueryErrorState } from "@/lib/query-state";
+import { SKILL_GROUP_LABELS, SKILL_GROUP_ORDER, compareSkills, skillDescription, skillGroup, skillLabel, type SkillGroup } from "@/lib/skill-labels";
 import type { SkillDTO } from "@eflab/shared";
 import { Sparkles } from "lucide-react";
 
-// Skills index (design decision 13): every number comes from the API —
-// `playerCount` is the grouped PlayerSkill count, share = count / all cards,
-// and the "top cards" of the Premium group are real holders (skill.players,
-// ovr DESC). Nothing is synthesised: no rarity, rank, stat-boost or
-// "Showtime" heuristics — the only grouping is the stored `category`.
-const PREMIUM_CATEGORY = "Premium";
+// Skills index (efootbase-parity-round2 "Skills Grouping"): every number comes
+// from the API — `playerCount` is the grouped PlayerSkill count, share = count
+// / all cards, and the "top cards" of the Showtime group are real holders
+// (skill.players, ovr DESC). The grouping and the display labels are the
+// web-only table in lib/skill-labels.ts (verified against efootbase's skill
+// list); nothing is synthesised — no rarity, rank or stat boosts, and no
+// invented tier label.
 const ALL = "ALL";
 
 function shareOf(count: number, total: number | undefined): string {
@@ -50,22 +52,18 @@ function SkillTopCards({ slug }: { slug: string }) {
   );
 }
 
-function SkillCard({ skill, total, premium }: { skill: SkillDTO; total: number | undefined; premium: boolean }) {
+function SkillCard({ skill, total, showTopCards }: { skill: SkillDTO; total: number | undefined; showTopCards: boolean }) {
   const empty = skill.playerCount === 0;
+  const label = skillLabel(skill);
   return (
     <article className="min-w-0 rounded-2xl border border-[var(--color-line)]/80 bg-[var(--color-panel)]/50 p-4 space-y-3 flex flex-col justify-between hover:border-[var(--color-line-active)] transition-colors">
       <div className="space-y-2">
-        <div className="flex items-start justify-between gap-2">
-          <h3 className="font-bold text-sm text-[var(--color-text-primary)]">
-            <Link href={`/skills/${skill.slug}`} className="hover:text-[var(--color-accent)] transition-colors">
-              {skill.name}
-            </Link>
-          </h3>
-          <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-[var(--color-elevated)] text-[var(--color-text-secondary)] border border-[var(--color-line)] shrink-0">
-            {skill.category}
-          </span>
-        </div>
-        <p className="text-xs text-[var(--color-text-secondary)] leading-snug line-clamp-3">{skill.description}</p>
+        <h3 className="font-bold text-sm text-[var(--color-text-primary)]">
+          <Link href={`/skills/${skill.slug}`} className="hover:text-[var(--color-accent)] transition-colors">
+            {label}
+          </Link>
+        </h3>
+        <p className="text-xs text-[var(--color-text-secondary)] leading-snug line-clamp-3">{skillDescription(skill)}</p>
         <div className="flex items-center gap-2 text-[11px] font-mono text-[var(--color-text-dim)] tabular-nums">
           <span className={empty ? "text-[var(--color-text-dim)]" : "text-white"}>{skill.playerCount.toLocaleString("en-US")} cards</span>
           <span aria-hidden>·</span>
@@ -73,7 +71,7 @@ function SkillCard({ skill, total, premium }: { skill: SkillDTO; total: number |
         </div>
       </div>
 
-      {premium && (
+      {showTopCards && (
         <div className="pt-3 border-t border-[var(--color-line)]/60 space-y-2">
           <div className="text-[11px] font-medium text-[var(--color-text-dim)]">Top cards</div>
           {empty ? <p className="text-[11px] text-[var(--color-text-dim)] italic">No cards have this skill.</p> : <SkillTopCards slug={skill.slug} />}
@@ -91,21 +89,19 @@ function SkillCard({ skill, total, premium }: { skill: SkillDTO; total: number |
 }
 
 export function SkillsClient() {
-  const [activeTab, setActiveTab] = useState<string>(ALL);
+  const [activeTab, setActiveTab] = useState<SkillGroup | typeof ALL>(ALL);
   const skillsQuery = trpc.skill.list.useQuery({}, { staleTime: 60 * 60_000 });
   const catalogue = trpc.player.list.useQuery({ page: 1, limit: 1 }, { staleTime: 60 * 60_000 });
   const totalCards = catalogue.data?.total;
 
-  const skills = useMemo(() => skillsQuery.data ?? [], [skillsQuery.data]);
-  const categories = useMemo(() => {
-    const seen = new Map<string, number>();
-    for (const s of skills) seen.set(s.category, (seen.get(s.category) ?? 0) + 1);
-    // Premium first (efootbase leads with its premium skills), then alphabetical.
-    return Array.from(seen.entries()).sort(([a], [b]) =>
-      a === PREMIUM_CATEGORY ? -1 : b === PREMIUM_CATEGORY ? 1 : a.localeCompare(b),
-    );
-  }, [skills]);
-  const visibleCategories = activeTab === ALL ? categories : categories.filter(([c]) => c === activeTab);
+  // Showtime first, then Classic, both in efootbase's order; the fixture
+  // entries efootbase does not list (all with 0 holders) come last.
+  const groups = useMemo(() => {
+    const sorted = [...(skillsQuery.data ?? [])].sort(compareSkills);
+    return SKILL_GROUP_ORDER.map((group) => ({ group, skills: sorted.filter((s) => skillGroup(s.slug) === group) })).filter((g) => g.skills.length > 0);
+  }, [skillsQuery.data]);
+  const skills = skillsQuery.data ?? [];
+  const visibleGroups = activeTab === ALL ? groups : groups.filter((g) => g.group === activeTab);
   const totalHolders = skills.reduce((acc, s) => acc + s.playerCount, 0);
 
   const tabClass = (selected: boolean) =>
@@ -129,7 +125,7 @@ export function SkillsClient() {
       <div className="space-y-1">
         <h1 className="text-3xl font-bold sm:text-4xl text-white tracking-tight">Skills</h1>
         <p className="text-xs sm:text-sm text-[var(--color-text-secondary)] max-w-3xl leading-relaxed">
-          Every eFootball skill in one place, with how many cards carry it and the top cards that have it.
+          Every eFootball skill in one place — Showtime skills with the top cards that carry them, plus all classic skills.
         </p>
       </div>
 
@@ -159,38 +155,41 @@ export function SkillsClient() {
         </div>
       ) : (
         <>
-          {/* Category tabs */}
-          <div role="tablist" aria-label="Skill categories" className="flex flex-wrap items-center gap-2 pt-1">
+          {/* Group tabs */}
+          <div role="tablist" aria-label="Skill groups" className="flex flex-wrap items-center gap-2 pt-1">
             <button role="tab" type="button" aria-selected={activeTab === ALL} aria-controls="skills-panel" onClick={() => setActiveTab(ALL)} className={tabClass(activeTab === ALL)}>
               All ({skills.length})
             </button>
-            {categories.map(([category, count]) => (
+            {groups.map(({ group, skills: list }) => (
               <button
-                key={category}
+                key={group}
                 role="tab"
                 type="button"
-                aria-selected={activeTab === category}
+                aria-selected={activeTab === group}
                 aria-controls="skills-panel"
-                onClick={() => setActiveTab(category)}
-                className={tabClass(activeTab === category)}
+                onClick={() => setActiveTab(group)}
+                className={tabClass(activeTab === group)}
               >
-                {category} ({count})
+                {SKILL_GROUP_LABELS[group]} ({list.length})
               </button>
             ))}
           </div>
 
           <div id="skills-panel" role="tabpanel" className="space-y-10">
-            {visibleCategories.map(([category, count]) => (
-              <section key={category} className="space-y-4" aria-labelledby={`skills-${category}`}>
-                <h2 id={`skills-${category}`} className="text-lg font-bold text-[var(--color-text-primary)] tracking-tight">
-                  {category} <span className="text-sm font-normal text-[var(--color-text-dim)]">({count})</span>
+            {visibleGroups.map(({ group, skills: list }) => (
+              <section key={group} className="space-y-4" aria-labelledby={`skills-${group}`}>
+                <h2 id={`skills-${group}`} className="text-lg font-bold text-[var(--color-text-primary)] tracking-tight">
+                  {SKILL_GROUP_LABELS[group]} <span className="text-sm font-normal text-[var(--color-text-dim)]">({list.length})</span>
                 </h2>
-                <div className={`grid gap-3 sm:grid-cols-2 ${category === PREMIUM_CATEGORY ? "lg:grid-cols-3" : "md:grid-cols-3 lg:grid-cols-4"}`}>
-                  {skills
-                    .filter((s) => s.category === category)
-                    .map((s) => (
-                      <SkillCard key={s.id} skill={s} total={totalCards} premium={category === PREMIUM_CATEGORY} />
-                    ))}
+                {group === "other" && (
+                  <p className="text-xs text-[var(--color-text-secondary)] max-w-3xl">
+                    Catalogue entries that are not part of the game&apos;s skill list (AI playing styles, motion styles and set-piece variants); no card carries them.
+                  </p>
+                )}
+                <div className={`grid gap-3 sm:grid-cols-2 ${group === "showtime" ? "lg:grid-cols-3" : "md:grid-cols-3 lg:grid-cols-4"}`}>
+                  {list.map((s) => (
+                    <SkillCard key={s.id} skill={s} total={totalCards} showTopCards={group === "showtime"} />
+                  ))}
                 </div>
               </section>
             ))}

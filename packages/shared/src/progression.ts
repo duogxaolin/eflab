@@ -46,6 +46,41 @@ export interface BoosterLike {
 /** Stat points per cost tier: points 1–4 cost 0.5, 5–8 cost 1, … */
 export const COST_TIER_SIZE = 4;
 
+/** efootbase shows the same budget in whole points — exactly twice our
+ *  training points (its progression sheet reads "62/62 pts" for a level-32
+ *  card whose budget is 31 here; the first four stat points of a category
+ *  cost 1 each in that unit). The engine keeps half-points; the UI converts
+ *  with `toDisplayPoints` wherever a point value is printed. */
+export const POINT_DISPLAY_SCALE = 2;
+export const toDisplayPoints = (points: number): number => Math.round(points * POINT_DISPLAY_SCALE);
+
+/** Category labels as efootbase prints them in its progression sheet
+ *  (capture 2026-10-18): the three short names of TRAINING_CATEGORY_LABELS
+ *  ("Lower Body", "Aerial", "GK 1–3") are spelled out there. The web panel
+ *  uses this table. */
+export const PROGRESSION_CATEGORY_LABELS: Readonly<Record<TrainingCategory, string>> = {
+  Shooting: "Shooting",
+  Passing: "Passing",
+  Dribbling: "Dribbling",
+  Dexterity: "Dexterity",
+  LowerBody: "Lower Body Strength",
+  Aerial: "Aerial Strength",
+  Defending: "Defending",
+  GK1: "Goalkeeper 1",
+  GK2: "Goalkeeper 2",
+  GK3: "Goalkeeper 3",
+};
+
+/** Overall gap measured against efootbase's Progression sheet on 2026-10-18.
+ *  efootbase applies a "Manager Proficiency" bonus (slider 70–90, default 90)
+ *  that this engine does not model: at 70 the two agree (Messi SS 6/6 builds
+ *  within ±1, 155/156 stats identical); at efootbase's default 90 its overall
+ *  is about 4 higher (Messi SS 24 builds: mean −3.9, 0/24 within ±1; Neuer
+ *  GK 8 builds: about −5). A verified model needs fresh measurements on ≥ 3
+ *  other cards including a goalkeeper — efootbase answered the second page
+ *  load of that attempt with a Cloudflare challenge, so only the label ships. */
+export const MANAGER_PROFICIENCY_GAP = { efootbaseDefault: 90, approxOvrGap: 4, matchesAt: 70 } as const;
+
 export const zeroStats = (): StatVector =>
   Object.fromEntries(BASE_STATS.map((s) => [s, 0])) as StatVector;
 

@@ -8,14 +8,18 @@ import { formatUtcDate } from "@/lib/format-date";
 // /packs — efootbase-aligned flat listing of the featured bundles (24 in the
 // 2026-10 data: 17 specialPlayerList + 7 spotlight packs). Source: FeaturedBundle
 // table seeded from dump/efootbase/packs.json. efootbase /packs has NO filter
-// UI — a header ("24 packs · 189 players") + one section per bundle in
-// releaseDate DESC order, each linking to its bundle page by slug.
+// UI — a plain-text header ("24 packs · 166 players", no emoji) + one section
+// per bundle in releaseDate DESC order, each linking to its bundle page by slug.
+// "Players" counts distinct base players across all bundles (a player featured
+// in two bundles, or with two cards, counts once); "cards" per bundle counts
+// card rows.
 export function PacksClient() {
   const bundlesQuery = trpc.featured.list.useQuery();
   const list = [...(bundlesQuery.data ?? [])].sort(
     (a, b) => new Date(b.releaseDate).getTime() - new Date(a.releaseDate).getTime() || a.position - b.position,
   );
-  const totalPlayers = list.reduce((acc, b) => acc + b.cards.length, 0);
+  const totalCards = list.reduce((acc, b) => acc + b.cards.length, 0);
+  const totalPlayers = new Set(list.flatMap((b) => b.cards.map((c) => c.baseId))).size;
 
   return (
     <div className="space-y-6">
@@ -39,11 +43,14 @@ export function PacksClient() {
 
       {bundlesQuery.isSuccess && (
         <div className="flex flex-wrap items-center gap-2 pt-1 text-xs">
-          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-[var(--color-panel)] border border-[var(--color-line)] text-white font-medium">
-            <span aria-hidden>📦</span> {list.length} packs
+          <span className="inline-flex items-center px-3 py-1 rounded-lg bg-[var(--color-panel)] border border-[var(--color-line)] text-white font-medium tabular-nums">
+            {list.length} packs
           </span>
-          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-[var(--color-panel)] border border-[var(--color-line)] text-white font-medium">
-            <span aria-hidden>👥</span> {totalPlayers} players
+          <span className="inline-flex items-center px-3 py-1 rounded-lg bg-[var(--color-panel)] border border-[var(--color-line)] text-white font-medium tabular-nums">
+            {totalPlayers} players
+          </span>
+          <span className="inline-flex items-center px-3 py-1 rounded-lg bg-[var(--color-panel)] border border-[var(--color-line)] text-[var(--color-text-secondary)] font-medium tabular-nums">
+            {totalCards} cards
           </span>
         </div>
       )}

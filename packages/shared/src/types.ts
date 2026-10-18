@@ -1,4 +1,4 @@
-import type { BaseStat, CardType, Position, PositionProficiency, TrainingCategory } from "./constants";
+import type { BaseStat, CardType, PhysiqueField, Position, PositionProficiency, TrainingCategory } from "./constants";
 
 // Serialized DTO shapes (what tRPC returns after SuperJSON). BigInt → string.
 /** Everything a PlayerCard tile needs in a list/grid (player.list, trending,
@@ -91,6 +91,27 @@ export interface PlayerCardDTO extends CardPreview {
   teamName: string | null;
   leagueName: string | null;
   leagueEmblemUrl: string | null;
+  // ---- Detail-only extras (efootbase-parity-round2). The columns exist in
+  // the database (Player.form / injuryResistance / 11 physique Ints / 5 derived
+  // Floats) and are optional here so the detail page can render the sections
+  // as soon as player.byId carries them; a producer that does not select them
+  // leaves them undefined and the UI shows an "not exposed" note, never a
+  // substitute number.
+  /** Form 0–2 — efootbase shows it as (value + 1) stars of 3. */
+  form?: number;
+  /** Injury resistance 0–2 — efootbase shows it as (value + 1) stars of 3. */
+  injuryResistance?: number;
+  /** 11 body-model values (1–10), keyed by PhysiqueField. */
+  physique?: Record<PhysiqueField, number>;
+  /** 5 derived body metrics (floats) — efootbase's "Leg Coverage Radius",
+   *  "Arm Coverage Radius", "Jump Height", "Torso Collision", "Leg Length Height". */
+  bodyMetrics?: {
+    legCoverage: number;
+    armCoverage: number;
+    peakJumpHeight: number;
+    torsoCollisionWidth: number;
+    dribbleHeight: number;
+  };
 }
 
 export interface SkillDTO {

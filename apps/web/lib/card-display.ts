@@ -37,25 +37,64 @@ export function positionOf(idx: number): Position | "—" {
   return POSITION_BY_INDEX[idx]!;
 }
 
-// Stat color tier for display.
+// Stat colour tier for display — five tiers over the `--color-tier-*` tokens
+// (globals.css @theme, the single source): ≥ 100 max (magenta, efootbase's
+// colour for trained stats past 99), 90–99 elite, 80–89 high, 70–79 mid,
+// < 70 low.
+export type StatTier = "max" | "elite" | "high" | "mid" | "low";
+export function statTier(value: number): StatTier {
+  if (value >= 100) return "max";
+  if (value >= 90) return "elite";
+  if (value >= 80) return "high";
+  if (value >= 70) return "mid";
+  return "low";
+}
+// Literal class strings (Tailwind only generates utilities it can see in source).
+const TIER_TEXT_CLASS: Readonly<Record<StatTier, string>> = {
+  max: "text-[var(--color-tier-max)]",
+  elite: "text-[var(--color-tier-elite)]",
+  high: "text-[var(--color-tier-high)]",
+  mid: "text-[var(--color-tier-mid)]",
+  low: "text-[var(--color-tier-low)]",
+};
+const TIER_BG_CLASS: Readonly<Record<StatTier, string>> = {
+  max: "bg-[var(--color-tier-max)]",
+  elite: "bg-[var(--color-tier-elite)]",
+  high: "bg-[var(--color-tier-high)]",
+  mid: "bg-[var(--color-tier-mid)]",
+  low: "bg-[var(--color-tier-low)]",
+};
+export const tierTextClass = (tier: StatTier): string => TIER_TEXT_CLASS[tier];
+export const tierBgClass = (tier: StatTier): string => TIER_BG_CLASS[tier];
 export function statTierClass(value: number): string {
-  if (value >= 90) return "text-[var(--color-tier-elite)]";
-  if (value >= 80) return "text-[var(--color-tier-high)]";
-  if (value >= 70) return "text-[var(--color-tier-mid)]";
-  return "text-[var(--color-tier-low)]";
+  return TIER_TEXT_CLASS[statTier(value)];
 }
 
 export function statTierBg(value: number): string {
-  if (value >= 90) return "bg-[var(--color-tier-elite)]";
-  if (value >= 80) return "bg-[var(--color-tier-high)]";
-  if (value >= 70) return "bg-[var(--color-tier-mid)]";
-  return "bg-[var(--color-tier-low)]";
+  return TIER_BG_CLASS[statTier(value)];
+}
+
+/** Text colour that reads on a tier-coloured pill: the four bright tiers
+ *  (magenta, teal, lime, amber) take the dark on-accent text, red takes white. */
+export function statTierForeground(value: number): string {
+  return statTier(value) === "low" ? "text-white" : "text-[var(--color-accent-foreground)]";
+}
+
+/** Body-model values run 1–10: 7+ reads as high, 4–6 as mid, 1–3 as low. */
+export function physiqueTier(value: number): StatTier {
+  if (value >= 7) return "high";
+  if (value >= 4) return "mid";
+  return "low";
 }
 
 // Stat labels that are not a plain camelCase → "Title Case" split (game naming
-// differs from the internal key, or the key carries an acronym).
+// differs from the internal key, or the key carries an acronym). The wording
+// follows efootbase's player page ("Place Kicking", "Jumping", "Tackling" —
+// capture 2026-10-18); the dump keys stay `set_piece_taking` / `jumping` /
+// `tackling` → placeKicking / jump / ballWinning.
 const STAT_LABEL_OVERRIDES: Partial<Record<BaseStat, string>> = {
-  placeKicking: "Set Piece Taking",
+  placeKicking: "Place Kicking",
+  jump: "Jumping",
   ballWinning: "Tackling",
   gkAwareness: "GK Awareness",
   gkCatching: "GK Catching",
@@ -140,8 +179,11 @@ export const PHYSIQUE_LABEL: Readonly<Record<PhysiqueField, string>> = {
 // efootbase "Body Model" panel render order (mirrors the verbatim efootbase layout).
 export const PHYSIQUE_ORDER: readonly PhysiqueField[] = PHYSIQUE_FIELDS;
 
-// Derived body-model float label + efootbase display label.
-export const DERIVED_LABEL: Readonly<Record<string, string>> = {
+// Derived body-model float label + efootbase display label, in efootbase's
+// "Body Model" order (keys = PlayerCardDTO.bodyMetrics).
+export type BodyMetricKey = "legCoverage" | "armCoverage" | "peakJumpHeight" | "torsoCollisionWidth" | "dribbleHeight";
+export const BODY_METRIC_ORDER: readonly BodyMetricKey[] = ["legCoverage", "armCoverage", "peakJumpHeight", "torsoCollisionWidth", "dribbleHeight"];
+export const DERIVED_LABEL: Readonly<Record<BodyMetricKey, string>> = {
   legCoverage: "Leg Coverage Radius",
   armCoverage: "Arm Coverage Radius",
   peakJumpHeight: "Jump Height",

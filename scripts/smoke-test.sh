@@ -211,6 +211,84 @@ for CT in STANDARD LEGENDARY TRENDING SELECTION EPIC HIGHLIGHT STRIKE_ARENA; do
   fi
 done
 
+# 5b. default scope = the whole catalogue: an unfiltered list equals the sum of
+#     the per-type totals (efootbase-parity-round2 "Default scope")
+CT_SUM=0
+for CT in STANDARD LEGENDARY TRENDING SELECTION EPIC HIGHLIGHT STRIKE_ARENA; do
+  trpc_get "player.list" "{\"cardType\":\"$CT\",\"limit\":1}"
+  CT_SUM=$((CT_SUM + $(result 'd["total"]')))
+done
+trpc_get "player.list" '{"limit":1}'
+ALL_TOTAL="$(result 'd["total"]')"
+if [ "$CODE" = "200" ] && [ -n "$ALL_TOTAL" ] && [ "$ALL_TOTAL" = "$CT_SUM" ] && [ "$ALL_TOTAL" -gt 40000 ]; then
+  pass "player.list unfiltered → $ALL_TOTAL cards = sum of all card types (default scope is everything)"
+else
+  fail "player.list unfiltered equals the sum of the card types" "all=$ALL_TOTAL sum=$CT_SUM code=$CODE"
+fi
+
+# 5c. sort presets (Trending · New cards · Top rated · High to low · Low to high):
+#     each answers 200 and pages 1–5 carry no duplicate id
+for PRESET in trending new top highest lowest; do
+  P_IDS="$(mktemp -t eflab-smoke-preset.XXXXXX)"
+  P_FAIL=""
+  for P in 1 2 3 4 5; do
+    trpc_get "player.list" "{\"page\":$P,\"limit\":24,\"sort\":\"$PRESET\"}"
+    if [ "$CODE" != "200" ]; then P_FAIL="page $P code=$CODE"; break; fi
+    result '"\n".join(str(i["id"]) for i in d["items"])' >>"$P_IDS"
+  done
+  P_TOTAL="$(grep -c . "$P_IDS")"
+  P_DUP="$(sort "$P_IDS" | uniq -d | wc -l | tr -d ' ')"
+  if [ -z "$P_FAIL" ] && [ "$P_TOTAL" = "120" ] && [ "$P_DUP" = "0" ]; then
+    pass "player.list sort=$PRESET pages 1–5 → 120 ids, 0 duplicates"
+  else
+    fail "player.list sort=$PRESET pages 1–5 → no duplicates" "${P_FAIL:-ids=$P_TOTAL duplicates=$P_DUP}"
+  fi
+  rm -f "$P_IDS"
+done
+# "High to low" and "Low to high" sort by base overall: first ovr of each must bracket the catalogue
+trpc_get "player.list" '{"page":1,"limit":1,"sort":"highest"}'
+HI_OVR="$(result 'd["items"][0]["ovr"]')"
+trpc_get "player.list" '{"page":1,"limit":1,"sort":"lowest"}'
+LO_OVR="$(result 'd["items"][0]["ovr"]')"
+if [ -n "$HI_OVR" ] && [ -n "$LO_OVR" ] && [ "$HI_OVR" -gt "$LO_OVR" ]; then
+  pass "sort=highest starts at OVR $HI_OVR, sort=lowest at OVR $LO_OVR"
+else
+  fail "sort=highest / sort=lowest bracket the catalogue" "hi=$HI_OVR lo=$LO_OVR"
+fi
+
+# 5d. the new filters narrow the list and never widen it; an AND of two skills
+#     is a subset of one skill; a bound outside the schema → 400
+trpc_get "player.list" '{"limit":1,"conditionIn":["A"],"formIn":[2],"weakFootAccuracyIn":[3],"weakFootUsageIn":[3]}'
+NARROW="$(result 'd["total"]')"
+trpc_get "player.list" '{"limit":1,"skillIds":[1]}'
+SK1="$(result 'd["total"]')"
+trpc_get "player.list" '{"limit":1,"skillIds":[1,2]}'
+SK12="$(result 'd["total"]')"
+trpc_get "player.list" '{"limit":1,"ovrMin":90,"heightMin":185,"statRanges":[{"stat":"speed","min":85}],"statsAtMax":true,"bodyRanges":[{"field":"neckLength","max":9}]}'
+COMBO="$(result 'd["total"]')"
+if [ -n "$NARROW" ] && [ -n "$SK1" ] && [ -n "$SK12" ] && [ -n "$COMBO" ] && [ "$NARROW" -lt "$ALL_TOTAL" ] && [ "$SK12" -le "$SK1" ] && [ "$SK1" -gt 0 ] && [ "$COMBO" -ge 0 ]; then
+  pass "filters narrow: condition/form/WF → $NARROW · skill 1 → $SK1 · skills 1+2 → $SK12 · ovr/height/stat/body combo → $COMBO"
+else
+  fail "new player.list filters narrow the list" "narrow=$NARROW sk1=$SK1 sk12=$SK12 combo=$COMBO code=$CODE"
+fi
+trpc_get "player.list" '{"limit":1,"heightMin":999}'
+if [ "$CODE" = "400" ]; then
+  pass "player.list heightMin=999 → 400 (bounded range)"
+else
+  fail "player.list heightMin=999 → 400" "code=$CODE body=${BODY:0:160}"
+fi
+
+# 5e. league / team lists for the filters
+trpc_get "player.leagues" '{}'
+LEAGUES="$(result 'len(d)')"
+trpc_get "player.teams" '{}'
+TEAMS="$(result 'len(d)')"
+if [ "$CODE" = "200" ] && [ -n "$LEAGUES" ] && [ "$LEAGUES" -gt 0 ] && [ -n "$TEAMS" ] && [ "$TEAMS" -gt "$LEAGUES" ]; then
+  pass "player.leagues → $LEAGUES leagues · player.teams → $TEAMS teams"
+else
+  fail "player.leagues / player.teams" "leagues=$LEAGUES teams=$TEAMS code=$CODE"
+fi
+
 # 6. pagination: 10 pages sorted by Speed carry no duplicate id (deterministic tiebreaker)
 IDS_FILE="$(mktemp -t eflab-smoke-ids.XXXXXX)"
 PAGE_FAIL=""

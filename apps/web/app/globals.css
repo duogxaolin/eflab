@@ -59,7 +59,8 @@
   /* ---- Stat tier colours — the SINGLE source for every tier colour.
      Consumers: statTierClass/statTierBg (lib/card-display.ts) and the
      `.text-stat-tier-*` / `.bg-stat-tier-*` aliases below. ---- */
-  --color-tier-elite: #00ffb4;   /* 90+ */
+  --color-tier-max: #ff2fb4;     /* 100+ (trained past 99 — efootbase magenta) */
+  --color-tier-elite: #00ffb4;   /* 90–99 */
   --color-tier-high: #96ff00;    /* 80–89 */
   --color-tier-mid: #ffbe00;     /* 70–79 */
   --color-tier-low: #ff3200;     /* <70 */
@@ -676,8 +677,17 @@
     font-size: 0.875rem;
   }
 
+  /* ── Progression slider (efootbase row: label, − n +, 0–N slider) ─────── */
+  .progression-slider {
+    accent-color: var(--color-accent);
+    height: 0.75rem;
+    cursor: pointer;
+  }
+
   /* ── Stat tiers & stat row ─────────────────────────────────────────────── */
   /* Aliases over the tier tokens (no second copy of the hex values). */
+  .text-stat-tier-magenta { color: var(--color-tier-max); }
+  .bg-stat-tier-magenta   { background-color: var(--color-tier-max); }
   .text-stat-tier-cyan   { color: var(--color-tier-elite); }
   .bg-stat-tier-cyan     { background-color: var(--color-tier-elite); }
   .text-stat-tier-green  { color: var(--color-tier-high); }
@@ -704,14 +714,24 @@
     background-color: var(--color-elevated);
     border-color: var(--color-line);
   }
+  /* The label is never truncated: the grid gives each column room for the
+     longest name ("Defensive Engagement") from 390 px up, and a narrower
+     container wraps the words instead of clipping them. */
   .efb-stat-row__label {
     flex: 1;
     min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    overflow-wrap: anywhere;
     font-size: 0.875rem;
     font-weight: 500;
+    line-height: 1.2;
+  }
+  /* Click-to-highlight: rows outside the selected category / stat dim. */
+  .efb-stat-row[data-dim="true"] {
+    opacity: 0.4;
+  }
+  .efb-stat-row[data-hit="true"] {
+    border-color: color-mix(in srgb, var(--color-accent) 55%, transparent);
+    background-color: color-mix(in srgb, var(--color-accent) 10%, var(--color-panel));
   }
   .efb-stat-row__boost {
     font-family: monospace;

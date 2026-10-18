@@ -1,12 +1,13 @@
 "use client";
 import { useId, useState, type ChangeEvent, type KeyboardEvent } from "react";
 import {
+  MANAGER_PROFICIENCY_GAP,
   OVR_LOWER_CONFIDENCE_POSITIONS,
   OVR_PROFICIENCY_LOWER_CONFIDENCE,
   POSITIONS,
   PROFICIENCY_LABELS,
+  PROGRESSION_CATEGORY_LABELS,
   TRAINING_CATEGORIES,
-  TRAINING_CATEGORY_LABELS,
   TRAINING_STATS,
   allocationCost,
   bestAllocation,
@@ -17,6 +18,7 @@ import {
   nextStatPointCost,
   positionFromIndex,
   proficiencyFromAptitude,
+  toDisplayPoints,
   trainingPointsAvailable,
   type BaseStat,
   type BuildResult,
@@ -27,15 +29,17 @@ import {
   type TrainingCategory,
 } from "@eflab/shared";
 import { statLabel } from "@/lib/card-display";
-import { Sparkles } from "lucide-react";
+import { RotateCcw, Sparkles } from "lucide-react";
 
-// Progression sheet of the player detail page (player-progression-simulator).
-// The parent owns the state (it feeds the projected stats into the stat
-// sections and the card overlay) and runs the shared engine; this component
-// renders the controls: Max Level, position, ten category steppers with the
-// next cost, points used / left, Booster 1 / 2 toggles, Max OVR and Reset.
-// The rules it follows are the ones recovered from the eFHUB data — see
-// packages/shared/src/progression.ts.
+// Progression sheet of the player detail page (player-progression-simulator,
+// aligned with efootbase's sheet in efootbase-parity-round2). The parent owns
+// the state (it feeds the projected stats into the stat grid and the card
+// face) and runs the shared engine; this component renders the controls:
+// Max Level, position, ten category rows (label button, − n +, slider) with
+// the next cost, "used/total pts", Booster 1 / 2 toggles, Max OVR and Reset.
+// Points are printed in efootbase's whole-point unit (toDisplayPoints: twice
+// the engine's training points). The rules are the ones recovered from the
+// eFHUB data — see packages/shared/src/progression.ts.
 
 export interface ProgressionState {
   maxLevel: number;
@@ -44,19 +48,9 @@ export interface ProgressionState {
   boosters: [boolean, boolean];
 }
 
-/** Untouched state of a card: level cap, registered position, no training,
- *  Booster 1 on (it is applied by default in the game), Booster 2 off. */
-export function defaultProgressionState(player: Pick<PlayerCardDTO, "levelCap" | "registeredPosition">): ProgressionState {
-  return {
-    maxLevel: Math.max(1, player.levelCap),
-    position: positionFromIndex(player.registeredPosition),
-    trainingPoints: emptyAllocation(),
-    boosters: [true, false],
-  };
-}
-
 type BoosterSlotInfo = { label: string; deltas: Array<[BaseStat, number]>; usable: boolean };
 type BoosterPlayer = Pick<PlayerCardDTO, "boosterId1" | "boosterId2" | "booster1" | "booster2">;
+type DefaultsPlayer = Pick<PlayerCardDTO, "levelCap" | "registeredPosition"> & BoosterPlayer;
 
 /** Booster slot: resolved name + sparse deltas, or the reason it is unusable.
  *  A booster whose stat vector is empty (e.g. the seeded "Booster +1" rows
@@ -74,25 +68,41 @@ export function boosterSummary(player: BoosterPlayer, slot: 0 | 1): BoosterSlotI
   return { label: "none", deltas: [], usable: false };
 }
 
-/** True once the user changed anything from the default state. Booster
- *  toggles only count on slots that carry a usable booster. */
+/** Opening state of a card, as efootbase opens its sheet: the card's level
+ *  cap, its registered position, the Max-OVR allocation for that budget and
+ *  every usable booster on (a slot without stat data stays off — there is
+ *  nothing to apply). */
+export function defaultProgressionState(player: DefaultsPlayer): ProgressionState {
+  const levelCap = Math.max(1, player.levelCap);
+  const position = positionFromIndex(player.registeredPosition);
+  return {
+    maxLevel: levelCap,
+    position,
+    trainingPoints: bestAllocation(position, trainingPointsAvailable(levelCap), { goalkeeper: isGoalkeeperCard(position) }),
+    boosters: [boosterSummary(player, 0).usable, boosterSummary(player, 1).usable],
+  };
+}
+
+/** True once the state differs from the opening state (level, position, any
+ *  category, or a usable booster toggled off). */
 export function isCustomBuild(state: ProgressionState, defaults: ProgressionState, player: BoosterPlayer): boolean {
   return (
     state.maxLevel !== defaults.maxLevel ||
     state.position !== defaults.position ||
     ([0, 1] as const).some((slot) => boosterSummary(player, slot).usable && state.boosters[slot] !== defaults.boosters[slot]) ||
-    TRAINING_CATEGORIES.some((c) => state.trainingPoints[c] !== 0)
+    TRAINING_CATEGORIES.some((c) => state.trainingPoints[c] !== defaults.trainingPoints[c])
   );
 }
 
-const formatPoints = (v: number): string => (Number.isInteger(v) ? String(v) : v.toFixed(1));
+/** Points in the displayed (whole-point) unit. */
+const pts = (v: number): string => String(toDisplayPoints(v));
 
 /** Accuracy note for the estimate at `position` given the card's proficiency
  *  there (numbers = held-out rates recorded in ovrWeights.ts). */
 function estimateNote(position: Position, proficiency: PositionProficiency): string {
   if (proficiency === "full") {
     const lower = OVR_LOWER_CONFIDENCE_POSITIONS.includes(position);
-    return `The overall is an estimate: about ±1 at full-proficiency positions${lower ? ` (lower confidence at ${position})` : ""}.`;
+    return `About ±1 of the hub overall at full-proficiency positions${lower ? ` (lower confidence at ${position})` : ""}.`;
   }
   const lower = OVR_PROFICIENCY_LOWER_CONFIDENCE[proficiency].includes(position);
   if (proficiency === "none" && position === "GK") {
@@ -104,16 +114,24 @@ function estimateNote(position: Position, proficiency: PositionProficiency): str
   } of held-out hub cards${lower ? `; lower confidence at ${position}` : ""}).`;
 }
 
+/** The honest label next to the estimate (spec "Honest Estimate Label"). */
+export const PROFICIENCY_NOTE = `No Manager Proficiency — efootbase shows about ${MANAGER_PROFICIENCY_GAP.approxOvrGap} higher at its default ${MANAGER_PROFICIENCY_GAP.efootbaseDefault} (the two agree at ${MANAGER_PROFICIENCY_GAP.matchesAt}).`;
+
 export function ProgressionPanel({
   player,
   state,
   result,
   onChange,
+  highlight = null,
+  onHighlight,
 }: {
   player: PlayerCardDTO;
   state: ProgressionState;
   result: BuildResult;
   onChange: (next: ProgressionState) => void;
+  /** Category whose stats the stat grid highlights; the label buttons toggle it. */
+  highlight?: TrainingCategory | null;
+  onHighlight?: (next: TrainingCategory | null) => void;
 }) {
   const uid = useId();
   const goalkeeper = isGoalkeeperCard(positionFromIndex(player.registeredPosition));
@@ -159,7 +177,7 @@ export function ProgressionPanel({
     const fits = spent <= available;
     emit(
       { ...state, maxLevel, trainingPoints: fits ? state.trainingPoints : emptyAllocation() },
-      fits ? null : `allocation reset: level ${maxLevel} gives ${available} point${available === 1 ? "" : "s"}, fewer than the ${formatPoints(spent)} spent`,
+      fits ? null : `allocation reset: level ${maxLevel} gives ${pts(available)} pts, fewer than the ${pts(spent)} spent`,
     );
   };
   const onLevelInput = (e: ChangeEvent<HTMLInputElement>) => {
@@ -207,6 +225,7 @@ export function ProgressionPanel({
   };
 
   const boosterSlots: Array<0 | 1> = [0, 1];
+  const labelOf = (cat: TrainingCategory) => PROGRESSION_CATEGORY_LABELS[cat];
 
   return (
     <section
@@ -217,11 +236,11 @@ export function ProgressionPanel({
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <h2 id={`${uid}-title`} className="text-xs font-bold text-white uppercase tracking-wider">Progression</h2>
-          <p className="mt-1 text-[11px] text-[var(--color-text-secondary)] leading-relaxed">
-            One training point per level above 1 · the nth stat point of a category costs 0.5 × ⌈n / 4⌉ points. No manager effects.
+          <p className="mt-1 font-mono text-sm font-bold tabular-nums text-white" data-testid="progression-budget">
+            <span data-testid="progression-used">{pts(result.pointsUsed)}</span>/{pts(budget)} pts
           </p>
-          <p className="mt-1 text-[11px] text-[var(--color-text-secondary)] leading-relaxed" data-testid="progression-estimate-note" data-proficiency={proficiency}>
-            {estimateNote(state.position, proficiency)}
+          <p className="mt-1 text-[11px] text-[var(--color-text-secondary)] leading-relaxed">
+            Two points per level above 1 · the nth stat point of a category costs ⌈n / 4⌉ points (the first four cost 1 each). No manager effects.
           </p>
         </div>
         <div className="shrink-0 text-right" data-testid="progression-estimate">
@@ -235,6 +254,12 @@ export function ProgressionPanel({
           </div>
         </div>
       </div>
+      <p className="text-[11px] leading-relaxed text-[var(--color-accent-warn)]" data-testid="progression-proficiency-note">
+        {PROFICIENCY_NOTE}
+      </p>
+      <p className="text-[11px] text-[var(--color-text-secondary)] leading-relaxed" data-testid="progression-estimate-note" data-proficiency={proficiency}>
+        {estimateNote(state.position, proficiency)}
+      </p>
 
       {/* Max level + position */}
       <div className="grid grid-cols-2 gap-3">
@@ -282,19 +307,20 @@ export function ProgressionPanel({
         </div>
       </div>
 
-      {/* Budget — the live region announces points left, the estimate and any reset notice. */}
+      {/* Live region: points left, the estimate and any reset notice. */}
       <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[var(--color-line)] bg-[var(--color-canvas)] px-3 py-2 text-xs">
         <span className="text-[var(--color-text-secondary)]">
-          Points used <span className="font-mono font-bold text-white" data-testid="progression-used">{formatPoints(result.pointsUsed)}</span> / {budget}
+          Points used <span className="font-mono font-bold text-white">{pts(result.pointsUsed)}</span> / {pts(budget)}
         </span>
         <span role="status" aria-live="polite" aria-atomic="true" className="font-mono font-bold text-[var(--color-accent)]" data-testid="progression-live">
-          {formatPoints(remaining)} left · ~{result.estimatedOvr} at {state.position}
+          {pts(remaining)} pts left · ~{result.estimatedOvr} at {state.position}
           {notice ? <span className="font-normal text-[var(--color-accent-warn)]"> · {notice}</span> : null}
         </span>
       </div>
 
-      {/* Ten category steppers */}
-      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2" role="group" aria-label="Training categories">
+      {/* Ten category rows: label button (highlights the category's stats in
+          the stat grid), − value +, slider. */}
+      <div className="space-y-1.5" role="group" aria-label="Training categories">
         {TRAINING_CATEGORIES.map((cat) => {
           const v = state.trainingPoints[cat];
           const next = nextStatPointCost(v);
@@ -304,51 +330,83 @@ export function ProgressionPanel({
           const statsText = TRAINING_STATS[cat]
             .map((s) => (goalkeeper && s === "jump" ? `${statLabel(s)} (n/a)` : statLabel(s)))
             .join(", ");
+          const hit = highlight === cat;
+          const inactive = v === 0 && !hit;
           return (
-            <div key={cat} className="flex min-w-0 items-center gap-2 rounded-lg border border-[var(--color-line)] bg-[var(--color-canvas)] px-2.5 py-2" data-testid={`progression-cat-${cat}`}>
-              <div className="min-w-0 flex-1">
-                <div className="text-xs font-semibold text-white">
-                  {/* The spinbutton's accessible name is the category label only; the cost lives in aria-valuetext. */}
-                  <span id={`${uid}-cat-${cat}-label`}>{TRAINING_CATEGORY_LABELS[cat]}</span>
-                  <span className="ml-1.5 font-mono text-[10px] font-normal text-[var(--color-text-dim)]">
-                    spent {formatPoints(categoryCost(v))} · next {formatPoints(next)}
+            <div
+              key={cat}
+              className={`rounded-lg border bg-[var(--color-canvas)] px-2.5 py-1.5 ${hit ? "border-[var(--color-accent)]/50" : "border-[var(--color-line)]"}`}
+              data-testid={`progression-cat-${cat}`}
+            >
+              <div className="flex items-center gap-2">
+                <div className="min-w-0 flex-1">
+                  <button
+                    type="button"
+                    id={`${uid}-cat-${cat}-label`}
+                    aria-pressed={hit}
+                    onClick={() => onHighlight?.(hit ? null : cat)}
+                    title={`${statsText} — click to highlight these stats`}
+                    className={`max-w-full truncate text-left text-xs font-semibold cursor-pointer rounded focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--color-accent)] ${
+                      inactive ? "text-[var(--color-text-secondary)]" : "text-white"
+                    } ${hit ? "underline decoration-[var(--color-accent)] underline-offset-2" : ""}`}
+                    data-testid={`progression-cat-${cat}-label`}
+                  >
+                    {labelOf(cat)}
+                  </button>
+                  <span className="ml-1.5 font-mono text-[10px] text-[var(--color-text-dim)]">
+                    spent {pts(categoryCost(v))} · next {pts(next)}
                   </span>
                 </div>
-                <div className="truncate text-[10px] text-[var(--color-text-dim)]" title={statsText}>{statsText}</div>
+                <button
+                  type="button"
+                  tabIndex={-1}
+                  aria-label={`Decrease ${labelOf(cat)}`}
+                  disabled={v === 0}
+                  onClick={() => setCategory(cat, v - 1)}
+                  className="size-7 shrink-0 rounded-md border border-[var(--color-line)] bg-[var(--color-elevated)] text-sm font-bold text-white transition-colors hover:border-[var(--color-line-active)] disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+                >
+                  −
+                </button>
+                <div
+                  role="spinbutton"
+                  tabIndex={0}
+                  aria-labelledby={`${uid}-cat-${cat}-label`}
+                  aria-valuenow={v}
+                  aria-valuemin={0}
+                  aria-valuemax={max}
+                  aria-valuetext={`${v} stat points, ${pts(categoryCost(v))} pts spent, next costs ${pts(next)}`}
+                  onKeyDown={onStepperKey(cat)}
+                  className={`w-8 shrink-0 rounded-md py-0.5 text-center font-mono text-sm font-bold tabular-nums focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--color-accent)] ${
+                    v > 0 ? "text-[var(--color-accent)]" : "text-[var(--color-text-dim)]"
+                  }`}
+                >
+                  {v}
+                </div>
+                <button
+                  type="button"
+                  tabIndex={-1}
+                  aria-label={`Increase ${labelOf(cat)}`}
+                  disabled={!canInc}
+                  onClick={() => setCategory(cat, v + 1)}
+                  className="size-7 shrink-0 rounded-md border border-[var(--color-line)] bg-[var(--color-elevated)] text-sm font-bold text-white transition-colors hover:border-[var(--color-line-active)] disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+                >
+                  +
+                </button>
               </div>
-              <button
-                type="button"
+              {/* Slider (efootbase row layout). Not a tab stop — the spinbutton
+                  above carries the keyboard interaction and the accessible name. */}
+              <input
+                type="range"
                 tabIndex={-1}
-                aria-label={`Decrease ${TRAINING_CATEGORY_LABELS[cat]}`}
-                disabled={v === 0}
-                onClick={() => setCategory(cat, v - 1)}
-                className="size-7 shrink-0 rounded-md border border-[var(--color-line)] bg-[var(--color-elevated)] text-sm font-bold text-white transition-colors hover:border-[var(--color-line-active)] disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
-              >
-                −
-              </button>
-              <div
-                role="spinbutton"
-                tabIndex={0}
-                aria-labelledby={`${uid}-cat-${cat}-label`}
-                aria-valuenow={v}
-                aria-valuemin={0}
-                aria-valuemax={max}
-                aria-valuetext={`${v} stat points, ${formatPoints(categoryCost(v))} spent, next costs ${formatPoints(next)}`}
-                onKeyDown={onStepperKey(cat)}
-                className="w-8 shrink-0 rounded-md py-0.5 text-center font-mono text-sm font-bold tabular-nums text-[var(--color-accent)] focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--color-accent)]"
-              >
-                {v}
-              </div>
-              <button
-                type="button"
-                tabIndex={-1}
-                aria-label={`Increase ${TRAINING_CATEGORY_LABELS[cat]}`}
-                disabled={!canInc}
-                onClick={() => setCategory(cat, v + 1)}
-                className="size-7 shrink-0 rounded-md border border-[var(--color-line)] bg-[var(--color-elevated)] text-sm font-bold text-white transition-colors hover:border-[var(--color-line-active)] disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
-              >
-                +
-              </button>
+                aria-hidden
+                min={0}
+                max={Math.max(max, v)}
+                step={1}
+                value={v}
+                onChange={(e) => setCategory(cat, Number(e.target.value))}
+                className="progression-slider mt-1 block w-full"
+                data-testid={`progression-cat-${cat}-slider`}
+              />
             </div>
           );
         })}
@@ -363,7 +421,7 @@ export function ProgressionPanel({
             <>
               <span className="flex w-full items-center gap-1.5">
                 <Sparkles className={`size-3 shrink-0 ${on ? "text-[var(--color-accent-secondary)]" : "text-[var(--color-text-dim)]"}`} aria-hidden />
-                <span className={`truncate font-semibold ${b.usable ? "text-white" : "text-[var(--color-text-secondary)]"}`}>Booster {slot + 1}: {b.label}</span>
+                <span className={`truncate font-semibold ${b.usable ? "text-white" : "text-[var(--color-text-secondary)]"}`} title={`Booster ${slot + 1}: ${b.label}`}>Booster {slot + 1}: {b.label}</span>
                 {b.usable ? (
                   <span className={`ml-auto shrink-0 font-mono text-[10px] font-bold ${on ? "text-[var(--color-accent-secondary)]" : "text-[var(--color-text-dim)]"}`}>
                     {on ? "ON" : "OFF"}
@@ -425,12 +483,13 @@ export function ProgressionPanel({
         <button
           type="button"
           onClick={reset}
-          className="button button--sm button--secondary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-accent)]"
+          className="button button--sm button--secondary inline-flex items-center gap-1.5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-accent)]"
         >
+          <RotateCcw className="size-3.5" aria-hidden />
           Reset
         </button>
         <span className="text-[10px] text-[var(--color-text-dim)]">
-          Max OVR picks the allocation with the highest estimate at {state.position} for the {budget}-point budget.
+          Max OVR picks the allocation with the highest estimate at {state.position} for the {pts(budget)}-point budget; Reset zeroes every category. No manager picker: no dataset ties a manager to a stat.
           {goalkeeper ? " Goalkeeper Jump is card-specific and not projected." : ""}
         </span>
       </div>

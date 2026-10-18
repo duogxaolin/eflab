@@ -4,11 +4,14 @@
 import { prisma, Prisma } from "@eflab/db";
 import {
   BASE_STATS,
+  PHYSIQUE_FIELDS,
   POSITIONS,
   escapeLike,
   hasNonAscii,
+  isSortPreset,
   normalizeSearchQuery,
   type BaseStat,
+  type PhysiqueField,
   type BoosterDTO,
   type CardPreview,
   type CardType,
@@ -191,6 +194,19 @@ function toCardDTO(p: PlayerRowForDto): PlayerCardDTO {
     teamName: p.teamName ?? null,
     leagueName: p.leagueName ?? null,
     leagueEmblemUrl: rebaseR2Url(p.leagueEmblemUrl),
+    // Detail-only extras (efootbase-parity-round2): the Player row carries
+    // form, injury resistance, the 11 physique Ints and the 5 derived Floats;
+    // byId and compare load the full row, so they are always present here.
+    form: p.form,
+    injuryResistance: p.injuryResistance,
+    physique: Object.fromEntries(PHYSIQUE_FIELDS.map((f) => [f, Number(raw[f])])) as Record<PhysiqueField, number>,
+    bodyMetrics: {
+      legCoverage: Number(raw.legCoverage),
+      armCoverage: Number(raw.armCoverage),
+      peakJumpHeight: Number(raw.peakJumpHeight),
+      torsoCollisionWidth: Number(raw.torsoCollisionWidth),
+      dribbleHeight: Number(raw.dribbleHeight),
+    },
   };
 }
 
@@ -294,9 +310,44 @@ function primaryOrder(sort: string, direction: Dir): OrderBy {
 // Every list query orders by [{sort}, {id}] — the unique id tiebreaker is what
 // makes pagination deterministic (design decision 7). The composite indexes
 // (maxOvr,id), (ovr,id), (releaseDate,id) serve the common sorts directly.
+// The efootbase-style presets (SORT_PRESETS in @eflab/shared) carry their own
+// direction and ignore `order`.
 function orderByFor(sort: string, direction: Dir): OrderBy[] {
+  if (isSortPreset(sort)) {
+    const newestFirst = { releaseDate: { sort: "desc", nulls: "last" } } as const;
+    switch (sort) {
+      case "trending":
+        return [newestFirst, { maxOvr: "desc" }, { id: "desc" }];
+      case "new":
+        return [newestFirst, { id: "desc" }];
+      case "top":
+        return [{ maxOvr: "desc" }, { id: "desc" }];
+      case "highest":
+        return [{ ovr: "desc" }, { id: "desc" }];
+      case "lowest":
+        return [{ ovr: "asc" }, { id: "asc" }];
+    }
+  }
   return [primaryOrder(sort, direction), { id: direction }];
 }
+
+// `{ column: { gte, lte } }` for an optional min/max pair; null when both are
+// absent so an empty range adds no predicate.
+function rangeWhere(column: string, min: number | undefined, max: number | undefined): Prisma.PlayerWhereInput | null {
+  if (min === undefined && max === undefined) return null;
+  const bounds: { gte?: number; lte?: number } = {};
+  if (min !== undefined) bounds.gte = min;
+  if (max !== undefined) bounds.lte = max;
+  return { [column]: bounds } as Prisma.PlayerWhereInput;
+}
+
+// Physique columns share the PhysiqueField names (schema.prisma "11 physique").
+const PHYSIQUE_DB: ReadonlySet<string> = new Set([
+  "neckLength", "neckSize", "shoulderHeight", "shoulderWidth", "chestMeasurement", "waistSize",
+  "armSize", "armLength", "thighSize", "calfSize", "legLength",
+]);
+// AI playing-style flags (boolean columns).
+const AI_STYLE_DB: ReadonlySet<string> = new Set(["earlyCross", "incisiveRun", "longBallExpert", "mazingRun", "speedingBullet", "trickster"]);
 
 // Name predicate for player.list `q` (design decision 6): the query is
 // normalised in application code and matched as a substring of the lower-case
@@ -392,14 +443,20 @@ export const playerRouter = router({
       if (input.cardType) and.push({ cardType: input.cardType });
       if (input.cardTypeIn && input.cardTypeIn.length > 0) and.push({ cardType: { in: input.cardTypeIn } });
       if (input.position) and.push({ [POS_APTITUDE_DB[input.position]]: { in: [0, 1] } });
-      if (input.playingStyle !== undefined) and.push({ playingStyleAttack: input.playingStyle });
+      // A playing style matches in either slot (efootbase groups and filters by
+      // style, not by slot — PLAYING_STYLE_GROUPS in @eflab/shared); the
+      // defence-only variant stays for callers that want the defence slot.
+      if (input.playingStyle !== undefined) {
+        and.push({ OR: [{ playingStyleAttack: input.playingStyle }, { playingStyleDefense: input.playingStyle }] });
+      }
       if (input.defensiveStyle !== undefined) and.push({ playingStyleDefense: input.defensiveStyle });
-      if (input.ovrMin !== undefined || input.ovrMax !== undefined) {
-        and.push({ ovr: { gte: input.ovrMin ?? 0, lte: input.ovrMax ?? 100 } });
+      for (const flag of input.aiStyles ?? []) {
+        if (AI_STYLE_DB.has(flag)) and.push({ [flag]: true } as Prisma.PlayerWhereInput);
       }
-      if (input.maxOvrMin !== undefined || input.maxOvrMax !== undefined) {
-        and.push({ maxOvr: { gte: input.maxOvrMin ?? 0, lte: input.maxOvrMax ?? 120 } });
-      }
+      const ovrRange = rangeWhere("ovr", input.ovrMin, input.ovrMax);
+      if (ovrRange) and.push(ovrRange);
+      const maxOvrRange = rangeWhere("maxOvr", input.maxOvrMin, input.maxOvrMax);
+      if (maxOvrRange) and.push(maxOvrRange);
       if (input.weakFoot) and.push({ weakFootAccuracy: { gte: Number(input.weakFoot) } });
       if (input.strongerFoot !== undefined) and.push({ strongerFoot: input.strongerFoot });
       if (input.nationalityId !== undefined) and.push({ nationalityId: input.nationalityId });
@@ -407,6 +464,29 @@ export const playerRouter = router({
       if (input.clubId !== undefined) and.push({ teamId: input.clubId });
       if (input.leagueId !== undefined) and.push({ team: { is: { leagueId: input.leagueId } } });
       if (input.skillId !== undefined) and.push({ skills: { some: { skillId: input.skillId } } });
+      // Skills: every selected skill must be present (one EXISTS per skill).
+      for (const skillId of new Set(input.skillIds ?? [])) and.push({ skills: { some: { skillId } } });
+      if (input.conditionIn && input.conditionIn.length > 0) and.push({ condition: { in: input.conditionIn } });
+      if (input.formIn && input.formIn.length > 0) and.push({ form: { in: input.formIn } });
+      if (input.weakFootAccuracyIn && input.weakFootAccuracyIn.length > 0) and.push({ weakFootAccuracy: { in: input.weakFootAccuracyIn } });
+      if (input.weakFootUsageIn && input.weakFootUsageIn.length > 0) and.push({ weakFootUsage: { in: input.weakFootUsageIn } });
+      for (const r of [
+        rangeWhere("height", input.heightMin, input.heightMax),
+        rangeWhere("weight", input.weightMin, input.weightMax),
+        rangeWhere("age", input.ageMin, input.ageMax),
+      ]) if (r) and.push(r);
+      // Stat ranges — base columns, or the max* columns with `statsAtMax`.
+      for (const sr of input.statRanges ?? []) {
+        const base = statDbColumn[sr.stat];
+        const column = input.statsAtMax ? `max${(base[0] ?? "o").toUpperCase()}${base.slice(1)}` : base;
+        const r = rangeWhere(column, sr.min, sr.max);
+        if (r) and.push(r);
+      }
+      for (const br of input.bodyRanges ?? []) {
+        if (!PHYSIQUE_DB.has(br.field)) continue;
+        const r = rangeWhere(br.field, br.min, br.max);
+        if (r) and.push(r);
+      }
       const where: Prisma.PlayerWhereInput = and.length > 0 ? { AND: and } : {};
       const orderBy = orderByFor(input.sort, input.order);
       const [total, rows] = await prisma.$transaction([
@@ -547,13 +627,30 @@ export const playerRouter = router({
     return ordered.map(toCardDTO);
   }),
 
-  // All countries for the Nationality filter (flag URLs rebased onto R2_PUBLIC_BASE).
+  // All countries for the Nation filter (flag URLs rebased onto R2_PUBLIC_BASE).
   countries: publicProcedure.query(async () => {
     const rows = await prisma.country.findMany({
       select: { id: true, name: true, flagUrl: true },
       orderBy: [{ name: "asc" }, { id: "asc" }],
     });
     return rows.map((c) => ({ id: c.id, name: c.name, flagUrl: rebaseR2Url(c.flagUrl) }));
+  }),
+
+  // All leagues for the League filter (34 rows; `leagueId` on player.list).
+  leagues: publicProcedure.query(async () => {
+    return prisma.league.findMany({
+      select: { id: true, name: true },
+      orderBy: [{ name: "asc" }, { id: "asc" }],
+    });
+  }),
+
+  // All teams for the Team filter (707 rows; `clubId` on player.list). The
+  // leagueId lets the picker narrow the list to the chosen league.
+  teams: publicProcedure.query(async () => {
+    return prisma.team.findMany({
+      select: { id: true, name: true, leagueId: true, national: true },
+      orderBy: [{ name: "asc" }, { id: "asc" }],
+    });
   }),
 });
 
@@ -575,6 +672,8 @@ type PlayerRowForDto = Record<string, unknown> & {
   ovr: number;
   maxOvr: number;
   condition: string;
+  form: number;
+  injuryResistance: number;
   weakFootUsage: number;
   weakFootAccuracy: number;
   releaseDate: Date | null;

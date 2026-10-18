@@ -18,6 +18,9 @@ import {
   type TrainingCategory,
 } from "./constants";
 import {
+  MANAGER_PROFICIENCY_GAP,
+  POINT_DISPLAY_SCALE,
+  PROGRESSION_CATEGORY_LABELS,
   addStats,
   allocationCost,
   applyBoosters,
@@ -33,6 +36,7 @@ import {
   roundOvr,
   simulateBuild,
   statPointCostHalf,
+  toDisplayPoints,
   trainingPointsAvailable,
   type BoosterVector,
   type StatVector,
@@ -144,6 +148,31 @@ assert(POSITIONS.every((p) => cards.some((c) => posOf(c) === p)), "fixture cover
   // 26 points cost 4·(1+…+6) + 2·7 = 98 half-points = 49.
   assert(maxGainForBudget(0) === 0 && maxGainForBudget(0.5) === 1 && maxGainForBudget(2) === 4 && maxGainForBudget(6) === 8 && maxGainForBudget(36) === 22 && maxGainForBudget(49) === 26,
     "maxGainForBudget: 0→0, 0.5→1, 2→4, 6→8, 36→22, 49→26");
+}
+
+// ---------------------------------------------------------------- 2b. displayed unit + labels (efootbase-parity-round2)
+{
+  // efootbase prints whole points = 2 × our training points: a level-32 card
+  // reads "62 pts", a fully spent build "62/62 pts"; the first four stat
+  // points of a category cost 1 each, the next four 2 each.
+  assert(POINT_DISPLAY_SCALE === 2, "display unit is twice the engine unit");
+  assert(toDisplayPoints(trainingPointsAvailable(32)) === 62, `level-32 budget displays as 62 pts (got ${toDisplayPoints(trainingPointsAvailable(32))})`);
+  const full32 = bestAllocation("SS", trainingPointsAvailable(32));
+  assert(toDisplayPoints(allocationCost(full32)) === 62, `a fully spent level-32 build displays as 62/62 pts (got ${toDisplayPoints(allocationCost(full32))})`);
+  assert(toDisplayPoints(nextStatPointCost(0)) === 1 && toDisplayPoints(nextStatPointCost(3)) === 1, "stat points 1–4 cost 1 displayed point each");
+  assert(toDisplayPoints(nextStatPointCost(4)) === 2 && toDisplayPoints(nextStatPointCost(8)) === 3, "stat point 5 costs 2, stat point 9 costs 3 displayed points");
+  assert(toDisplayPoints(categoryCost(8)) === 12 && toDisplayPoints(categoryCost(12)) === 24, "8 stat points = 12 displayed, 12 = 24 displayed");
+  assert(toDisplayPoints(trainingPointsAvailable(28)) === 54 && toDisplayPoints(trainingPointsAvailable(27)) === 52, "level 28 → 54 pts, level 27 → 52 pts (as measured on efootbase)");
+  assert(toDisplayPoints(1.5) === 3 && toDisplayPoints(0) === 0, "half-points convert without float drift");
+  // Category labels exactly as efootbase prints them.
+  const expectedLabels: Record<TrainingCategory, string> = {
+    Shooting: "Shooting", Passing: "Passing", Dribbling: "Dribbling", Dexterity: "Dexterity",
+    LowerBody: "Lower Body Strength", Aerial: "Aerial Strength", Defending: "Defending",
+    GK1: "Goalkeeper 1", GK2: "Goalkeeper 2", GK3: "Goalkeeper 3",
+  };
+  for (const cat of TRAINING_CATEGORIES) assert(PROGRESSION_CATEGORY_LABELS[cat] === expectedLabels[cat], `label ${cat} = "${expectedLabels[cat]}" (got "${PROGRESSION_CATEGORY_LABELS[cat]}")`);
+  // The honest-label numbers are the measured ones.
+  assert(MANAGER_PROFICIENCY_GAP.efootbaseDefault === 90 && MANAGER_PROFICIENCY_GAP.approxOvrGap === 4 && MANAGER_PROFICIENCY_GAP.matchesAt === 70, "Manager Proficiency gap constants: default 90, about +4, matches at 70");
 }
 
 // ---------------------------------------------------------------- 3. budget invariant

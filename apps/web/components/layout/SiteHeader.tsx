@@ -93,7 +93,7 @@ export function SiteHeader() {
     const q = searchQuery.trim();
     if (q.length >= SEARCH_MIN_LENGTH) {
       closePalette();
-      router.push(`/players?q=${encodeURIComponent(q)}`);
+      router.push(`/players?search=${encodeURIComponent(q)}`);
     }
   };
 
@@ -222,21 +222,32 @@ export function SiteHeader() {
               type="search"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search players (e.g. Messi, Haaland, Mbappe)…"
+              placeholder="Search players by name…"
               autoComplete="off"
               enterKeyHint="search"
               aria-controls={paletteResultsId}
               aria-describedby={`${paletteTitleId}-hint`}
-              className="h-12 w-full bg-transparent pl-11 pr-12 text-sm text-[var(--color-text-primary)] placeholder-[var(--color-text-dim)] focus:outline-none"
+              className="h-12 w-full bg-transparent pl-11 pr-24 text-sm text-[var(--color-text-primary)] placeholder-[var(--color-text-dim)] focus:outline-none"
             />
-            <button
-              type="button"
-              onClick={closePalette}
-              aria-label="Close search"
-              className="absolute right-3 top-1/2 -translate-y-1/2 rounded-md p-1 text-[var(--color-text-dim)] hover:bg-white/10 hover:text-white"
-            >
-              <X className="size-4" aria-hidden />
-            </button>
+            <div className="absolute right-3 top-1/2 flex -translate-y-1/2 items-center gap-1.5">
+              {/* efootbase palette: an "Esc" chip; pressing it closes like the key. */}
+              <button
+                type="button"
+                onClick={closePalette}
+                aria-label="Close search (Escape)"
+                className="rounded-md border border-[var(--color-line)] bg-[var(--color-elevated)] px-1.5 py-0.5 font-mono text-[10px] font-medium text-[var(--color-text-secondary)] hover:text-white"
+              >
+                Esc
+              </button>
+              <button
+                type="button"
+                onClick={closePalette}
+                aria-label="Close search"
+                className="rounded-md p-1 text-[var(--color-text-dim)] hover:bg-white/10 hover:text-white md:hidden"
+              >
+                <X className="size-4" aria-hidden />
+              </button>
+            </div>
           </form>
 
           <div

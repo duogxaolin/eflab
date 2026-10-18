@@ -72,3 +72,43 @@ export function formatFeetInches(cm: number): string {
   const { feet, inches } = heightToFeetInches(cm);
   return `${feet}'${inches}"`;
 }
+
+/** An integer range with optional edges, as carried by a URL parameter. */
+export interface IntRange {
+  min?: number;
+  max?: number;
+}
+
+/**
+ * Parse efootbase's range URL syntax `min-max` (`90-` = at least 90, `-85` = at
+ * most 85, `80-90` = between). Edges outside `[lo, hi]`, non-integers and an
+ * inverted range are dropped so a hand-edited URL never produces a 400 from the
+ * API; a range with no usable edge returns `null`. A bare number is a minimum
+ * (`base=90` behaves like `base=90-`).
+ */
+export function parseRangeParam(value: string | null | undefined, lo: number, hi: number): IntRange | null {
+  if (value == null) return null;
+  const m = /^\s*(\d*)\s*(-?)\s*(\d*)\s*$/.exec(value);
+  if (!m) return null;
+  const [, a, dash, b] = m;
+  const edge = (s: string | undefined): number | undefined => {
+    if (!s) return undefined;
+    const n = Number(s);
+    return Number.isInteger(n) && n >= lo && n <= hi ? n : undefined;
+  };
+  const min = edge(a);
+  const max = dash ? edge(b) : undefined;
+  if (min === undefined && max === undefined) return null;
+  if (min !== undefined && max !== undefined && min > max) return null;
+  const out: IntRange = {};
+  if (min !== undefined) out.min = min;
+  if (max !== undefined) out.max = max;
+  return out;
+}
+
+/** Inverse of `parseRangeParam`: `{min:90}` → `90-`, `{max:85}` → `-85`,
+ *  `{min:80,max:90}` → `80-90`; an empty range → `null` (parameter omitted). */
+export function formatRangeParam(range: IntRange | null | undefined): string | null {
+  if (!range || (range.min === undefined && range.max === undefined)) return null;
+  return `${range.min ?? ""}-${range.max ?? ""}`;
+}

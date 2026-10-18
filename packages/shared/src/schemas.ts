@@ -1,5 +1,15 @@
 import { z } from "zod";
-import { CARD_TYPES, POSITIONS, SORT_FIELDS } from "./constants";
+import {
+  AI_PLAYING_STYLE_KEYS,
+  BASE_STATS,
+  CARD_TYPES,
+  CONDITIONS,
+  FILTER_RANGE_BOUNDS,
+  PHYSIQUE_FIELDS,
+  POSITIONS,
+  SORT_FIELDS,
+  SORT_PRESETS,
+} from "./constants";
 
 // BigInt-friendly id transformer. SuperJSON handles bigint at the wire layer, but Zod
 // parses the request (strings) so we coerce. Bounded to a Postgres int8
@@ -17,12 +27,20 @@ export const bigIntString = z
 export const INT4_MAX = 2147483647;
 const int4 = z.coerce.number().int().min(0).max(INT4_MAX);
 
+// Bounded optional integer for a range edge ([lo, hi] from FILTER_RANGE_BOUNDS).
+const edge = ([lo, hi]: readonly [number, number]) => z.coerce.number().int().min(lo).max(hi).optional();
+const smallLevel = (max: number) => z.coerce.number().int().min(0).max(max);
+
 // Player filter schema (card type scope, position, styles, ovr ranges, foot,
-// nationality, club/league via Team, skill) + sort/paging.
+// nationality, club/league via Team, skills, condition/form/weak foot,
+// height/weight/age, stat and body-model ranges) + sort/paging. Every bound is
+// int4-safe so an out-of-range value is a 400 from Zod, never a 500.
 export const playerListInput = z.object({
   page: z.coerce.number().int().min(1).max(10000).default(1),
   limit: z.coerce.number().int().min(1).max(200).default(24),
-  sort: z.enum(SORT_FIELDS as unknown as [string, ...string[]]).default("ovr"),
+  // A SORT_FIELDS column (with `order`) or one of the SORT_PRESETS (which fix
+  // their own direction — see constants.ts).
+  sort: z.enum([...SORT_FIELDS, ...SORT_PRESETS] as unknown as [string, ...string[]]).default("ovr"),
   order: z.enum(["asc", "desc"]).default("desc"),
   q: z.string().trim().max(120).optional(),
   cardType: z.enum(CARD_TYPES).optional(),
@@ -31,12 +49,17 @@ export const playerListInput = z.object({
   // are stored under EPIC — see CARD_TYPE_LABELS).
   cardTypeIn: z.array(z.enum(CARD_TYPES)).max(CARD_TYPES.length).optional(),
   position: z.enum(POSITIONS).optional(),
+  // Style id in either slot (efootbase semantics, see PLAYING_STYLE_GROUPS);
+  // `defensiveStyle` restricts to the defence slot only.
   playingStyle: int4.optional(),
   defensiveStyle: int4.optional(),
-  ovrMin: z.coerce.number().int().min(0).max(100).optional(),
-  ovrMax: z.coerce.number().int().min(0).max(100).optional(),
-  maxOvrMin: z.coerce.number().int().min(0).max(120).optional(),
-  maxOvrMax: z.coerce.number().int().min(0).max(120).optional(),
+  // AI playing styles — every listed flag must be set.
+  aiStyles: z.array(z.enum(AI_PLAYING_STYLE_KEYS as unknown as [string, ...string[]])).max(AI_PLAYING_STYLE_KEYS.length).optional(),
+  ovrMin: edge(FILTER_RANGE_BOUNDS.ovr),
+  ovrMax: edge(FILTER_RANGE_BOUNDS.ovr),
+  maxOvrMin: edge(FILTER_RANGE_BOUNDS.maxOvr),
+  maxOvrMax: edge(FILTER_RANGE_BOUNDS.maxOvr),
+  // Legacy "at least this weak-foot accuracy" filter; the UI uses the *In lists.
   weakFoot: z.enum(["0", "1", "2", "3"]).optional(),
   strongerFoot: int4.optional(),
   nationalityId: int4.optional(),
@@ -44,6 +67,31 @@ export const playerListInput = z.object({
   clubId: int4.optional(),
   leagueId: int4.optional(),
   skillId: int4.optional(),
+  // Every listed skill must be present (efootbase's Skills dialog is a
+  // multi-toggle). Bounded so the AND chain stays small.
+  skillIds: z.array(int4).max(20).optional(),
+  conditionIn: z.array(z.enum(CONDITIONS)).max(CONDITIONS.length).optional(),
+  formIn: z.array(smallLevel(2)).max(3).optional(),
+  weakFootAccuracyIn: z.array(smallLevel(3)).max(4).optional(),
+  weakFootUsageIn: z.array(smallLevel(3)).max(4).optional(),
+  heightMin: edge(FILTER_RANGE_BOUNDS.height),
+  heightMax: edge(FILTER_RANGE_BOUNDS.height),
+  weightMin: edge(FILTER_RANGE_BOUNDS.weight),
+  weightMax: edge(FILTER_RANGE_BOUNDS.weight),
+  ageMin: edge(FILTER_RANGE_BOUNDS.age),
+  ageMax: edge(FILTER_RANGE_BOUNDS.age),
+  // Stat ranges on the 26 base stats; `statsAtMax` switches them to the
+  // `max*` columns (efootbase "Max attribute potential").
+  statRanges: z
+    .array(z.object({ stat: z.enum(BASE_STATS), min: edge(FILTER_RANGE_BOUNDS.stat), max: edge(FILTER_RANGE_BOUNDS.stat) }))
+    .max(BASE_STATS.length)
+    .optional(),
+  statsAtMax: z.boolean().optional(),
+  // Body-model ranges on the 11 physique columns (0–15).
+  bodyRanges: z
+    .array(z.object({ field: z.enum(PHYSIQUE_FIELDS), min: edge(FILTER_RANGE_BOUNDS.physique), max: edge(FILTER_RANGE_BOUNDS.physique) }))
+    .max(PHYSIQUE_FIELDS.length)
+    .optional(),
 });
 export type PlayerListInput = z.infer<typeof playerListInput>;
 
