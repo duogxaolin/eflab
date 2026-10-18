@@ -48,7 +48,7 @@ The Playing Style filter SHALL use the same style identifiers as the stored data
 - **THEN** Build-up GK, Deep Defender, Press Back and Tough Marker are shown disabled and cannot be sent to the API.
 
 ### Requirement: Page State Lives in the URL
-The players page SHALL reflect its query, card types, filters, sort and page in the URL using efootbase's parameter names where observed — `search`, `card` (repeatable card-type code), `pos`, `playingStyle`, `ai`, `nat`, `league`, `team`, `foot`, `base` and `ovr` (Base / Max Overall Rating ranges as `min-max`), `condition`, `form`, `wfa`, `wfu`, `height`, `weight`, `age`, `skill`, `stat` (+ `smax`), `body`, `sort`, `order`, `page` — SHALL omit defaults, SHALL still read the older `q`, `type`, `style`, `dstyle`, `ovrMin`/`ovrMax` and `maxOvrMin`/`maxOvrMax` parameters without writing them, SHALL drop out-of-range or inverted values instead of sending them, SHALL read the state from the URL on load and on navigation, and SHALL reset to page 1 whenever the query or a filter changes.
+The players page SHALL reflect its query, card types, filters, sort and page in the URL using efootbase's parameter names where observed — `search`, `card` (repeatable card-type code), `pos` (repeatable), `playingStyle`, `ai`, `nat` (repeatable, internal nation id), `league` (repeatable), `team` (repeatable), `foot`, `base` and `ovr` (Base / Max Overall Rating ranges as `min-max`), `condition`, `form`, `wfa`, `wfu`, `height`, `weight`, `age`, `skill`, `stat` (+ `smax`), `body`, `sort`, `order`, `page` — SHALL write repeated values in a stable order without duplicates, SHALL omit defaults, SHALL still read the older `q`, `type`, `style`, `dstyle`, `ovrMin`/`ovrMax` and `maxOvrMin`/`maxOvrMax` parameters and single-value `pos`, `nat`, `league` and `team` links without writing them in the old form, SHALL drop out-of-range or inverted values instead of sending them, SHALL read the state from the URL on load and on navigation, and SHALL reset to page 1 whenever the query or a filter changes.
 
 #### Scenario: Reload and share
 - **WHEN** a user applies filters and sort on page 3 and reloads, or opens the same URL in a new tab
@@ -61,6 +61,10 @@ The players page SHALL reflect its query, card types, filters, sort and page in 
 #### Scenario: Old link
 - **WHEN** a user opens `/players?q=messi&type=EPIC`
 - **THEN** the page shows the Epic cards matching "messi" and rewrites the URL as `search=messi&card=5` on the next change.
+
+#### Scenario: Repeated parameters
+- **WHEN** a user opens `/players?pos=12&pos=11&nat=14&nat=3`
+- **THEN** the position filter shows CF and SS selected, the nation filter shows two nations selected, and re-saving the state produces the canonical URL for that state (`pos=SS&pos=CF&nat=3&nat=14`: positions in catalogue order, ids ascending); re-saving a canonical URL leaves it unchanged.
 
 ### Requirement: Home Quick Filters Do What They Say
 Each home quick filter SHALL produce a players list that matches its label: the card-type chips send the efootbase card-type code (`/players?card=5` for "Epic & Big Time" — Big Time cards are stored under `EPIC` per efootbase's own labels — `card=6` for "Highlight & Show Time", `card=1` for "Legendary") and "90+ OVR" SHALL send `/players?base=90-`, returning only cards with base overall at least 90.
@@ -149,7 +153,7 @@ The players page SHALL expose a sort control named "Sort" that shows the current
 - **THEN** the list is ordered by release date descending with a stable tiebreaker and the URL records the choice.
 
 ### Requirement: Additional Player Filters
-The players page SHALL offer filters for base and max overall ranges, condition, form, weak-foot accuracy and usage, height, weight and age ranges, skills, league, team, stat ranges and body-model ranges, in that priority order. Each filter that ships SHALL be applied by the API, SHALL be recorded in the URL, and SHALL reset the page to 1 when changed. A filter that cannot be delivered correctly SHALL NOT ship.
+The players page SHALL offer filters for base and max overall ranges, condition, form, weak-foot accuracy and usage, height, weight and age ranges, skills, league, team, stat ranges and body-model ranges, in that priority order, and the Position, Nation, League and Team filters SHALL accept several selected values at once (values within one filter combine with OR, different filters combine with AND). The Nation, League and Team pickers SHALL enforce the list bound (50 values) in the interface: at the bound the unselected options are disabled and a visible, announced message says so, selected values stay removable, and no selection is ever dropped silently. A picker SHALL show its "nothing matches" message when a search term (or the league narrowing of the Team list) leaves no option, and only once its list has loaded. Each filter that ships SHALL be applied by the API, SHALL be recorded in the URL, and SHALL reset the page to 1 when changed. A filter that cannot be delivered correctly SHALL NOT ship.
 
 #### Scenario: Overall range
 - **WHEN** a user sets Base Overall Rating minimum to 90
@@ -158,6 +162,26 @@ The players page SHALL offer filters for base and max overall ranges, condition,
 #### Scenario: Skill filter
 - **WHEN** a user selects the skill One-touch Pass (stored as "One-Time Pass")
 - **THEN** every returned card has that skill.
+
+#### Scenario: Several positions
+- **WHEN** a user selects the positions CF and SS
+- **THEN** every returned card has CF or SS as a position it plays, and the count equals an independent database count for the same rule.
+
+#### Scenario: Several nations and leagues combined
+- **WHEN** a user selects two nations and two leagues
+- **THEN** every returned card belongs to one of the two nations and to a team in one of the two leagues.
+
+#### Scenario: Invalid list
+- **WHEN** a client sends more than 13 positions, more than 50 values for another list, a value outside the valid range, or a member that is not an integer (such as `null`)
+- **THEN** the API responds with a client error (400), not a server error.
+
+#### Scenario: Selection limit
+- **WHEN** 50 nations are selected and the user searches for another nation in the Nation dialog
+- **THEN** the dialog shows "At most 50 selections", the unselected options are disabled, the URL still carries the 50 selected nations, and removing one selection enables the options again; the League and Team dialogs behave the same.
+
+#### Scenario: Search with no match
+- **WHEN** the user types a term that matches no option in the Nation dialog, or a club name outside the selected leagues in the Team dialog
+- **THEN** the dialog shows "Nothing matches." (Team: "No team of the selected leagues matches."), and the message is not shown while the list is still loading.
 
 ### Requirement: Playing Style Lists Match the Data
 The Playing Style filter SHALL list only styles whose identifiers are verified against the dump, SHALL group attack, defence and AI styles separately where the data supports it, and SHALL NOT invent identifiers for styles that no card in the database carries.
