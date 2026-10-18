@@ -192,11 +192,19 @@ export const TRAINING_CATEGORY_LABELS: Readonly<Record<TrainingCategory, string>
   GK3: "GK 3",
 };
 
-// 32 eFootball playing styles (attacking + defensive, single enum shared by both
-// `playingStyleAttack` and `playingStyleDefense`). Numeric IDs from efootbase
-// `players_meta.json` → `playing_style.values`. eflab seeds `playingStyleAttack`
-// from efootbase `playing_style` and `playingStyleDefense` from `playing_style_2`.
-// 0 = Basic (no style) for both slots; efootbase shows "Basic" for unstyled cards.
+// 36 eFootball playing styles, ids 0–35 (attacking + defensive, single enum
+// shared by both `playingStyleAttack` and `playingStyleDefense`). eflab seeds
+// `playingStyleAttack` from efootbase `playing_style` and `playingStyleDefense`
+// from `playing_style_2`. 0 = Basic (no style) for both slots; efootbase shows
+// "Basic" for unstyled cards. Ids and names come from efootbase
+// `players_meta.json` → `playing_style.values`, except 23, 31, 32 and 34: the
+// meta file of the 2026-10 re-dump still has no label for them, so their names
+// are efootbase's own English UI strings (`playing_style_<id>`, checked
+// 2026-10-19; they also match the other 32 names exactly), cross-checked on the
+// cards that carry them — Press Back on forwards (Thuram, Doku, Ngumoha,
+// Tierney), Tough Marker on defenders (Romero, Pepe, Bisseck, Luis Henrique),
+// Deep Defender on centre-backs (Bastoni, Cubarsí, Stones), Build-up GK on a
+// goalkeeper (Suzuki Zion).
 export const PLAYING_STYLES: Readonly<Record<number, string>> = {
   0: "Basic",
   1: "Goal Poacher",
@@ -221,6 +229,7 @@ export const PLAYING_STYLES: Readonly<Record<number, string>> = {
   20: "Orchestrator",
   21: "Full-back Finisher",
   22: "Target Man",
+  23: "Press Back",
   24: "Front Line Pressure",
   25: "Front Line Poacher",
   26: "Attack Outlet",
@@ -228,7 +237,10 @@ export const PLAYING_STYLES: Readonly<Record<number, string>> = {
   28: "Pass Disruptor",
   29: "Covering Role",
   30: "High Line Master",
+  31: "Tough Marker",
+  32: "Deep Defender",
   33: "Sweeper GK",
+  34: "Build-up GK",
   35: "High Line GK",
 };
 
@@ -243,24 +255,28 @@ export function playingStyleName(id: number | null | undefined): string {
 // by *style*, not by the slot a card stores it in, and filters with one
 // `playingStyle=<id>` parameter — so the API matches a style in either slot
 // (`playingStyleAttack` OR `playingStyleDefense`). The groups list only ids
-// that real cards in the 2026-10 dump carry (read-only counts, 2026-10-18):
-//   attack slot  → ids 1–22 and 35;  defence slot → 7, 8, 9, 16, 17, 24–30, 33.
+// that real cards carry (read-only counts on the 2026-10 re-dump, 2026-10-19):
+//   attack slot  → ids 1–22, 34 and 35;  defence slot → 7, 8, 9, 16, 17, 23–33.
 // Verified on real cards against the capture: Neuer / Courtois / Provedel
 // store Attacking GK / Defensive GK in the defence slot, Benjamin André and
 // David Bates store The Destroyer there (efootbase shows all of them under
 // "Defence"). Anchor Man (8) and Box-to-Box (7) sit in both groups on
-// efootbase and in both slots in the dump.
-// Styles efootbase offers that no card in the database carries (they appeared
-// after the dump was taken: Romero's cards still carry The Destroyer where
-// efootbase now shows Tough Marker, Doku's defence slot is Basic where
-// efootbase shows Press Back) are listed by name only — no ids are invented.
+// efootbase and in both slots in the dump. The four styles added to the game
+// after the first dump arrived with the 2026-10 re-dump and sit in the groups
+// efootbase uses: Build-up GK (34, attack slot) under "Attack"; Press Back
+// (23), Tough Marker (31) and Deep Defender (32) (defence slot) under
+// "Defence" — the new Romero / Doku TRENDING cards carry Tough Marker / Press
+// Back, as efootbase showed before the re-dump.
 export const PLAYING_STYLE_GROUPS: Readonly<Record<"attack" | "defence", readonly number[]>> = {
-  attack: [1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15, 18, 19, 20, 21, 22, 35],
-  defence: [7, 8, 9, 16, 17, 24, 25, 26, 27, 28, 29, 30, 33],
+  attack: [1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15, 18, 19, 20, 21, 22, 34, 35],
+  defence: [7, 8, 9, 16, 17, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33],
 };
+// Styles efootbase offers that no stored card carries are listed here by name
+// (shown disabled, never given an invented id). Empty since the 2026-10
+// re-dump: every style efootbase lists has an id and at least one card.
 export const PLAYING_STYLES_UNAVAILABLE: Readonly<Record<"attack" | "defence", readonly string[]>> = {
-  attack: ["Build-up GK"],
-  defence: ["Deep Defender", "Press Back", "Tough Marker"],
+  attack: [],
+  defence: [],
 };
 
 // AI playing styles (efootbase "AI Playing Styles" group) → the boolean flag

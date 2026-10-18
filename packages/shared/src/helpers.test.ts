@@ -28,6 +28,7 @@ import {
   SORT_PRESETS,
   SORT_PRESET_LABELS,
   isSortPreset,
+  playingStyleName,
 } from "./constants";
 import { playerListInput } from "./schemas";
 
@@ -128,7 +129,26 @@ function assert(cond: unknown, msg: string): void {
       assert(!Object.values(PLAYING_STYLES).includes(name), `unavailable style "${name}" has no invented id`);
     }
   }
-  assert(PLAYING_STYLE_GROUPS.attack.length === 20 && PLAYING_STYLE_GROUPS.defence.length === 13, "20 attack + 13 defence styles are available in the data");
+  assert(PLAYING_STYLE_GROUPS.attack.length === 21 && PLAYING_STYLE_GROUPS.defence.length === 16, "21 attack + 16 defence styles are available in the data");
+  // The four styles of the 2026-10 re-dump (efootbase English UI strings).
+  const added: Array<[number, string, "attack" | "defence"]> = [
+    [23, "Press Back", "defence"],
+    [31, "Tough Marker", "defence"],
+    [32, "Deep Defender", "defence"],
+    [34, "Build-up GK", "attack"],
+  ];
+  for (const [id, name, group] of added) {
+    assert(playingStyleName(id) === name, `playingStyleName(${id}) → ${name} (got ${playingStyleName(id)})`);
+    assert(PLAYING_STYLE_GROUPS[group].includes(id), `style ${id} (${name}) is offered under ${group}`);
+  }
+  assert(
+    Array.from({ length: 36 }, (_, id) => id).every((id) => typeof PLAYING_STYLES[id] === "string" && PLAYING_STYLES[id]!.length > 0),
+    "every playing-style id 0–35 has a label",
+  );
+  const names = Object.values(PLAYING_STYLES);
+  assert(new Set(names).size === names.length && names.length === 36, "36 distinct playing-style names");
+  assert(playingStyleName(0) === "Basic" && playingStyleName(null) === "Basic" && playingStyleName(99) === "Basic", "0 / null / unknown id → Basic");
+  assert(PLAYING_STYLES_UNAVAILABLE.attack.length === 0 && PLAYING_STYLES_UNAVAILABLE.defence.length === 0, "no efootbase style is left without an id");
 }
 
 // 8. Repeated-parameter lists of the multi-valued filters (multi-select-filters):

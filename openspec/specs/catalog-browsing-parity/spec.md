@@ -44,8 +44,12 @@ The Playing Style filter SHALL use the same style identifiers as the stored data
 - **THEN** the URL carries `playingStyle=<Anchor Man id>` and every returned card has Anchor Man in its attack or defence slot (the style sits in both slots on real cards).
 
 #### Scenario: Unavailable style
-- **WHEN** the Playing Style dialog is open
-- **THEN** Build-up GK, Deep Defender, Press Back and Tough Marker are shown disabled and cannot be sent to the API.
+- **WHEN** the Playing Style dialog is open and efootbase offers a style that no stored card carries
+- **THEN** that style is shown disabled and cannot be sent to the API.
+
+#### Scenario: Styles added after the first dump
+- **WHEN** the Playing Style dialog is open on the 2026-10 re-dump data
+- **THEN** Build-up GK (Attack) and Press Back, Tough Marker and Deep Defender (Defence) are enabled, and selecting one lists exactly the cards that carry it in either slot.
 
 ### Requirement: Page State Lives in the URL
 The players page SHALL reflect its query, card types, filters, sort and page in the URL using efootbase's parameter names where observed — `search`, `card` (repeatable card-type code), `pos` (repeatable), `playingStyle`, `ai`, `nat` (repeatable, internal nation id), `league` (repeatable), `team` (repeatable), `foot`, `base` and `ovr` (Base / Max Overall Rating ranges as `min-max`), `condition`, `form`, `wfa`, `wfu`, `height`, `weight`, `age`, `skill`, `stat` (+ `smax`), `body`, `sort`, `order`, `page` — SHALL write repeated values in a stable order without duplicates, SHALL omit defaults, SHALL still read the older `q`, `type`, `style`, `dstyle`, `ovrMin`/`ovrMax` and `maxOvrMin`/`maxOvrMax` parameters and single-value `pos`, `nat`, `league` and `team` links without writing them in the old form, SHALL drop out-of-range or inverted values instead of sending them, SHALL read the state from the URL on load and on navigation, and SHALL reset to page 1 whenever the query or a filter changes.
