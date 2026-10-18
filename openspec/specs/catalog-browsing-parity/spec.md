@@ -26,7 +26,7 @@ The players page SHALL default to all card types (no card type pre-selected, mat
 
 #### Scenario: Default scope
 - **WHEN** a user opens `/players` without parameters
-- **THEN** no card type is pre-selected, the result count equals the whole catalogue (48,410 cards), and Trending cards are included.
+- **THEN** no card type is pre-selected, the result count equals the whole catalogue (50,694 cards), and Trending cards are included.
 
 #### Scenario: Dropdown and results agree
 - **WHEN** the home search dropdown lists cards for "cruyff" (9 cards in the 2026-10 data: 7 Epic, 2 Legendary) and the user presses Enter
@@ -79,7 +79,7 @@ Each home quick filter SHALL produce a players list that matches its label: the 
 
 #### Scenario: Epic & Big Time
 - **WHEN** a user clicks "Epic & Big Time"
-- **THEN** the URL is `/players?card=5` and every returned card is of type Epic (1,083 cards in the 2026-10 data).
+- **THEN** the URL is `/players?card=5` and every returned card is of type Epic (1,094 cards in the 2026-10-18 data).
 
 ### Requirement: Pagination Controls Reach Every Page
 The pagination control SHALL always let the user reach any page, show the current page as active, and scroll the grid back to the top when the page changes.
@@ -100,7 +100,7 @@ Skills pages SHALL display card counts, share and "top cards" computed from the 
 
 #### Scenario: One-Time Pass
 - **WHEN** the Skills page lists One-touch Pass (the display label of the stored skill "One-Time Pass")
-- **THEN** its card count equals the number of players who have that skill (8,909 in the 2026-10 data), and its detail page shows top cards that actually have the skill.
+- **THEN** its card count equals the number of players who have that skill (9,125 in the 2026-10-18 data), and its detail page shows top cards that actually have the skill.
 
 #### Scenario: Skill without holders
 - **WHEN** no card has a given skill

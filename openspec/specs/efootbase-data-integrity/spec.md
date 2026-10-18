@@ -15,7 +15,7 @@ The seeder SHALL map every efootbase player field it stores from the field that 
 
 #### Scenario: Base stats are not constants
 - **WHEN** the seed completes
-- **THEN** the number of players with base Jump = 40 AND base Set Piece Taking = 40 equals the number of dump rows whose `jumping` and `set_piece_taking` are both 40, and is not 48,407.
+- **THEN** the number of players with base Jump = 40 AND base Set Piece Taking = 40 equals the number of dump rows whose `jumping` and `set_piece_taking` are both 40, and is not 50,691.
 
 #### Scenario: Registered position equals the dump
 - **WHEN** the seed completes
@@ -23,7 +23,7 @@ The seeder SHALL map every efootbase player field it stores from the field that 
 
 #### Scenario: Condition follows the dump
 - **WHEN** a dump row has `condition` = 2
-- **THEN** the stored condition letter is "C", and the distribution of stored letters equals the dump distribution (E:234, D:763, C:43,232, B:3,068, A:1,110 for the 2026-10 dump).
+- **THEN** the stored condition letter is "C", and the distribution of stored letters equals the dump distribution (E:535, D:2,460, C:38,358, B:6,613, A:2,725 for the 2026-10-18 dump).
 
 ### Requirement: Card Type Labels Match efootbase
 The seeder SHALL derive each player's card type from the dump's card-type code using the labels declared in the dump's `players_meta.json`, and the web UI SHALL display the same label names that efootbase displays for that code.
@@ -77,7 +77,7 @@ The repository SHALL provide one command that seeds and then cross-fills, and th
 
 #### Scenario: Refresh result
 - **WHEN** the refresh command completes on the standard dump and eFHUB SQLite
-- **THEN** the database holds 48,410 players (48,407 plus the 3 eFHUB-only players), at least 1,475 managers with non-zero tactic ratings, and tier badges on 10,745 players.
+- **THEN** the database holds 50,694 players (50,691 plus the 3 eFHUB-only players), at least 1,475 managers with non-zero tactic ratings, and tier badges on 10,745 players.
 
 ### Requirement: Cross-Fill Correctness and Safety
 The cross-fill SHALL write `maxGkClearing` whenever it writes `gkClearing`, SHALL merge managers by exact id before name matching so no manager receives another version's ratings, and SHALL pass values from the eFHUB file to the database only as bound parameters or after strict validation.

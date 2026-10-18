@@ -1,5 +1,5 @@
 // Full seed from the efootbase dump → Postgres.
-// Reads dump/efootbase/players.jsonl (48.407 players × 176 cols, efootbase schema),
+// Reads dump/efootbase/players.jsonl (50.691 players × 176 cols, efootbase schema),
 // dump/efootbase/players_meta.json (field labels — card-type validation) and
 // dump/efootbase/packs.json (featured bundles), plus the committed fixtures
 // (skills, leagues, managers, boosters).

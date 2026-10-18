@@ -373,7 +373,7 @@ const AI_STYLE_DB: ReadonlySet<string> = new Set(["earlyCross", "incisiveRun", "
 // (so "Schär" → "schar" never touches them, "三笘" does).
 //
 // `%`, `_` and `\` must match literally. Prisma's `contains` does NOT escape
-// them (verified: `contains: "%"` matched all 48,410 rows), so:
+// them (verified: `contains: "%"` matched all 50,694 rows), so:
 //   · a query without wildcard characters goes through Prisma `contains`
 //     (emitted as `LIKE '%q%'`, literal by construction, index-served, and the
 //     predicate stays inside the one count/page query);
@@ -669,7 +669,7 @@ export const playerRouter = router({
     });
   }),
 
-  // All teams for the Team filter (707 rows; `clubId` on player.list). The
+  // All teams for the Team filter (736 rows; `clubId` on player.list). The
   // leagueId lets the picker narrow the list to the chosen league.
   teams: publicProcedure.query(async () => {
     return prisma.team.findMany({
