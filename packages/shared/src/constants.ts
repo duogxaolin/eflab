@@ -138,10 +138,11 @@ export const CARD_TYPE_BY_EFOOTBASE_CODE: Readonly<Record<number, CardType>> = {
 
 // 10 training categories of the progression engine (player-progression-simulator).
 // Recovered from the eFHUB `player export` table: `MAX<stat> − <stat>` equals
-// the category's group value for every stat of the category on all 44,103
-// cards (exceptions: goalkeeper Jump, which carries a card-specific offset —
-// see progression.ts — and one outfield card, hub PlayerID 179425, whose Jump
-// rises one point more than its Aerial value). Order = the hub's
+// the sum of the group values of the categories that contain the stat, for
+// every one of the 26 stats on all 44,103 cards (change `jump-from-gk1`,
+// 2026-10-18: Jump sits in Aerial Strength AND Goalkeeper 1, which is what the
+// 3,353 goalkeeper cards and the one outfield card with a Goalkeeper 1 value
+// — hub PlayerID 179425 — show; no exception remains). Order = the hub's
 // `MAX<Group>Group` columns.
 export const TRAINING_CATEGORIES = [
   "Shooting",
@@ -158,6 +159,8 @@ export const TRAINING_CATEGORIES = [
 export type TrainingCategory = (typeof TRAINING_CATEGORIES)[number];
 
 // Category → the stats it raises, one stat point each per stat point bought.
+// A stat may belong to more than one category (Jump: Aerial Strength and
+// Goalkeeper 1) — its lift is the sum of the points bought in each of them.
 export const TRAINING_STATS: Readonly<Record<TrainingCategory, readonly BaseStat[]>> = {
   Shooting: ["finishing", "placeKicking", "curl"],
   Passing: ["lowPass", "loftedPass"],
@@ -166,7 +169,9 @@ export const TRAINING_STATS: Readonly<Record<TrainingCategory, readonly BaseStat
   LowerBody: ["kickingPower", "speed", "stamina"],
   Aerial: ["heading", "physicalContact", "jump"],
   Defending: ["defensiveAwareness", "defensiveEngagement", "ballWinning", "aggression"],
-  GK1: ["gkAwareness"],
+  // Goalkeeper 1 raises Jump too: hub MAXJump − Jump = Aerial + GK1 on every
+  // card (goalkeepers buy most of their Jump here).
+  GK1: ["gkAwareness", "jump"],
   // eFHUB calls the second GK2 stat GKClearing — it is efootbase's gk_parrying,
   // i.e. the `gkParrying` BaseStat (see the alias note on BASE_STATS).
   GK2: ["gkParrying", "gkReach"],

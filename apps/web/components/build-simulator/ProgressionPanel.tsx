@@ -13,7 +13,6 @@ import {
   bestAllocation,
   categoryCost,
   emptyAllocation,
-  isGoalkeeperCard,
   maxGainForBudget,
   nextStatPointCost,
   positionFromIndex,
@@ -78,7 +77,7 @@ export function defaultProgressionState(player: DefaultsPlayer): ProgressionStat
   return {
     maxLevel: levelCap,
     position,
-    trainingPoints: bestAllocation(position, trainingPointsAvailable(levelCap), { goalkeeper: isGoalkeeperCard(position) }),
+    trainingPoints: bestAllocation(position, trainingPointsAvailable(levelCap)),
     boosters: [boosterSummary(player, 0).usable, boosterSummary(player, 1).usable],
   };
 }
@@ -134,7 +133,6 @@ export function ProgressionPanel({
   onHighlight?: (next: TrainingCategory | null) => void;
 }) {
   const uid = useId();
-  const goalkeeper = isGoalkeeperCard(positionFromIndex(player.registeredPosition));
   const levelCap = Math.max(1, player.levelCap);
   const budget = trainingPointsAvailable(state.maxLevel);
   const remaining = result.remainingPoints;
@@ -205,7 +203,7 @@ export function ProgressionPanel({
     boosters[slot] = !boosters[slot];
     emit({ ...state, boosters });
   };
-  const maxOvr = () => setAllocation(bestAllocation(state.position, budget, { goalkeeper }));
+  const maxOvr = () => setAllocation(bestAllocation(state.position, budget));
   const reset = () => setAllocation(emptyAllocation());
 
   const onStepperKey = (cat: TrainingCategory) => (e: KeyboardEvent<HTMLDivElement>) => {
@@ -327,9 +325,7 @@ export function ProgressionPanel({
           const others = allocationCost({ ...state.trainingPoints, [cat]: 0 });
           const max = maxGainForBudget(budget - others);
           const canInc = next <= remaining + 1e-9;
-          const statsText = TRAINING_STATS[cat]
-            .map((s) => (goalkeeper && s === "jump" ? `${statLabel(s)} (n/a)` : statLabel(s)))
-            .join(", ");
+          const statsText = TRAINING_STATS[cat].map((s) => statLabel(s)).join(", ");
           const hit = highlight === cat;
           const inactive = v === 0 && !hit;
           return (
@@ -489,8 +485,7 @@ export function ProgressionPanel({
           Reset
         </button>
         <span className="text-[10px] text-[var(--color-text-dim)]">
-          Max OVR picks the allocation with the highest estimate at {state.position} for the {pts(budget)}-point budget; Reset zeroes every category. No manager picker: no dataset ties a manager to a stat.
-          {goalkeeper ? " Goalkeeper Jump is card-specific and not projected." : ""}
+          Max OVR picks the allocation with the highest estimate at {state.position} for the {pts(budget)}-point budget; Reset zeroes every category. Jumping rises with Aerial Strength and with Goalkeeper 1 alike. No manager picker: no dataset ties a manager to a stat.
         </span>
       </div>
     </section>

@@ -6,12 +6,13 @@
 // Rules (verified on 44,103 cards, see design.md of the change):
 //   · training points available = levelCap − 1 (one per level above 1);
 //   · ten categories, each raising every stat it contains by the number of
-//     stat points bought in it (TRAINING_STATS); no cap at 99;
+//     stat points bought in it (TRAINING_STATS); a stat in two categories
+//     (Jump: Aerial Strength and Goalkeeper 1) gets the sum — with that, the
+//     table reproduces the hub max stats of all 44,103 cards, goalkeepers
+//     included (change `jump-from-gk1`); no cap at 99;
 //   · the nth stat point in a category costs ceil(n / 4) half-points, i.e.
 //     0.5 for points 1–4, 1 for 5–8, 1.5 for 9–12 … (Σ cost = levelCap − 1 on
 //     all 32,601 cards with a cap ≥ 2);
-//   · goalkeeper cards carry a card-specific Jump offset the rules cannot
-//     reproduce, so Jump is not projected for them;
 //   · the overall at a position is estimated by a fitted linear formula
 //     (ovrWeights.ts) — accurate to about ±1 at full-proficiency positions,
 //     lower confidence for GK/CB; at half / non-proficient positions a fitted
@@ -139,23 +140,15 @@ export function maxGainForBudget(budget: number): number {
   return g;
 }
 
-/** True for a goalkeeper card (registered position GK): its Jump carries a
- *  card-specific offset in the data, so Aerial training does not project it. */
-export const isGoalkeeperCard = (registeredPosition: Position): boolean => registeredPosition === "GK";
-
-/** Stat deltas produced by an allocation. `goalkeeper` leaves Jump untouched. */
-export function applyTraining(
-  alloc: Partial<TrainingAllocation>,
-  opts: { goalkeeper?: boolean } = {},
-): StatVector {
+/** Stat deltas produced by an allocation: every stat of a category rises by
+ *  the points bought in it, and a stat listed under two categories (Jump:
+ *  Aerial Strength + Goalkeeper 1) adds both. */
+export function applyTraining(alloc: Partial<TrainingAllocation>): StatVector {
   const deltas = zeroStats();
   for (const cat of TRAINING_CATEGORIES) {
     const pts = Math.max(0, Math.floor(alloc[cat] ?? 0));
     if (pts === 0) continue;
-    for (const stat of TRAINING_STATS[cat]) {
-      if (opts.goalkeeper && stat === "jump") continue;
-      deltas[stat] += pts;
-    }
+    for (const stat of TRAINING_STATS[cat]) deltas[stat] += pts;
   }
   return deltas;
 }
@@ -218,30 +211,27 @@ export function applyProficiency(fullEstimate: number, position: Position, profi
 /** Display rounding of an estimate (half away from zero, like the hub). */
 export const roundOvr = (v: number): number => Math.round(v);
 
-/** OVR gain of one stat point in `cat` at `position` (sum of its stat weights). */
-export function categoryGain(position: Position, cat: TrainingCategory, opts: { goalkeeper?: boolean } = {}): number {
+/** OVR gain of one stat point in `cat` at `position`: the sum of the weights
+ *  of every stat the category raises (Jump's weight counts in both Aerial
+ *  Strength and Goalkeeper 1, as each of them lifts it). */
+export function categoryGain(position: Position, cat: TrainingCategory): number {
   const { w } = OVR_WEIGHTS[position];
   let g = 0;
-  for (const stat of TRAINING_STATS[cat]) {
-    if (opts.goalkeeper && stat === "jump") continue;
-    g += w[BASE_STATS.indexOf(stat)] ?? 0;
-  }
+  for (const stat of TRAINING_STATS[cat]) g += w[BASE_STATS.indexOf(stat)] ?? 0;
   return g;
 }
 
 /**
  * Allocation that maximises the estimated overall at `position` within
- * `budget` training points. The objective is linear in the stats and the
- * cost per stat point only grows with the tier, so a dynamic programme over
- * the ten categories with the budget in half-points is exact. Ties prefer
- * fewer stat points (a category with zero gain stays at 0) and, between
- * equal values, the cheaper total.
+ * `budget` training points. The objective is linear in the stats, so the
+ * value of an allocation is Σ_cat gain(cat) · points(cat) even when a stat
+ * belongs to two categories (its two lifts add, and so do their weighted
+ * gains), and the cost per stat point only grows with the tier, so a dynamic
+ * programme over the ten categories with the budget in half-points is exact.
+ * Ties prefer fewer stat points (a category with zero gain stays at 0) and,
+ * between equal values, the cheaper total.
  */
-export function bestAllocation(
-  position: Position,
-  budget: number,
-  opts: { goalkeeper?: boolean } = {},
-): TrainingAllocation {
+export function bestAllocation(position: Position, budget: number): TrainingAllocation {
   const B = Math.floor(Math.max(0, budget) * 2 + 1e-9);
   const EPS = 1e-9;
   const NEG = Number.NEGATIVE_INFINITY;
@@ -250,7 +240,7 @@ export function bestAllocation(
   const choices: Array<Array<{ prev: number; g: number }>> = [];
 
   for (const cat of TRAINING_CATEGORIES) {
-    const gain = categoryGain(position, cat, opts);
+    const gain = categoryGain(position, cat);
     const next: number[] = new Array<number>(B + 1).fill(NEG);
     const choice: Array<{ prev: number; g: number }> = new Array(B + 1);
     for (let used = 0; used <= B; used++) {
@@ -288,7 +278,9 @@ export interface SimulateInput {
   base: StatVector;
   /** Real level cap of the card (upper bound for `config.maxLevel`). */
   levelCap: number;
-  /** Registered position of the card (goalkeeper cards do not project Jump). */
+  /** Registered position of the card (kept in the input for callers that
+   *  derive the default position from it; the rules are the same for every
+   *  position). */
   registeredPosition: Position;
   config: BuildConfig;
   /** Resolved Booster 1 / Booster 2 (null when the slot is empty or unknown). */
@@ -302,8 +294,7 @@ export interface SimulateInput {
 /** Full simulation: training + active boosters → projected stats, budget
  *  accounting and the estimated overall at the configured position. */
 export function simulateBuild(input: SimulateInput): BuildResult {
-  const { base, levelCap, registeredPosition, config, boosters, positionAptitudes } = input;
-  const goalkeeper = isGoalkeeperCard(registeredPosition);
+  const { base, levelCap, config, boosters, positionAptitudes } = input;
   const proficiency: PositionProficiency = positionAptitudes
     ? proficiencyFromAptitude(positionAptitudes[config.position])
     : "full";
@@ -313,11 +304,10 @@ export function simulateBuild(input: SimulateInput): BuildResult {
   const pointsUsed = usedHalf / 2;
   const remainingPoints = pointsAvailable - pointsUsed;
 
-  const trainingDeltas = applyTraining(config.trainingPoints, { goalkeeper });
+  const trainingDeltas = applyTraining(config.trainingPoints);
   const boosterDeltas = applyBoosters(boosters, config.boosters);
   const projectedStats = addStats(base, trainingDeltas, boosterDeltas);
   const estimatedOvrExact = projectOvr(config.position, projectedStats, proficiency);
-  const jumpNotProjected = goalkeeper && (config.trainingPoints.Aerial ?? 0) > 0;
 
   return {
     config: { ...config, maxLevel },
@@ -332,7 +322,6 @@ export function simulateBuild(input: SimulateInput): BuildResult {
     estimatedOvr: roundOvr(estimatedOvrExact),
     estimatedOvrExact,
     proficiency,
-    jumpNotProjected,
   };
 }
 

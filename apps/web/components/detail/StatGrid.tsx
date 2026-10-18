@@ -23,12 +23,26 @@ import {
 // and click-to-highlight — a stat row or a category chip selects the training
 // category it belongs to and dims every other row.
 
-/** Stat → its training category (every one of the 26 stats is in exactly one). */
-export const STAT_CATEGORY: Readonly<Record<BaseStat, TrainingCategory>> = Object.fromEntries(
-  TRAINING_CATEGORIES.flatMap((cat) => TRAINING_STATS[cat].map((s) => [s, cat])),
-) as Record<BaseStat, TrainingCategory>;
+/** Stat → the training categories that raise it, in TRAINING_CATEGORIES
+ *  order. Every stat is in at least one; Jump is in two (Aerial Strength and
+ *  Goalkeeper 1 — each lifts it, see TRAINING_STATS). */
+export const STAT_CATEGORIES: Readonly<Record<BaseStat, readonly TrainingCategory[]>> = (() => {
+  const m = {} as Record<BaseStat, TrainingCategory[]>;
+  for (const cat of TRAINING_CATEGORIES) for (const s of TRAINING_STATS[cat]) (m[s] ??= []).push(cat);
+  return m;
+})();
 
 export type StatHighlight = TrainingCategory | null;
+
+/** Next highlight after clicking a stat row: a stat in several categories
+ *  cycles through them (Jump: Aerial Strength → Goalkeeper 1 → clear), a
+ *  stat in one toggles it. */
+export function nextStatHighlight(stat: BaseStat, current: StatHighlight): StatHighlight {
+  const cats = STAT_CATEGORIES[stat];
+  const i = current === null ? -1 : cats.indexOf(current);
+  if (i === -1) return cats[0] ?? null;
+  return cats[i + 1] ?? null;
+}
 
 /** "+N" chip for a stat raised by an active booster. */
 export function DeltaChip({ delta, title }: { delta: number | undefined; title?: string }) {
@@ -50,50 +64,40 @@ interface SectionProps {
   trainingDeltas?: Record<BaseStat, number>;
   highlight: StatHighlight;
   onHighlight: (next: StatHighlight) => void;
-  jumpNotProjected?: boolean;
 }
 
-function StatSection({ title, statKeys, values, boosterDeltas, trainingDeltas, highlight, onHighlight, jumpNotProjected = false }: SectionProps) {
+function StatSection({ title, statKeys, values, boosterDeltas, trainingDeltas, highlight, onHighlight }: SectionProps) {
   return (
     <div className="space-y-2 min-w-0">
       <h3 className="text-xs font-bold uppercase tracking-wider text-white border-b border-[var(--color-line)] pb-1.5">{title}</h3>
       <div className="space-y-1">
         {statKeys.map((st) => {
           const val = values[st];
-          const cat = STAT_CATEGORY[st];
-          const hit = highlight === cat;
+          const cats = STAT_CATEGORIES[st];
+          const catLabels = cats.map((c) => PROGRESSION_CATEGORY_LABELS[c]).join(" / ");
+          const hit = highlight !== null && cats.includes(highlight);
           const dim = highlight !== null && !hit;
-          const na = jumpNotProjected && st === "jump";
           const lift = trainingDeltas?.[st] ?? 0;
-          const tip = lift ? `${statLabel(st)}: +${lift} from ${PROGRESSION_CATEGORY_LABELS[cat]} training` : undefined;
+          const tip = lift ? `${statLabel(st)}: +${lift} from ${catLabels} training` : undefined;
           return (
             <button
               key={st}
               type="button"
               className="efb-stat-row cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--color-accent)]"
               data-stat={st}
-              data-category={cat}
+              data-category={cats.join(" ")}
               data-hit={hit ? "true" : undefined}
               data-dim={dim ? "true" : undefined}
               aria-pressed={hit}
-              aria-label={`${statLabel(st)} ${na ? "not projected" : val} — highlight ${PROGRESSION_CATEGORY_LABELS[cat]} stats`}
+              aria-label={`${statLabel(st)} ${val} — highlight ${catLabels} stats`}
               title={tip}
-              onClick={() => onHighlight(hit ? null : cat)}
+              onClick={() => onHighlight(nextStatHighlight(st, highlight))}
             >
               <span className={`efb-stat-row__label ${statTierClass(val)}`} data-testid="stat-name">
                 {statLabel(st)}
               </span>
-              {!na && <DeltaChip delta={boosterDeltas?.[st]} title="Booster" />}
-              {na ? (
-                <span
-                  className="efb-stat-row__value !w-auto px-1.5 !text-[10px] bg-[var(--color-elevated)] !text-[var(--color-text-secondary)]"
-                  title="Goalkeeper Jump carries a card-specific offset the rules cannot reproduce"
-                >
-                  n/a (card-specific)
-                </span>
-              ) : (
-                <span className={`efb-stat-row__value ${statTierBg(val)} ${statTierForeground(val)}`}>{val}</span>
-              )}
+              <DeltaChip delta={boosterDeltas?.[st]} title="Booster" />
+              <span className={`efb-stat-row__value ${statTierBg(val)} ${statTierForeground(val)}`}>{val}</span>
             </button>
           );
         })}
@@ -105,8 +109,8 @@ function StatSection({ title, statKeys, values, boosterDeltas, trainingDeltas, h
 export function StatGrid(props: Omit<SectionProps, "title" | "statKeys">) {
   return (
     <div className="grid grid-cols-1 gap-6 md:grid-cols-3" data-testid="stat-grid">
-      <StatSection title="Attacking" statKeys={ATTACKING_STATS} {...props} jumpNotProjected={false} />
-      <StatSection title="Defending" statKeys={DEFENDING_STATS} {...props} jumpNotProjected={false} />
+      <StatSection title="Attacking" statKeys={ATTACKING_STATS} {...props} />
+      <StatSection title="Defending" statKeys={DEFENDING_STATS} {...props} />
       <StatSection title="Strength" statKeys={STRENGTH_STATS} {...props} />
     </div>
   );
