@@ -1,8 +1,12 @@
 "use client";
 import { useId, useState, type ChangeEvent, type KeyboardEvent } from "react";
 import {
-  MANAGER_PROFICIENCY_GAP,
+  MANAGER_PROFICIENCY_DEFAULT,
+  MANAGER_PROFICIENCY_MAX,
+  MANAGER_PROFICIENCY_MIN,
+  MANAGER_PROFICIENCY_UNCONFIRMED_LEVEL,
   OVR_LOWER_CONFIDENCE_POSITIONS,
+  OVR_PROFICIENCY_FLOOR,
   OVR_PROFICIENCY_LOWER_CONFIDENCE,
   POSITIONS,
   PROFICIENCY_LABELS,
@@ -12,6 +16,7 @@ import {
   allocationCost,
   bestAllocation,
   categoryCost,
+  clampManagerProficiency,
   emptyAllocation,
   maxGainForBudget,
   nextStatPointCost,
@@ -34,17 +39,20 @@ import { RotateCcw, Sparkles } from "lucide-react";
 // aligned with efootbase's sheet in efootbase-parity-round2). The parent owns
 // the state (it feeds the projected stats into the stat grid and the card
 // face) and runs the shared engine; this component renders the controls:
-// Max Level, position, ten category rows (label button, − n +, slider) with
-// the next cost, "used/total pts", Booster 1 / 2 toggles, Max OVR and Reset.
+// Max Level, position, Manager Proficiency (70–90, efootbase's slider), ten
+// category rows (label button, − n +, slider) with the next cost,
+// "used/total pts", Booster 1 / 2 toggles, Max OVR and Reset.
 // Points are printed in efootbase's whole-point unit (toDisplayPoints: twice
 // the engine's training points). The rules are the ones recovered from the
-// eFHUB data — see packages/shared/src/progression.ts.
+// eFHUB data and efootbase's sheet — see packages/shared/src/progression.ts.
 
 export interface ProgressionState {
   maxLevel: number;
   position: Position;
   trainingPoints: TrainingAllocation;
   boosters: [boolean, boolean];
+  /** Manager Proficiency level 70–90 (default 90, efootbase's default). */
+  managerProficiency: number;
 }
 
 type BoosterSlotInfo = { label: string; deltas: Array<[BaseStat, number]>; usable: boolean };
@@ -68,9 +76,9 @@ export function boosterSummary(player: BoosterPlayer, slot: 0 | 1): BoosterSlotI
 }
 
 /** Opening state of a card, as efootbase opens its sheet: the card's level
- *  cap, its registered position, the Max-OVR allocation for that budget and
+ *  cap, its registered position, the Max-OVR allocation for that budget,
  *  every usable booster on (a slot without stat data stays off — there is
- *  nothing to apply). */
+ *  nothing to apply) and Manager Proficiency 90. */
 export function defaultProgressionState(player: DefaultsPlayer): ProgressionState {
   const levelCap = Math.max(1, player.levelCap);
   const position = positionFromIndex(player.registeredPosition);
@@ -79,15 +87,17 @@ export function defaultProgressionState(player: DefaultsPlayer): ProgressionStat
     position,
     trainingPoints: bestAllocation(position, trainingPointsAvailable(levelCap)),
     boosters: [boosterSummary(player, 0).usable, boosterSummary(player, 1).usable],
+    managerProficiency: MANAGER_PROFICIENCY_DEFAULT,
   };
 }
 
-/** True once the state differs from the opening state (level, position, any
- *  category, or a usable booster toggled off). */
+/** True once the state differs from the opening state (level, position,
+ *  Manager Proficiency, any category, or a usable booster toggled off). */
 export function isCustomBuild(state: ProgressionState, defaults: ProgressionState, player: BoosterPlayer): boolean {
   return (
     state.maxLevel !== defaults.maxLevel ||
     state.position !== defaults.position ||
+    state.managerProficiency !== defaults.managerProficiency ||
     ([0, 1] as const).some((slot) => boosterSummary(player, slot).usable && state.boosters[slot] !== defaults.boosters[slot]) ||
     TRAINING_CATEGORIES.some((c) => state.trainingPoints[c] !== defaults.trainingPoints[c])
   );
@@ -97,24 +107,55 @@ export function isCustomBuild(state: ProgressionState, defaults: ProgressionStat
 const pts = (v: number): string => String(toDisplayPoints(v));
 
 /** Accuracy note for the estimate at `position` given the card's proficiency
- *  there (numbers = held-out rates recorded in ovrWeights.ts). */
-function estimateNote(position: Position, proficiency: PositionProficiency): string {
+ *  there. At the registered position the estimate is anchored to the card's
+ *  own overall (population check recorded in ovrWeights.ts); elsewhere the
+ *  figures are eFHUB hub held-out rates, which say nothing about efootbase —
+ *  the warning above the note covers that. */
+function estimateNote(position: Position, proficiency: PositionProficiency, anchored: boolean): string {
+  if (anchored) {
+    return `Anchored to this card's own overall at ${position}, its registered position. The anchor was added after the measurements; on 9,839 cards checked against efootbase's max-level overall it is within ±1 for 98.3 % (goalkeepers 97.4 %, lower confidence). An estimate, not an exact value.`;
+  }
   if (proficiency === "full") {
     const lower = OVR_LOWER_CONFIDENCE_POSITIONS.includes(position);
-    return `About ±1 of the hub overall at full-proficiency positions${lower ? ` (lower confidence at ${position})` : ""}.`;
+    return `About ±1 of the eFHUB hub overall at full-proficiency positions${lower ? ` (lower confidence at ${position})` : ""}.`;
   }
   const lower = OVR_PROFICIENCY_LOWER_CONFIDENCE[proficiency].includes(position);
   if (proficiency === "none" && position === "GK") {
     return `${position} is not a proficient position for this card: outfield cards sit at a flat 40 there in the eFHUB data, so the estimate is 40.`;
   }
   const where = proficiency === "half" ? `${position} is a half-proficiency position for this card` : `${position} is not a proficient position for this card`;
-  return `${where}: a fitted proficiency penalty is applied (within ±1 on ${
+  return `${where}: a fitted proficiency penalty is applied. It is within ±1 of the eFHUB hub overall on ${
     proficiency === "half" ? "99.9 %" : "99.7 %"
-  } of held-out hub cards${lower ? `; lower confidence at ${position}` : ""}).`;
+  } of held-out hub cards${lower ? ` (lower confidence at ${position})` : ""}; that is a hub figure, not agreement with efootbase.`;
 }
 
-/** The honest label next to the estimate (spec "Honest Estimate Label"). */
-export const PROFICIENCY_NOTE = `No Manager Proficiency — efootbase shows about ${MANAGER_PROFICIENCY_GAP.approxOvrGap} higher at its default ${MANAGER_PROFICIENCY_GAP.efootbaseDefault} (the two agree at ${MANAGER_PROFICIENCY_GAP.matchesAt}).`;
+/** The label next to the estimate (spec "Honest Estimate Label"): what the
+ *  Manager Proficiency control does at `level`. */
+export function proficiencyNote(level: number): string {
+  return `Includes Manager Proficiency ${level}, which efootbase applies even with no manager selected: each stat gains ⌊stat × rate⌋ after training (nothing at ${MANAGER_PROFICIENCY_MIN}–76), never past 99; boosters are added after it.`;
+}
+
+/** Warning shown away from the registered position (spec "Honest Limits").
+ *  Measured on efootbase's position tiles of the six cards of the proficiency
+ *  fixture (every build read, bonus applied, estimate unanchored):
+ *  full-proficiency positions within ±1 on 202/202 tiles; half-proficiency
+ *  tiles +3 to +5 above the estimate (mean +3.8, 0/224 within ±1);
+ *  non-proficient tiles where the estimate is above the floor of 40: mean
+ *  +2.6 above (122/2,483 within ±1); where the estimate sits at the floor (a
+ *  goalkeeper card at an outfield position, an outfield card at GK):
+ *  1,145/1,231 within ±1, 1,098 of them exactly 40. */
+function offPositionWarning(position: Position, proficiency: PositionProficiency, estimate: number): string {
+  if (proficiency === "half") {
+    return `Not confirmed: at ${position} (half proficiency) efootbase tends to show about 4 higher than this estimate (3 to 5 higher on all 224 position tiles measured on six cards).`;
+  }
+  if (proficiency === "none" && estimate > OVR_PROFICIENCY_FLOOR) {
+    return `Not confirmed: at ${position} (not proficient) efootbase tends to show about 2–3 higher than this estimate (mean +2.6; within ±1 on only 122 of 2,483 position tiles measured on six cards).`;
+  }
+  if (proficiency === "none") {
+    return `Not anchored: ${position} is not this card's registered position. At the floor of ${OVR_PROFICIENCY_FLOOR} efootbase's position tiles agreed within ±1 on 1,145 of 1,231 measured tiles.`;
+  }
+  return `Not anchored: ${position} is not this card's registered position. At full-proficiency positions the estimate matched efootbase's position tiles within ±1 on 202/202 measured tiles.`;
+}
 
 export function ProgressionPanel({
   player,
@@ -137,6 +178,8 @@ export function ProgressionPanel({
   const budget = trainingPointsAvailable(state.maxLevel);
   const remaining = result.remainingPoints;
   const proficiency = result.proficiency;
+  const anchored = result.ovrAnchor !== null;
+  const mp = result.config.managerProficiency;
 
   // Max Level is edited through a draft string: typing never commits (a
   // half-typed "2" of "25" must not clamp the level and wipe the allocation);
@@ -204,7 +247,19 @@ export function ProgressionPanel({
     emit({ ...state, boosters });
   };
   const maxOvr = () => setAllocation(bestAllocation(state.position, budget));
+  // Reset clears the training only; the proficiency level stays.
   const reset = () => setAllocation(emptyAllocation());
+  const setManagerProficiency = (value: number) => {
+    const managerProficiency = clampManagerProficiency(value);
+    if (managerProficiency !== state.managerProficiency) emit({ ...state, managerProficiency });
+  };
+  // Arrow / Home / End are native to the range input; PageUp / PageDown move
+  // by 5 here (browsers disagree on their native step).
+  const onProficiencyKey = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key !== "PageUp" && e.key !== "PageDown") return;
+    e.preventDefault();
+    setManagerProficiency(state.managerProficiency + (e.key === "PageUp" ? 5 : -5));
+  };
 
   const onStepperKey = (cat: TrainingCategory) => (e: KeyboardEvent<HTMLDivElement>) => {
     const cur = state.trainingPoints[cat];
@@ -238,7 +293,7 @@ export function ProgressionPanel({
             <span data-testid="progression-used">{pts(result.pointsUsed)}</span>/{pts(budget)} pts
           </p>
           <p className="mt-1 text-[11px] text-[var(--color-text-secondary)] leading-relaxed">
-            Two points per level above 1 · the nth stat point of a category costs ⌈n / 4⌉ points (the first four cost 1 each). No manager effects.
+            Two points per level above 1 · the nth stat point of a category costs ⌈n / 4⌉ points (the first four cost 1 each). No per-manager effects.
           </p>
         </div>
         <div className="shrink-0 text-right" data-testid="progression-estimate">
@@ -252,11 +307,26 @@ export function ProgressionPanel({
           </div>
         </div>
       </div>
-      <p className="text-[11px] leading-relaxed text-[var(--color-accent-warn)]" data-testid="progression-proficiency-note">
-        {PROFICIENCY_NOTE}
+      <p id={`${uid}-mp-note`} className="text-[11px] leading-relaxed text-[var(--color-text-secondary)]" data-testid="progression-proficiency-note">
+        {proficiencyNote(mp)}
+        {result.managerProficiencyUnconfirmed ? (
+          <span className="text-[var(--color-accent-warn)]" data-testid="progression-proficiency-unconfirmed">
+            {" "}Level {MANAGER_PROFICIENCY_UNCONFIRMED_LEVEL} is unconfirmed: no single rate fits it, so a fitted exception is used.
+          </span>
+        ) : null}
       </p>
-      <p className="text-[11px] text-[var(--color-text-secondary)] leading-relaxed" data-testid="progression-estimate-note" data-proficiency={proficiency}>
-        {estimateNote(state.position, proficiency)}
+      {!anchored && (
+        <p className="text-[11px] leading-relaxed text-[var(--color-accent-warn)]" data-testid="progression-position-warning" data-proficiency={proficiency}>
+          {offPositionWarning(state.position, proficiency, result.estimatedOvr)}
+        </p>
+      )}
+      <p
+        className="text-[11px] text-[var(--color-text-secondary)] leading-relaxed"
+        data-testid="progression-estimate-note"
+        data-proficiency={proficiency}
+        data-anchored={anchored ? "true" : "false"}
+      >
+        {estimateNote(state.position, proficiency, anchored)}
       </p>
 
       {/* Max level + position */}
@@ -305,13 +375,40 @@ export function ProgressionPanel({
         </div>
       </div>
 
+      {/* Manager Proficiency (efootbase's slider, 70–90, default 90). */}
+      <div className="min-w-0" data-testid="progression-proficiency">
+        <div className="flex items-baseline justify-between gap-2">
+          <label htmlFor={`${uid}-mp`} className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-dim)]">
+            Manager proficiency <span className="font-normal normal-case">({MANAGER_PROFICIENCY_MIN}–{MANAGER_PROFICIENCY_MAX})</span>
+          </label>
+          <output htmlFor={`${uid}-mp`} className="font-mono text-sm font-bold tabular-nums text-white" data-testid="progression-proficiency-value">
+            {mp}
+          </output>
+        </div>
+        <input
+          id={`${uid}-mp`}
+          type="range"
+          min={MANAGER_PROFICIENCY_MIN}
+          max={MANAGER_PROFICIENCY_MAX}
+          step={1}
+          value={mp}
+          aria-label="Manager proficiency"
+          aria-valuetext={`Manager proficiency ${mp}`}
+          aria-describedby={`${uid}-mp-note`}
+          onChange={(e) => setManagerProficiency(Number(e.target.value))}
+          onKeyDown={onProficiencyKey}
+          className="progression-slider mt-1 block w-full rounded focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-accent)]"
+          data-testid="progression-proficiency-slider"
+        />
+      </div>
+
       {/* Live region: points left, the estimate and any reset notice. */}
       <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[var(--color-line)] bg-[var(--color-canvas)] px-3 py-2 text-xs">
         <span className="text-[var(--color-text-secondary)]">
           Points used <span className="font-mono font-bold text-white">{pts(result.pointsUsed)}</span> / {pts(budget)}
         </span>
         <span role="status" aria-live="polite" aria-atomic="true" className="font-mono font-bold text-[var(--color-accent)]" data-testid="progression-live">
-          {pts(remaining)} pts left · ~{result.estimatedOvr} at {state.position}
+          {pts(remaining)} pts left · ~{result.estimatedOvr} at {state.position} · proficiency {mp}
           {notice ? <span className="font-normal text-[var(--color-accent-warn)]"> · {notice}</span> : null}
         </span>
       </div>
@@ -485,7 +582,7 @@ export function ProgressionPanel({
           Reset
         </button>
         <span className="text-[10px] text-[var(--color-text-dim)]">
-          Max OVR picks the allocation with the highest estimate at {state.position} for the {pts(budget)}-point budget; Reset zeroes every category. Jumping rises with Aerial Strength and with Goalkeeper 1 alike. No manager picker: no dataset ties a manager to a stat.
+          Max OVR picks the allocation with the highest estimate at {state.position} for the {pts(budget)}-point budget before the Manager Proficiency bonus, so it is the same build at every proficiency (as on efootbase); with the bonus a hand-made build can read up to 1 higher. Reset zeroes every category and keeps the proficiency. Jumping rises with Aerial Strength and with Goalkeeper 1 alike. No manager picker: no dataset ties a manager to a stat.
         </span>
       </div>
     </section>

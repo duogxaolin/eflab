@@ -41,6 +41,27 @@
 // not refitted: they describe the level-1 overall from base stats and that
 // measurement is untouched by the training rule.
 //
+// Anchor (change `manager-proficiency-slider`, 2026-10-18): the weights are
+// shared by every card, so each card keeps a small residual. At the card's
+// registered position the engine adds `ovrAnchor` = card overall − formula on
+// its base stats (no boosters). The anchor was chosen post hoc, after the
+// unanchored goalkeeper builds of the held-out sheet run had failed; its
+// independent support is this population check (same comparison as above,
+// no proficiency bonus involved), within ±1 unanchored → anchored:
+//   10,073 cards (dump max_level > 1)          94.7 % → 96.1 %, GK 82.0 % → 95.5 % (716)
+//    9,839 of them (hub level cap > 1 too)      97.0 % → 98.3 %, GK 83.6 % → 97.4 % (702)
+// The denominators differ because 234 of the 10,073 have hub level cap 1, so
+// their hub "max" stats are their base stats and the comparison with
+// efootbase's max-level overall is meaningless for them. The anchored bias
+// stays slightly negative (−0.33 overall, −0.66 at GK on the 9,839).
+// On efootbase's Progression sheet with the Manager Proficiency bonus
+// (progression.ts) the held-out builds were within ±1 on 178/178 anchored
+// and 142/178 unanchored — but the anchor only changed the goalkeeper card
+// whose failures prompted it (14/50 → 50/50); the other three held-out cards
+// pass either way, so that result does not test the anchor. On Messi the
+// anchored overall matches efootbase exactly on 4/8 readings, the unanchored
+// on 6/8 (all within ±1). Other positions get no anchor.
+//
 // Proficiency penalty (OVR_PROFICIENCY_ADJUST, fitted 2026-10-18): the weights
 // above describe the overall at FULL proficiency. The hub also lists the
 // overall of every card at its half-proficiency and non-proficient positions,

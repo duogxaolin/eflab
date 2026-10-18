@@ -62,11 +62,13 @@ interface SectionProps {
   boosterDeltas?: Record<BaseStat, number>;
   /** Training lift per stat (tooltip only — it is already inside the value). */
   trainingDeltas?: Record<BaseStat, number>;
+  /** Manager Proficiency bonus per stat (tooltip only — inside the value too). */
+  proficiencyDeltas?: Record<BaseStat, number>;
   highlight: StatHighlight;
   onHighlight: (next: StatHighlight) => void;
 }
 
-function StatSection({ title, statKeys, values, boosterDeltas, trainingDeltas, highlight, onHighlight }: SectionProps) {
+function StatSection({ title, statKeys, values, boosterDeltas, trainingDeltas, proficiencyDeltas, highlight, onHighlight }: SectionProps) {
   return (
     <div className="space-y-2 min-w-0">
       <h3 className="text-xs font-bold uppercase tracking-wider text-white border-b border-[var(--color-line)] pb-1.5">{title}</h3>
@@ -78,7 +80,9 @@ function StatSection({ title, statKeys, values, boosterDeltas, trainingDeltas, h
           const hit = highlight !== null && cats.includes(highlight);
           const dim = highlight !== null && !hit;
           const lift = trainingDeltas?.[st] ?? 0;
-          const tip = lift ? `${statLabel(st)}: +${lift} from ${catLabels} training` : undefined;
+          const bonus = proficiencyDeltas?.[st] ?? 0;
+          const tipParts = [lift ? `+${lift} from ${catLabels} training` : null, bonus ? `+${bonus} Manager Proficiency` : null].filter(Boolean);
+          const tip = tipParts.length > 0 ? `${statLabel(st)}: ${tipParts.join(", ")}` : undefined;
           return (
             <button
               key={st}

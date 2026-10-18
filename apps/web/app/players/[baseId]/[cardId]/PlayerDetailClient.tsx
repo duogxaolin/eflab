@@ -88,7 +88,8 @@ export function PlayerDetailClient({
   const p = q.data ?? initialData;
 
   const buildDefaults = useMemo(() => (p ? defaultProgressionState(p) : null), [p]);
-  // Pure, client-side engine — the same rules as community.simulate.
+  // Pure, client-side engine (packages/shared/src/progression.ts). `cardOvr`
+  // anchors the estimate at the registered position.
   const buildResult = useMemo(
     () =>
       p
@@ -96,6 +97,7 @@ export function PlayerDetailClient({
             base: p.stats,
             levelCap: p.levelCap,
             registeredPosition: positionFromIndex(p.registeredPosition),
+            cardOvr: p.ovr,
             config: { playerId: p.id, ...build },
             boosters: [p.booster1, p.booster2],
             positionAptitudes: p.positionAptitudes,
@@ -165,6 +167,7 @@ export function PlayerDetailClient({
   const stats = view === "build" ? buildResult.projectedStats : view === "max" ? p.maxStats : p.stats;
   const boosterDeltas = view === "build" ? buildResult.boosterDeltas : undefined;
   const trainingDeltas = view === "build" ? buildResult.trainingDeltas : undefined;
+  const proficiencyDeltas = view === "build" ? buildResult.proficiencyDeltas : undefined;
   const estimatedOvr = buildResult.estimatedOvr;
   // The card face prints the live build estimate (efootbase prints its build
   // overall there); the MAX badge stays the dump's max overall and the pill
@@ -189,7 +192,7 @@ export function PlayerDetailClient({
 
   const statsHeading =
     view === "build"
-      ? `Stats · ${customBuild ? "custom build" : "Max-OVR build"} · level ${build.maxLevel} · ~${estimatedOvr} at ${build.position}`
+      ? `Stats · ${customBuild ? "custom build" : "Max-OVR build"} · level ${build.maxLevel} · proficiency ${buildResult.config.managerProficiency} · ~${estimatedOvr} at ${build.position}`
       : view === "max"
         ? `Stats at max level ${p.levelCap} (dump)`
         : "Stats at level 1";
@@ -231,9 +234,15 @@ export function PlayerDetailClient({
           <span
             className="chip chip--accent chip--lg tabular-nums"
             data-testid="ovr-pill"
-            title={`Overall at max level ${p.levelCap} (dump); the card shows the current build's estimate`}
+            title={`Overall at max level ${p.levelCap} (dump, Booster 1 only, no Manager Proficiency bonus); the card shows the current build's estimate`}
           >
             <span className="chip__label">{p.maxOvr} OVR</span>
+          </span>
+          {/* Visible qualifier: the pill is the dump's max overall (Booster 1,
+              no Manager Proficiency bonus), so it sits below the build estimate
+              the card face prints at proficiency 90. */}
+          <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-dim)] whitespace-nowrap" data-testid="ovr-pill-note">
+            dump max · no proficiency bonus
           </span>
         </div>
         <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-[var(--color-text-secondary)]">
@@ -380,7 +389,7 @@ export function PlayerDetailClient({
             </div>
             {view === "build" && (
               <p className="text-[11px] text-[var(--color-text-secondary)]">
-                Projected from the base stats + training + active boosters (engine estimate; cyan chips are booster bumps, the training lift is inside the value — "Max" shows the dump&apos;s own max-level values instead).
+                Projected from the base stats + training + the Manager Proficiency bonus + active boosters (engine estimate; cyan chips are booster bumps, the training lift and the bonus are inside the value — "Max" shows the dump&apos;s own max-level values, without the bonus, instead).
                 {highlight ? " Click the highlighted stat or category again to clear the highlight." : " Click a stat or a category to highlight the stats it trains."}
               </p>
             )}
@@ -388,6 +397,7 @@ export function PlayerDetailClient({
               values={stats}
               boosterDeltas={boosterDeltas}
               trainingDeltas={trainingDeltas}
+              proficiencyDeltas={proficiencyDeltas}
               highlight={highlight}
               onHighlight={onHighlight}
             />

@@ -1,4 +1,6 @@
-// Oracle tests for the progression engine (player-progression-simulator).
+// Oracle tests for the progression engine (player-progression-simulator;
+// Manager Proficiency + anchor: manager-proficiency-slider, section 7 and
+// `__fixtures__/proficiency-oracle.json`).
 // Run: tsx packages/shared/src/progression.test.ts  (pnpm --filter @eflab/shared test)
 //
 // The fixture `__fixtures__/progression-oracle.json` holds 261 cards (20 per
@@ -20,7 +22,11 @@ import {
   type TrainingCategory,
 } from "./constants";
 import {
-  MANAGER_PROFICIENCY_GAP,
+  MANAGER_PROFICIENCY_DEFAULT,
+  MANAGER_PROFICIENCY_MAX,
+  MANAGER_PROFICIENCY_MIN,
+  MANAGER_PROFICIENCY_RATES,
+  MANAGER_PROFICIENCY_UNCONFIRMED_LEVEL,
   POINT_DISPLAY_SCALE,
   PROGRESSION_CATEGORY_LABELS,
   addStats,
@@ -30,9 +36,13 @@ import {
   bestAllocation,
   categoryCost,
   categoryCostHalf,
+  clampManagerProficiency,
   emptyAllocation,
+  isUnconfirmedProficiencyLevel,
+  managerProficiencyBonus,
   maxGainForBudget,
   nextStatPointCost,
+  ovrAnchor,
   projectOvr,
   resolveBooster,
   roundOvr,
@@ -199,8 +209,9 @@ assert(POSITIONS.every((p) => cards.some((c) => posOf(c) === p)), "fixture cover
     GK1: "Goalkeeper 1", GK2: "Goalkeeper 2", GK3: "Goalkeeper 3",
   };
   for (const cat of TRAINING_CATEGORIES) assert(PROGRESSION_CATEGORY_LABELS[cat] === expectedLabels[cat], `label ${cat} = "${expectedLabels[cat]}" (got "${PROGRESSION_CATEGORY_LABELS[cat]}")`);
-  // The honest-label numbers are the measured ones.
-  assert(MANAGER_PROFICIENCY_GAP.efootbaseDefault === 90 && MANAGER_PROFICIENCY_GAP.approxOvrGap === 4 && MANAGER_PROFICIENCY_GAP.matchesAt === 70, "Manager Proficiency gap constants: default 90, about +4, matches at 70");
+  // The Manager Proficiency control: 70–90, default 90, level 86 unconfirmed.
+  assert(MANAGER_PROFICIENCY_MIN === 70 && MANAGER_PROFICIENCY_MAX === 90 && MANAGER_PROFICIENCY_DEFAULT === 90 && MANAGER_PROFICIENCY_UNCONFIRMED_LEVEL === 86,
+    "Manager Proficiency constants: range 70–90, default 90, level 86 flagged");
 }
 
 // ---------------------------------------------------------------- 3. budget invariant
@@ -412,8 +423,10 @@ assert(POSITIONS.every((p) => cards.some((c) => posOf(c) === p)), "fixture cover
 // ---------------------------------------------------------------- 6. simulateBuild / edge cases
 {
   const base = toStats(cards[0]!.base);
+  // Proficiency 70 (no bonus) so these checks see the training and booster
+  // rules alone; section 7 covers the bonus.
   const config = (over: Partial<Parameters<typeof simulateBuild>[0]["config"]> = {}) => ({
-    playerId: "1", maxLevel: 31, position: "CF" as Position, trainingPoints: emptyAllocation(), boosters: [true, false] as [boolean, boolean], ...over,
+    playerId: "1", maxLevel: 31, position: "CF" as Position, trainingPoints: emptyAllocation(), boosters: [true, false] as [boolean, boolean], managerProficiency: 70, ...over,
   });
 
   // Level cap 1 → 0 points, nothing to spend.
@@ -508,6 +521,324 @@ assert(POSITIONS.every((p) => cards.some((c) => posOf(c) === p)), "fixture cover
   const gkNone = simulateBuild({ base, levelCap: 31, registeredPosition: "CF", config: config({ position: "GK" }), boosters: [null, null], positionAptitudes: apt });
   assert(gkNone.estimatedOvr === 40, "outfield card at GK (no proficiency) → 40");
   assert(projectOvr("CB", { ...base, ...Object.fromEntries(BASE_STATS.map((s) => [s, 40])) } as StatVector, "none") === 40, "the penalised estimate never drops below the hub floor of 40");
+}
+
+// ---------------------------------------------------------------- 7. Manager Proficiency + anchor (manager-proficiency-slider)
+// Fixture `__fixtures__/proficiency-oracle.json`: six cards measured on the
+// reference Progression sheet (numbers only — registered position index,
+// displayed overall, level cap, base stats, both booster vectors) and 263
+// builds [proficiency level, allocation, displayed overall at the registered
+// position with both boosters on, 26 displayed stats, 1 = the sheet's own
+// Max OVR build]: card 0 (SS) reset + Max OVR + four hand builds at 70, 75,
+// 80, 85 and 90; card 1 (GK) 17 builds at 70 and 90; cards 2–5 the reset and
+// the Max OVR build at all 21 levels plus 12 hand builds at 70/80/90. The
+// cells left ambiguous by the measurements (s 66 at 83, s 88 at 87) are not
+// in the selection (7c guards that). The shipped rates were pooled over all
+// six cards, so every figure below is IN-SAMPLE — a regression guard against
+// tampering, not a validation. The held-out and prospective runs (scripts
+// outside the repo) are recorded in design.md; note that the anchor was
+// chosen after the held-out goalkeeper failures were seen, so its held-out
+// figure is post hoc and its independent support is the population check
+// recorded in ovrWeights.ts. Rates moved inside their measured intervals
+// (e.g. r(90) = 0.0362) pass these tests by design: the data cannot tell them
+// apart.
+{
+  interface ProfCard { pos: number; ovr: number; levelCap: number; base: number[]; b1: number[]; b2: number[]; builds: Array<[number, number[], number, Array<number | null>, number]> }
+  const prof = JSON.parse(readFileSync(new URL("./__fixtures__/proficiency-oracle.json", import.meta.url), "utf8")) as { cards: ProfCard[] };
+  const pc = prof.cards;
+  const nBuilds = pc.reduce((s, c) => s + c.builds.length, 0);
+  assert(pc.length === 6 && nBuilds >= 150, `proficiency fixture: ${pc.length} cards, ${nBuilds} builds`);
+  assert(pc.filter((c) => POSITIONS[c.pos] === "GK").length >= 2, "proficiency fixture carries at least two goalkeepers");
+  const boostersOf = (c: ProfCard) => [{ stats: toStats(c.b1) as BoosterVector }, { stats: toStats(c.b2) as BoosterVector }] as const;
+  const simulate = (c: ProfCard, level: number, alloc: number[], anchored: boolean, position: Position = POSITIONS[c.pos]!) =>
+    simulateBuild({
+      base: toStats(c.base),
+      levelCap: c.levelCap,
+      registeredPosition: POSITIONS[c.pos]!,
+      ...(anchored ? { cardOvr: c.ovr } : {}),
+      config: { playerId: "1", maxLevel: c.levelCap, position, trainingPoints: toAlloc(alloc), boosters: [true, true], managerProficiency: level },
+      boosters: boostersOf(c),
+    });
+
+  // 7a. Rule pins (spec scenarios).
+  assert(managerProficiencyBonus(90, 80) === 2 && managerProficiencyBonus(90, 83) === 3, "proficiency 90: 80 → 82 and 83 → 86 before boosters (spec scenario)");
+  assert(managerProficiencyBonus(90, 98) === 1 && managerProficiencyBonus(90, 99) === 0 && managerProficiencyBonus(90, 104) === 0, "cap: 98 gains only 1, 99 and above gain nothing");
+  assert([70, 71, 72, 73, 74, 75, 76].every((p) => [40, 60, 80, 98].every((s) => managerProficiencyBonus(p, s) === 0)), "levels 70–76 give no bonus");
+  {
+    let ok = 0, n = 0;
+    for (let s = 1; s <= 98; s++) { n++; if (managerProficiencyBonus(86, s) === Math.min(99 - s, Math.floor((s + 6) / 32))) ok++; }
+    assert(ok === n && isUnconfirmedProficiencyLevel(86) && !isUnconfirmedProficiencyLevel(85) && !isUnconfirmedProficiencyLevel(87), "level 86 uses the flagged exception floor((s + 6) / 32), capped; only 86 is flagged");
+    assert(!(86 in MANAGER_PROFICIENCY_RATES) && Object.keys(MANAGER_PROFICIENCY_RATES).length === 20, "the rate table covers 70–90 except 86");
+    // No product s · r sits so close to an integer that float rounding could flip the floor.
+    let close = 0;
+    for (const [p, r] of Object.entries(MANAGER_PROFICIENCY_RATES)) for (let s = 1; s <= 98; s++) { const x = s * r; if (r > 0 && Math.abs(x - Math.round(x)) < 1e-6) { close++; console.log(`  near-integer product at ${p}: ${s} × ${r}`); } }
+    assert(close === 0, "no s · r(level) is within 1e-6 of an integer (floor is float-safe)");
+  }
+  assert(clampManagerProficiency(60) === 70 && clampManagerProficiency(95) === 90 && clampManagerProficiency(Number.NaN) === 90 && clampManagerProficiency(undefined) === 90 && clampManagerProficiency(84.6) === 85,
+    "clampManagerProficiency: 60→70, 95→90, NaN/undefined→90 (default), 84.6→85");
+  {
+    // Boosters come after the bonus and may exceed 99: s = 98 at 90 → +1 bonus, then +3.
+    const base = toStats(cards[0]!.base);
+    const hi = { ...base, ballControl: 98 };
+    const r = simulateBuild({ base: hi, levelCap: 31, registeredPosition: "CF", config: { playerId: "1", maxLevel: 31, position: "CF", trainingPoints: emptyAllocation(), boosters: [true, false], managerProficiency: 90 }, boosters: [{ stats: { ballControl: 3 } }, null] });
+    assert(r.proficiencyDeltas.ballControl === 1 && r.projectedStats.ballControl === 102, `98 + bonus 1 + booster 3 = 102 (got ${r.projectedStats.ballControl}; booster before bonus would give 101)`);
+    const dflt = simulateBuild({ base, levelCap: 31, registeredPosition: "CF", config: { playerId: "1", maxLevel: 31, position: "CF", trainingPoints: emptyAllocation(), boosters: [false, false] }, boosters: [null, null] });
+    assert(dflt.config.managerProficiency === MANAGER_PROFICIENCY_DEFAULT && BASE_STATS.some((s) => dflt.proficiencyDeltas[s] > 0), "a config without managerProficiency runs at the default 90");
+    assert(simulateBuild({ base, levelCap: 31, registeredPosition: "CF", config: { playerId: "1", maxLevel: 31, position: "CF", trainingPoints: emptyAllocation(), boosters: [false, false], managerProficiency: 86 }, boosters: [null, null] }).managerProficiencyUnconfirmed,
+      "BuildResult flags level 86 as unconfirmed");
+  }
+
+  // 7b. Regression: proficiency 70–76 equals the engine before the control on
+  // the 261-card hub oracle (stats and the UNANCHORED estimate; the panel
+  // passes the card overall, so its overall at the registered position
+  // differs from the pre-change engine by the anchor).
+  {
+    let same = 0, n = 0;
+    for (const c of cards) {
+      const base = toStats(c.base);
+      const alloc = toAlloc(c.alloc);
+      const bs = [resolveBooster(c.b1, boosterTable), resolveBooster(c.b2, boosterTable)] as const;
+      const before = addStats(base, applyTraining(alloc), applyBoosters(bs, [true, true]));
+      for (const level of [70, 73, 76]) {
+        n++;
+        const r = simulateBuild({ base, levelCap: c.levelCap, registeredPosition: posOf(c), config: { playerId: "1", maxLevel: c.levelCap, position: posOf(c), trainingPoints: alloc, boosters: [true, true], managerProficiency: level }, boosters: bs });
+        if (BASE_STATS.every((s) => r.projectedStats[s] === before[s] && r.proficiencyDeltas[s] === 0) && r.estimatedOvrExact === projectOvr(posOf(c), before) && r.ovrAnchor === null) same++;
+      }
+    }
+    assert(same === n, `proficiency 70/73/76 reproduces the pre-change engine on ${pct(same, n)} oracle builds (stats + unanchored estimate)`);
+  }
+
+  // 7c. Feasible rate interval per level from the fixture cells: every shipped
+  // rate lies inside, level 86 has none (the exception), no ambiguous cell.
+  {
+    const iv = new Map<number, { lo: number; hi: number; n: number }>();
+    const cells86: Array<{ s: number; b: number }> = [];
+    let atCap = 0, capOk = 0, ambiguous = 0, aboveCapped = 0;
+    for (const c of pc) for (const [level, alloc, , shown] of c.builds) {
+      const trained = addStats(toStats(c.base), applyTraining(toAlloc(alloc)));
+      const boost = addStats(toStats(c.b1), toStats(c.b2));
+      BASE_STATS.forEach((stat, i) => {
+        const v = shown[i];
+        if (v === null || v === undefined) return;
+        const s = trained[stat];
+        const b = v - s - boost[stat];
+        if ((level === 83 && s === 66) || (level === 87 && s === 88)) ambiguous++;
+        if (s >= 99) { atCap++; if (b === 0) capOk++; return; }
+        if (s + b === 99 && boost[stat] > 0) aboveCapped++;
+        if (level === 86) { cells86.push({ s, b }); return; }
+        const t = iv.get(level) ?? { lo: 0, hi: Number.POSITIVE_INFINITY, n: 0 };
+        t.n++;
+        t.lo = Math.max(t.lo, b / s);
+        if (s + b < 99) t.hi = Math.min(t.hi, (b + 1) / s);
+        iv.set(level, t);
+      });
+    }
+    assert(ambiguous === 0, `no fixture cell sits at an ambiguous point (s 66 @ 83, s 88 @ 87): ${ambiguous}`);
+    assert(atCap === capOk, `stats already at 99+ after training gain no bonus: ${pct(capOk, atCap)}`);
+    assert(aboveCapped > 0, `the fixture holds capped cells pushed above 99 by a booster (${aboveCapped})`);
+    let inside = 0;
+    for (let level = 70; level <= 90; level++) {
+      if (level === 86) continue;
+      const t = iv.get(level);
+      const r = MANAGER_PROFICIENCY_RATES[level]!;
+      const ok = !!t && t.lo <= r && r < t.hi;
+      if (ok) inside++;
+      console.log(`  level ${level}: n=${t?.n ?? 0} feasible r ∈ [${t?.lo.toFixed(5)}, ${t && Number.isFinite(t.hi) ? t.hi.toFixed(5) : "∞"}) width ${t && Number.isFinite(t.hi) ? (t.hi - t.lo).toFixed(5) : "∞"} · shipped ${r}${ok ? "" : "  ✗ OUTSIDE"}`);
+    }
+    assert(inside === 20, `every shipped rate lies inside the feasible interval of its level (${inside}/20)`);
+    let lo86 = 0, hi86 = Number.POSITIVE_INFINITY;
+    for (const { s, b } of cells86) { lo86 = Math.max(lo86, b / s); if (s + b < 99) hi86 = Math.min(hi86, (b + 1) / s); }
+    assert(cells86.length >= 100 && lo86 >= hi86, `level 86: no single rate fits its ${cells86.length} cells (feasible interval [${lo86.toFixed(5)}, ${hi86.toFixed(5)}) is empty)`);
+    const fit86 = cells86.filter(({ s, b }) => b === Math.min(99 - s, Math.floor((s + 6) / 32))).length;
+    assert(fit86 === cells86.length, `level 86 exception floor((s + 6) / 32) reproduces ${pct(fit86, cells86.length)} cells`);
+  }
+
+  // 7d. Engine vs the fixture: every displayed stat, and the overall at the
+  // registered position anchored (≥ 95 %, goalkeepers asserted on their own)
+  // and unanchored (recorded).
+  {
+    let cellsN = 0, cellsOk = 0;
+    const misses: string[] = [];
+    const tally = { all: { n: 0, a: 0, u: 0 }, gk: { n: 0, a: 0, u: 0 } };
+    for (const [ci, c] of pc.entries()) {
+      const pos = POSITIONS[c.pos]!;
+      let n = 0, a = 0, u = 0, cn = 0, co = 0;
+      for (const [level, alloc, ovr, shown] of c.builds) {
+        const ra = simulate(c, level, alloc, true);
+        const ru = simulate(c, level, alloc, false);
+        BASE_STATS.forEach((stat, i) => {
+          const v = shown[i];
+          if (v === null || v === undefined) return;
+          cn++;
+          if (ra.projectedStats[stat] === v) co++;
+          else misses.push(`card ${ci} level ${level} ${stat}: engine ${ra.projectedStats[stat]} vs ${v}`);
+        });
+        n++;
+        if (Math.abs(ra.estimatedOvr - ovr) <= 1) a++;
+        if (Math.abs(ru.estimatedOvr - ovr) <= 1) u++;
+      }
+      cellsN += cn; cellsOk += co;
+      for (const t of pos === "GK" ? [tally.all, tally.gk] : [tally.all]) { t.n += n; t.a += a; t.u += u; }
+      console.log(`  card ${ci} (${pos}): ${n} builds · stats exact ${co}/${cn} · overall within ±1 anchored ${a}/${n}, unanchored ${u}/${n}`);
+    }
+    assert(cellsOk === cellsN && cellsN >= 5000, `displayed stats reproduced exactly: ${pct(cellsOk, cellsN)} cells${misses.length ? ` (${misses.slice(0, 5).join("; ")})` : ""}`);
+    assert(tally.all.a / tally.all.n >= 0.95, `anchored overall within ±1 at the registered position: ${pct(tally.all.a, tally.all.n)} (≥ 95% required; unanchored ${pct(tally.all.u, tally.all.n)})`);
+    assert(tally.gk.a / tally.gk.n >= 0.95, `… goalkeepers alone: anchored ${pct(tally.gk.a, tally.gk.n)} (≥ 95% required; unanchored ${pct(tally.gk.u, tally.gk.n)})`);
+    assert(tally.all.a >= tally.all.u && tally.gk.a > tally.gk.u, "the anchor never loses builds and fixes goalkeeper builds");
+  }
+
+  // 7e. Anchor semantics: card overall − formula on the base stats (no
+  // training, bonus or boosters); only at the registered position.
+  {
+    const c = pc.find((x) => POSITIONS[x.pos] === "SS")!;
+    const base = toStats(c.base);
+    const r90 = simulate(c, 90, c.builds[0]![1], true);
+    const r70 = simulate(c, 70, c.builds[0]![1], true);
+    const expected = c.ovr - projectOvr("SS", base);
+    assert(Math.abs(r90.ovrAnchor! - expected) < 1e-12 && r90.ovrAnchor === r70.ovrAnchor && r90.ovrAnchor === ovrAnchor("SS", base, c.ovr), `anchor = card overall − formula(base) = ${expected.toFixed(3)}, the same at every proficiency`);
+    const offPos = simulate(c, 90, c.builds[0]![1], true, "RWF");
+    assert(offPos.ovrAnchor === null && offPos.estimatedOvrExact === projectOvr("RWF", offPos.projectedStats), "another position (full proficiency or not) is not anchored");
+    assert(simulate(c, 90, c.builds[0]![1], false).ovrAnchor === null, "no card overall → no anchor");
+  }
+
+  // 7f. Max OVR: the linear DP + bonus + anchor against the sheet's own Max
+  // OVR build; and the measured SS table (Max build 106/109/109/110, Reset
+  // 94/97/97/97 at 70/80/85/90).
+  {
+    const ss = pc.find((x) => POSITIONS[x.pos] === "SS")!;
+    const best = bestAllocation("SS", trainingPointsAvailable(ss.levelCap));
+    const sheetMax = [8, 4, 12, 8, 7, 0, 0, 0, 0, 0];
+    assert(TRAINING_CATEGORIES.every((cat, i) => best[cat] === sheetMax[i]), `SS card: Max OVR picks the sheet's build Shooting 8, Passing 4, Dribbling 12, Dexterity 8, Lower Body 7 (got ${JSON.stringify(best)})`);
+    const table: Array<[number, number, number]> = [[70, 106, 94], [80, 109, 97], [85, 109, 97], [90, 110, 97]];
+    for (const [level, maxOvr, resetOvr] of table) {
+      const mx = ss.builds.find((b) => b[0] === level && b[4] === 1)!;
+      const rs = ss.builds.find((b) => b[0] === level && b[1].every((v) => v === 0))!;
+      const em = simulate(ss, level, TRAINING_CATEGORIES.map((cat) => best[cat]), true).estimatedOvr;
+      const er = simulate(ss, level, rs[1], true).estimatedOvr;
+      assert(mx[2] === maxOvr && rs[2] === resetOvr && Math.abs(em - maxOvr) <= 1 && Math.abs(er - resetOvr) <= 1,
+        `SS at proficiency ${level}: Max ${em} vs measured ${maxOvr}, Reset ${er} vs measured ${resetOvr}`);
+    }
+    let n = 0, ok = 0, budgetOk = 0;
+    for (const c of pc) {
+      const pos = POSITIONS[c.pos]!;
+      const budget = trainingPointsAvailable(c.levelCap);
+      const alloc = bestAllocation(pos, budget);
+      if (allocationCost(alloc) <= budget) budgetOk++;
+      for (const [level, , ovr, , isMax] of c.builds) {
+        if (isMax !== 1) continue;
+        n++;
+        if (Math.abs(simulate(c, level, TRAINING_CATEGORIES.map((cat) => alloc[cat]), true).estimatedOvr - ovr) <= 1) ok++;
+      }
+    }
+    assert(budgetOk === pc.length, "Max OVR stays within the budget on every fixture card");
+    assert(n >= 20 && ok === n, `engine Max OVR (linear DP + bonus + anchor) within ±1 of the sheet's Max OVR reading: ${pct(ok, n)}`);
+    // The reference sheet's own Max OVR build does not move with the
+    // proficiency level (one allocation per card across every level it was
+    // read at) — the reason the preset stays the level-independent linear DP.
+    const invariant = pc.filter((c) => new Set(c.builds.filter((b) => b[4] === 1).map((b) => b[1].join(","))).size === 1);
+    const levelsRead = pc.reduce((s, c) => s + c.builds.filter((b) => b[4] === 1).length, 0);
+    assert(invariant.length === 5 && levelsRead === n, `the sheet's Max OVR build is the same at every proficiency level on ${invariant.length}/5 cards with a recorded Max build (${levelsRead} readings)`);
+  }
+}
+
+// ---------------------------------------------------------------- 8. Max OVR vs the bonus-aware optimum (spec "Max OVR Preset")
+// bestAllocation maximises the linear estimate and ignores the Manager
+// Proficiency bonus (its floors and the 99 cap). Independent reference: an
+// exact grouped knapsack over the estimate WITH the bonus — every category is
+// a group whose value is Σ w · (f(base + g) − f(base)), f(s) = s + bonus(s),
+// except Aerial Strength and Goalkeeper 1, which share Jump and therefore
+// form one joint group over every pair (Aerial, GK1). Boosters and the anchor
+// are constants of the build, so the reference maximises the same unrounded
+// estimate the panel shows. Asserted on every hub-oracle card at its
+// registered position and at every level 70–90: the preset is never more than
+// 1 below the optimum unrounded (so at most 1 below it displayed) and equal to
+// it at 70–76, where there is no bonus.
+{
+  const bonusAwareBest = (p: Position, budget: number, base: StatVector, level: number): TrainingAllocation => {
+    const B = Math.round(budget * 2);
+    const w = (s: BaseStat) => OVR_WEIGHTS[p].w[BASE_STATS.indexOf(s)] ?? 0;
+    const f = (s: number) => s + managerProficiencyBonus(level, s);
+    const lift = (s: BaseStat, g: number) => w(s) * (f(base[s] + g) - f(base[s]));
+    const gmax = maxGainForBudget(budget);
+    type Opt = { cost: number; val: number; set: Partial<TrainingAllocation> };
+    const groups: Opt[][] = [];
+    for (const cat of TRAINING_CATEGORIES) {
+      if (cat === "GK1") continue; // folded into the Aerial group
+      const opts: Opt[] = [];
+      if (cat === "Aerial") {
+        for (let a = 0; a <= gmax; a++) for (let k = 0; k <= gmax; k++) {
+          const cost = categoryCostHalf(a) + categoryCostHalf(k);
+          if (cost > B) continue;
+          let val = lift("jump", a + k);
+          for (const s of TRAINING_STATS.Aerial) if (s !== "jump") val += lift(s, a);
+          for (const s of TRAINING_STATS.GK1) if (s !== "jump") val += lift(s, k);
+          opts.push({ cost, val, set: { Aerial: a, GK1: k } });
+        }
+      } else {
+        for (let g = 0; categoryCostHalf(g) <= B; g++) {
+          let val = 0;
+          for (const s of TRAINING_STATS[cat]) val += lift(s, g);
+          opts.push({ cost: categoryCostHalf(g), val, set: { [cat]: g } });
+        }
+      }
+      groups.push(opts);
+    }
+    let dp: number[] = new Array<number>(B + 1).fill(Number.NEGATIVE_INFINITY);
+    dp[0] = 0;
+    const back: Array<Array<{ prev: number; o: Opt } | undefined>> = [];
+    for (const opts of groups) {
+      const next: number[] = new Array<number>(B + 1).fill(Number.NEGATIVE_INFINITY);
+      const ch: Array<{ prev: number; o: Opt } | undefined> = new Array(B + 1);
+      for (let u = 0; u <= B; u++) {
+        if (dp[u] === Number.NEGATIVE_INFINITY) continue;
+        for (const o of opts) {
+          if (u + o.cost > B) continue;
+          const v = dp[u]! + o.val;
+          if (v > next[u + o.cost]! + 1e-9) { next[u + o.cost] = v; ch[u + o.cost] = { prev: u, o }; }
+        }
+      }
+      dp = next;
+      back.push(ch);
+    }
+    let best = 0;
+    for (let u = 1; u <= B; u++) if (dp[u]! > dp[best]! + 1e-9) best = u;
+    const alloc = emptyAllocation();
+    for (let i = groups.length - 1, u = best; i >= 0; i--) { const x = back[i]![u]!; Object.assign(alloc, x.o.set); u = x.prev; }
+    return alloc;
+  };
+
+  let n = 0, below = 0, gapOver1 = 0, dispOver1 = 0, refWorse = 0, noBonusDiff = 0, overBudget = 0;
+  let worstGap = 0;
+  const dispGap = new Map<number, number>();
+  for (const c of cards) {
+    const p = posOf(c);
+    const base = toStats(c.base);
+    const budget = trainingPointsAvailable(c.levelCap);
+    const bs = [resolveBooster(c.b1, boosterTable), resolveBooster(c.b2, boosterTable)] as const;
+    const preset = bestAllocation(p, budget);
+    for (let level = MANAGER_PROFICIENCY_MIN; level <= MANAGER_PROFICIENCY_MAX; level++) {
+      const sim = (alloc: TrainingAllocation) =>
+        simulateBuild({ base, levelCap: c.levelCap, registeredPosition: p, cardOvr: c.ovr, config: { playerId: "1", maxLevel: c.levelCap, position: p, trainingPoints: alloc, boosters: [true, true], managerProficiency: level }, boosters: bs });
+      const ref = bonusAwareBest(p, budget, base, level);
+      if (allocationCost(ref) > budget) overBudget++;
+      const rp = sim(preset);
+      const rr = sim(ref);
+      const gap = rr.estimatedOvrExact - rp.estimatedOvrExact;
+      n++;
+      if (gap < -1e-9) refWorse++;
+      if (gap > 1e-9) below++;
+      if (gap >= 1) gapOver1++;
+      worstGap = Math.max(worstGap, gap);
+      const dg = rr.estimatedOvr - rp.estimatedOvr;
+      dispGap.set(dg, (dispGap.get(dg) ?? 0) + 1);
+      if (dg > 1) dispOver1++;
+      if (level <= 76 && Math.abs(gap) > 1e-9) noBonusDiff++;
+    }
+  }
+  assert(overBudget === 0 && refWorse === 0, `bonus-aware reference stays within budget and never scores below the preset (${n} card × level pairs)`);
+  assert(noBonusDiff === 0, "levels 70–76 (no bonus): the preset is exactly the optimum");
+  assert(gapOver1 === 0 && dispOver1 === 0,
+    `preset vs bonus-aware optimum, 261 cards × 21 levels: below it on ${pct(below, n)}, worst unrounded gap ${worstGap.toFixed(3)} (< 1 required), displayed gap ${JSON.stringify([...dispGap].sort((a, b) => a[0] - b[0]))} (≤ 1 required)`);
 }
 
 if (process.exitCode === 1) process.exit(1);
