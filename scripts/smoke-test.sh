@@ -163,20 +163,37 @@ else
   fail "GET /health" "code=$H_CODE body=${H_BODY:0:200}"
 fi
 
-# 2. featured.list carries slugs and the "National All-Stars" bundle; featured.bySlug resolves it
+# 2. featured.list → every bundle has a unique non-empty slug and ≥ 1 card; the
+#    first bundle resolves through featured.bySlug with the same ordered cards;
+#    an unknown slug resolves to null (the web answers 404). Data-independent:
+#    the bundle list changes with every dump, so no bundle name is hard-coded.
 trpc_get "featured.list" '{}'
-NAS_SLUG="$(result '[b["slug"] for b in d if b["name"] == "National All-Stars"][0]')"
-if [ "$CODE" = "200" ] && [ -n "$NAS_SLUG" ]; then
-  pass "featured.list → bundle 'National All-Stars' with slug $NAS_SLUG"
-  trpc_get "featured.bySlug" "{\"slug\":\"$NAS_SLUG\"}"
-  NAS_CARDS="$(result 'len(d["cards"])')"
-  if [ "$CODE" = "200" ] && [ -n "$NAS_CARDS" ] && [ "$NAS_CARDS" -gt 0 ]; then
-    pass "featured.bySlug $NAS_SLUG → $NAS_CARDS cards"
+FB_CODE="$CODE"
+FB_COUNT="$(result 'len(d)')"
+FB_BAD="$(result 'sum(1 for b in d if not b.get("slug") or len(b.get("cards") or []) == 0) + (len(d) - len({b.get("slug") for b in d}))')"
+FB_SLUG="$(result 'd[0]["slug"] if d else ""')"
+FB_NAME="$(result 'd[0]["name"] if d else ""')"
+FB_IDS="$(result '",".join(c["id"] for c in d[0]["cards"]) if d else ""')"
+if [ "$FB_CODE" = "200" ] && [ -n "$FB_COUNT" ] && [ "$FB_COUNT" -gt 0 ] && [ "$FB_BAD" = "0" ] && [ -n "$FB_SLUG" ]; then
+  pass "featured.list → $FB_COUNT bundles, unique non-empty slugs, ≥ 1 card each (first: '$FB_NAME' → $FB_SLUG)"
+  trpc_get "featured.bySlug" "{\"slug\":\"$FB_SLUG\"}"
+  BS_SLUG="$(result 'd["slug"]')"
+  BS_CARDS="$(result 'len(d["cards"])')"
+  BS_IDS="$(result '",".join(c["id"] for c in d["cards"])')"
+  if [ "$CODE" = "200" ] && [ "$BS_SLUG" = "$FB_SLUG" ] && [ -n "$BS_CARDS" ] && [ "$BS_CARDS" -gt 0 ] && [ "$BS_IDS" = "$FB_IDS" ]; then
+    pass "featured.bySlug $FB_SLUG → $BS_CARDS cards, same order as featured.list"
   else
-    fail "featured.bySlug $NAS_SLUG" "code=$CODE cards=$NAS_CARDS body=${BODY:0:200}"
+    fail "featured.bySlug $FB_SLUG" "code=$CODE slug=$BS_SLUG cards=$BS_CARDS same_ids=$([ "$BS_IDS" = "$FB_IDS" ] && echo yes || echo no) body=${BODY:0:200}"
   fi
 else
-  fail "featured.list → 'National All-Stars' bundle with slug" "code=$CODE body=${BODY:0:200}"
+  fail "featured.list → bundles with unique slugs and cards" "code=$FB_CODE count=$FB_COUNT bad=$FB_BAD body=${BODY:0:200}"
+fi
+trpc_get "featured.bySlug" '{"slug":"no-such-bundle-1999-01-01"}'
+UNKNOWN_BUNDLE="$(result 'd is None')"
+if [ "$CODE" = "200" ] && [ "$UNKNOWN_BUNDLE" = "True" ]; then
+  pass "featured.bySlug unknown slug → null"
+else
+  fail "featured.bySlug unknown slug → null" "code=$CODE body=${BODY:0:200}"
 fi
 
 # 3. removed procedures answer 404 (community / feed / tierList / user / pages /

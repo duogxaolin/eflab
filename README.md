@@ -78,7 +78,9 @@ pnpm db:refresh    # db:seed (efootbase dump → Postgres, upsert in one transac
 python3 -I scripts/verify-seed.py   # optional: assert the DB matches the dump
 ```
 
-What `db:refresh` leaves behind (2026-10-17 dump): 48,410 players (48,407 dump + 3 eFHUB-only) · 1,475 managers with tactic ratings · 375 boosters · 2,046 packs · 24 featured bundles (189 cards) · 84 skills / 191,444 player-skill rows · 185 countries · 707 teams · 34 leagues · 10,745 community tier badges.
+What `db:refresh` leaves behind (2026-10-18 re-dump): 50,694 players (50,691 dump + 3 eFHUB-only; newest release 2026-10-15) · 1,475 managers with tactic ratings · 379 boosters · 2,065 packs · 24 featured bundles (166 cards) · 84 skills / 195,607 player-skill rows · 185 countries · 736 teams · 34 leagues · 10,745 community tier badges.
+
+The 2026-10-18/19 re-dump (rewritten `scripts/efootbase_dump.py`) added 2,284 new cards and changed 5,380, and uploaded 9,891 images to R2. efootbase's API lists newest cards first with `sort=time_added&order=desc`, accepts `limit` up to 100, and reports `total_count` / `total_pages` as lookahead values (the end of data is the first short page). Limits: the 2,284 new cards have no eFHUB cross-fill data (stars, reputation, position ratings, tier badge); R2 objects carry a 1-year immutable cache, so the 5,312 overwritten card images may stay stale in caches until purged or versioned; `time_added` does not change on stat edits, so only a full dump finds changed cards.
 
 Seed behaviour:
 
@@ -173,8 +175,8 @@ Changing the R2 domain = set `R2_PUBLIC_BASE` (API) and `NEXT_PUBLIC_R2_PUBLIC_B
 ## Known limitations
 
 - The Progression panel's overall is an estimate (fitted formula, anchored at the registered position with an anchor chosen post hoc; other positions are unanchored, use the fitted penalty when half / non-proficient, where efootbase reads about 4 / 2–3 higher unless the estimate sits at the floor of 40, and carry a warning); the Manager Proficiency rates between 70/75/80/85/90 have no two-card held-out check and the bonus at level 86 is an unconfirmed exception; Max OVR ignores the bonus (up to 1 displayed point below the best build); there is no manager picker (no per-manager effects — no dataset); the weights follow the game version the eFHUB data reflects and must be regenerated with it; builds are not saved anywhere.
-- 38,337 cards carry `levelCap` 1 in the dump; their max-level view equals the base view and they show a note ("Progression and manager data are not available for this card") instead of the panel.
-- **The dump is stale** (taken 2026-10-06): the newest `releaseDate` in the database is 2026-10-01. Of the 37 distinct card ids linked from efootbase's home page on 2026-10-18 only 8 exist here (29 are newer cards); by base player 33 of 34 are present (only Ricardo Quaresma, base 4526, is missing entirely). Refreshing needs `scripts/efootbase_dump.py` with an API key.
+- 40,516 of the 50,691 dump cards carry `levelCap` 1; their max-level view equals the base view and they show a note ("Progression and manager data are not available for this card") instead of the panel.
+- **Dump freshness**: re-dumped 2026-10-18; the newest `releaseDate` in the database is 2026-10-15 (Ricardo Quaresma, missing from the 2026-10-06 dump, is now present). The cards added by the re-dump have no eFHUB cross-fill data and overwritten card images may be served stale from caches (see above). Refreshing again needs `scripts/efootbase_dump.py` with an API key.
 - **efootbase's filter / sort / search results could not be compared**: its API answers automation with a Cloudflare bot check, so the catalogue filters were verified against our own data only (labels and controls follow the capture).
 - Not modelled because the dump has no such data: efootbase's **Position Training** toggle and **In-Match Roles** (set-piece takers, captain). Body Model (11 physique values + 5 derived metrics), Form and Injury Resistance are stored for every card, returned by `player.byId` / `player.compare` and shown in their detail-page sections.
 - Skill labels and the Showtime / Classic grouping are display-only (`apps/web/lib/skill-labels.ts`); the database keeps the fixture names.
