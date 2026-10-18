@@ -9,8 +9,12 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  // pg_trgm serves the trigram GIN index on Player.nameNormalized (fuzzy tier of
+  // player search); unaccent is kept for ad-hoc SQL. Both are created by the
+  // baseline migration so a fresh database bootstraps with `pnpm db:migrate`.
+  extensions = [pg_trgm, unaccent]
 }
 
 // ---- Enums ----
@@ -21,15 +25,24 @@ enum Role {
   ADMIN
 }
 
+// One value per efootbase `card_type` code (dump/efootbase/players_meta.json
+// `card_type.values`, cross-checked against pack names — see CARD_TYPE_LABELS in
+// @eflab/shared and the seeder's card-type validation):
+//   0 STANDARD · 1 LEGENDARY · 3 TRENDING (POTW/POTD/POTS) · 4 SELECTION (2022
+//   club/league selection packs) · 5 EPIC (incl. Big Time campaigns) ·
+//   6 HIGHLIGHT (incl. Show Time + selection packs) · 7 STRIKE_ARENA.
+// Big Time and Show Time are pack campaigns inside EPIC / HIGHLIGHT, not codes
+// of their own, so the former BIG_TIME / SHOW_TIME values were removed
+// (BIG_TIME was renamed to SELECTION in 20261017000100_parity_fixes, because
+// the old seeder stored code 4 under that name).
 enum CardType {
   STANDARD
-  TRENDING
-  EPIC
-  BIG_TIME
-  HIGHLIGHT
-  SHOW_TIME
-  STRIKE_ARENA
   LEGENDARY
+  TRENDING
+  SELECTION
+  EPIC
+  HIGHLIGHT
+  STRIKE_ARENA
 }
 
 // ---- Core: Player card (one player → N card versions, same baseId) ----
@@ -38,6 +51,11 @@ model Player {
   id             BigInt    @id
   baseId         BigInt
   name           String
+  // efootbase `name_normalized`: lower-case ASCII form of `name` (accents
+  // stripped). Search normalises the query the same way in application code
+  // (normalizeSearchQuery in @eflab/shared) and matches this column with LIKE
+  // (substring tier) and pg_trgm `%` (fuzzy tier) through the GIN index below.
+  nameNormalized String?
   accentedName   String?
   japName        String?
   chineseName    String?
@@ -155,20 +173,22 @@ model Player {
   posRWF Int @default(2)
   posSS  Int @default(2)
   posCF  Int @default(2)
-  // 13 position OVR ratings
-  ratingGK  Int @default(40)
-  ratingCB  Int @default(40)
-  ratingLB  Int @default(40)
-  ratingRB  Int @default(40)
-  ratingDMF Int @default(40)
-  ratingCMF Int @default(40)
-  ratingLMF Int @default(40)
-  ratingRMF Int @default(40)
-  ratingAMF Int @default(40)
-  ratingLWF Int @default(40)
-  ratingRWF Int @default(40)
-  ratingSS  Int @default(40)
-  ratingCF  Int @default(40)
+  // 13 per-position OVR ratings — cross-fill-owned (eFHUB overallGK…overallCF via
+  // seed-efhub-crossfill.ts). efootbase does not expose them, so the seeder leaves
+  // them NULL and the UI shows "n/a" instead of an invented number.
+  ratingGK  Int?
+  ratingCB  Int?
+  ratingLB  Int?
+  ratingRB  Int?
+  ratingDMF Int?
+  ratingCMF Int?
+  ratingLMF Int?
+  ratingRMF Int?
+  ratingAMF Int?
+  ratingLWF Int?
+  ratingRWF Int?
+  ratingSS  Int?
+  ratingCF  Int?
   // 11 physique / body model
   neckLength        Int @default(5)
   neckSize          Int @default(5)
@@ -205,20 +225,13 @@ model Player {
   // otherVersions is implemented via a manual `WHERE baseId = ?` (no enforced self-relation FK,
   // since base versions can be missing from a partial dataset).
   packCards    PackCard[]
-  builds       Build[]
-  reviews      Review[]
-  tierVotes    TierVote[]
   team         Team?    @relation(fields: [teamId], references: [id])
-  // Phase 2 reverse relation — posts sharing this card into the feed.
-  posts        Post[]    @relation("PostPlayer")
   // community tier aggregate (cached)
   communityTier String?
   // efootbase homepage featured bundles (specialPlayerList) — ordered card spots.
   featuredBundleCards FeaturedBundleCard[]
 
   @@index([baseId])
-  @@index([cardType])
-  @@index([ovr])
   @@index([maxOvr])
   @@index([name])
   @@index([nationalityId, registeredPosition])
@@ -229,6 +242,15 @@ model Player {
   @@index([cardType, ovr])
   @@index([registeredPosition, ovr])
   @@index([nationalityId, ovr])
+  // Deterministic pagination: every list orderBy is [{sort}, {id}], so the default
+  // Max OVR view, the OVR sort and the release-date (trending) window walk one
+  // index with a unique tiebreaker. The single-column cardType/ovr indexes were
+  // redundant with (cardType, ovr) and (ovr, id) and were dropped.
+  @@index([maxOvr, id])
+  @@index([ovr, id])
+  @@index([releaseDate, id])
+  // Trigram GIN index for accent-insensitive substring + fuzzy name search.
+  @@index([nameNormalized(ops: raw("gin_trgm_ops"))], type: Gin)
 }
 
 // ---- Manager (efootbase APK bundles 65; efhub latestManagers.json tracks new releases) ----
@@ -261,8 +283,6 @@ model Manager {
   boostId2 Int?
   booster1Stat String?
   booster2Stat String?
-  // relations
-  builds Build[]
 
   @@index([name])
 }
@@ -430,7 +450,11 @@ model League {
   teams Team[]
 }
 
-// ---- Community ----
+// ---- Auth (User + Session + Account; the `auth` router and Google OAuth) ----
+// The user-content tables (Build, Review, TierVote, TierList, Follow, Post,
+// PostLike, Comment) were dropped in migration 20261018000000_remove_dead_surface
+// (change remove-dead-surface) — nothing served them after the web shrank to the
+// four efootbase pages.
 
 model User {
   id             String   @id @default(cuid())
@@ -448,65 +472,11 @@ model User {
   followingCount Int      @default(0)
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
-  builds         Build[]
-  tierVotes      TierVote[]
-  reviews        Review[]
   sessions       Session[]
   accounts       Account[]
-  following      Follow[] @relation("FollowFollowing")
-  followers      Follow[] @relation("FollowFollower")
-  posts          Post[]
-  postLikes      PostLike[]
-  comments       Comment[]
-  tierLists     TierList[]
 
   @@index([username])
 }
-
-model Build {
-  id            String   @id @default(cuid())
-  authorId      String
-  playerId       BigInt
-  managerId      BigInt?
-  level         Int
-  trainingPoints Json
-  boosters       Json
-  note          String?
-  isPublic      Boolean  @default(true)
-  isPro         Boolean  @default(false)
-  createdAt     DateTime @default(now())
-  author        User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
-  player        Player   @relation(fields: [playerId], references: [id], onDelete: Cascade)
-  manager       Manager? @relation(fields: [managerId], references: [id], onDelete: SetNull)
-
-  @@index([playerId, isPublic])
-  @@index([authorId])
-}
-
-model Review {
-  id        String   @id @default(cuid())
-  authorId  String
-  playerId   BigInt
-  rating    Int
-  content   String
-  createdAt DateTime @default(now())
-  author    User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
-  player    Player   @relation(fields: [playerId], references: [id], onDelete: Cascade)
-
-  @@index([playerId])
-}
-
-model TierVote {
-  userId    String
-  playerId   BigInt
-  tier       String
-  author     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
-  player     Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
-
-  @@id([userId, playerId])
-  @@index([playerId])
-}
-// ---- Phase 2: Authentication + Social + Feed + Tier Lists ----
 
 model Session {
   id        String   @id @default(cuid())
@@ -540,78 +510,4 @@ model Account {
 
   @@unique([providerId, accountId])
   @@index([userId])
-}
-
-model Follow {
-  followerId String
-  followingId String
-  createdAt   DateTime @default(now())
-  follower    User @relation("FollowFollower", fields: [followerId], references: [id], onDelete: Cascade)
-  following   User @relation("FollowFollowing", fields: [followingId], references: [id], onDelete: Cascade)
-
-  @@id([followerId, followingId])
-  @@index([followingId])
-}
-
-model Post {
-  id         String   @id @default(cuid())
-  authorId   String
-  content    String
-  mediaUrls  String[]
-  playerId   BigInt?
-  region     String?
-  country    String?
-  likesCount Int      @default(0)
-  commentsCount Int   @default(0)
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
-  author     User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
-  player     Player?  @relation("PostPlayer", fields: [playerId], references: [id], onDelete: SetNull)
-  likes      PostLike[]
-  comments   Comment[]
-
-  @@index([authorId])
-  @@index([createdAt])
-  @@index([region])
-  @@index([country])
-}
-
-model PostLike {
-  postId    String
-  userId    String
-  createdAt DateTime @default(now())
-  post      Post @relation(fields: [postId], references: [id], onDelete: Cascade)
-  user      User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@id([postId, userId])
-  @@index([userId])
-}
-
-model Comment {
-  id        String   @id @default(cuid())
-  postId    String
-  authorId  String
-  content   String
-  createdAt DateTime @default(now())
-  post      Post @relation(fields: [postId], references: [id], onDelete: Cascade)
-  author    User @relation(fields: [authorId], references: [id], onDelete: Cascade)
-
-  @@index([postId])
-  @@index([authorId])
-}
-
-model TierList {
-  id          String   @id @default(cuid())
-  authorId    String
-  name        String
-  tiers       Json
-  isPublic    Boolean  @default(true)
-  submissions Int      @default(0)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  author      User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
-
-  @@index([authorId])
-  @@index([createdAt])
-  @@index([isPublic])
 }

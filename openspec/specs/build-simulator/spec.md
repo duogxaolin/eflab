@@ -1,26 +1,21 @@
 # build-simulator Specification
 
+> **Status: removed from the web UI in change `eflab-parity-fixes` (2026-10-17); API remains** (the detail-page Progression sliders, Max OVR preset and Manager Proficiency control were removed because the efootbase dump carries no training rules; `packages/shared/src/progression.ts` remained; the headless `components/build-simulator/BuildSimulator.tsx` and `community.simulate` were deleted in change `remove-dead-surface` on 2026-10-18 — the engine now runs only client-side in `ProgressionPanel.tsx`, see `player-progression-simulator`). Requirements below are kept as the historical record.
+
 ## Purpose
 The build simulator capability calculates projected player ratings and simulated attribute growths as users allocate progression points across training categories, toggle booster slots, and pair cards with managers.
 ## Requirements
 ### Requirement: Progression Point Allocation
-The system MUST allow users to increment and decrement progression points across training categories (Shooting, Passing, Dribbling, Dexterity, Lower Body, Aerial, Defending, Goalkeeping) within the card's maximum level capacity.
+The system MUST allow users to increment and decrement stat points across the ten training categories (Shooting, Passing, Dribbling, Dexterity, Lower Body, Aerial, Defending, GK1, GK2, GK3) within a budget of the card's level cap minus 1 training points, using the cost curve in the progression rules, and MUST show the remaining budget.
 
 #### Scenario: Allocating training points
-- **WHEN** a user allocates 4 points to Shooting on a forward card
-- **THEN** Offensive Awareness increases by +4, Finishing increases by +4, and Set Piece Taking increases by +2, with remaining training points decremented accordingly.
-
-### Requirement: Manager Tactical Boost Projection
-The simulator MUST incorporate selected manager tactics (Possession, Quick Counter, Long Ball Counter, Out Wide, Long Ball) and apply appropriate rating bonuses to affected attributes when manager playstyle proficiency thresholds are met.
-
-#### Scenario: Selecting an 88+ Quick Counter manager
-- **WHEN** a user selects a manager with Quick Counter rating >= 88
-- **THEN** qualifying player stats receive a +2 team playstyle bonus and projected max OVR updates dynamically.
+- **WHEN** a user buys 4 stat points in Shooting on a forward card with at least 2 training points available
+- **THEN** Finishing, Set Piece Taking and Curl each increase by 4, and 2 training points are deducted from the remaining budget.
 
 ### Requirement: Booster Slot Toggling
-The simulator MUST permit users to activate or deactivate booster slots (Booster 1, Booster 2) and instantly reflect the corresponding stat deltas in the simulated profile.
+The simulator MUST permit users to activate or deactivate booster slots (Booster 1, Booster 2) and instantly reflect the corresponding stat deltas, taken from the booster's real stat vector, in the simulated profile.
 
 #### Scenario: Toggling Booster 1 on an Epic card
 - **WHEN** Booster 1 (e.g., Defending +4) is activated
-- **THEN** Defensive Awareness, Tackling, Aggression, and Defensive Engagement immediately display an additional +4 bonus and highlight green.
+- **THEN** the stats in the booster's vector immediately show an additional +4 bonus and are highlighted.
 

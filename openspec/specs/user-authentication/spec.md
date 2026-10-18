@@ -1,5 +1,7 @@
 # user-authentication Specification
 
+> **Status: removed from the web UI on 2026-10-07; API remains** (`/login` and `/register` pages are gone; the `auth` router, session cookies and the Google OAuth routes stay live — `lib/auth.tsx` still calls `auth.getSession`/`auth.signOut`, and `eflab-parity-fixes` added the verified-email check for account linking). Requirements below are kept as the historical record.
+
 ## Purpose
 Real authentication (email/password + Google OAuth) with Postgres-backed sessions, replacing the Phase 1 fake seed-user. All community mutations require authenticated sessions.
 ## Requirements

@@ -4,27 +4,24 @@ import {
   POSITIONS,
   PLAYING_STYLES,
   PHYSIQUE_FIELDS,
+  CARD_TYPE_LABELS,
 } from "@eflab/shared";
-export const CARD_TYPE_LABEL: Record<CardType, string> = {
-  STANDARD: "Standard",
-  TRENDING: "Trending",
-  EPIC: "Epic",
-  BIG_TIME: "Big Time",
-  HIGHLIGHT: "Highlight",
-  SHOW_TIME: "Show Time",
-  STRIKE_ARENA: "Strike Arena",
-  LEGENDARY: "Legendary",
-};
 
-export const CARD_TYPE_COLOR_VAR: Record<CardType, string> = {
+// Display label per card type. Single source of truth is `CARD_TYPE_LABELS` in
+// @eflab/shared (derived from efootbase's own `players_meta.json`); this alias
+// keeps the historical `CARD_TYPE_LABEL` import name working for existing pages.
+export const CARD_TYPE_LABEL: Readonly<Record<CardType, string>> = CARD_TYPE_LABELS;
+
+// Card-type accent colour (stripe / badge text / placeholder tint). Keyed by the
+// shared `CardType` enum — one token per enum value in globals.css `@theme`.
+export const CARD_TYPE_COLOR_VAR: Readonly<Record<CardType, string>> = {
   STANDARD: "var(--color-card-standard)",
-  TRENDING: "var(--color-card-trending)",
-  EPIC: "var(--color-card-epic)",
-  BIG_TIME: "var(--color-card-big-time)",
-  HIGHLIGHT: "var(--color-card-highlight)",
-  SHOW_TIME: "var(--color-card-show-time)",
-  STRIKE_ARENA: "var(--color-card-strike-arena)",
   LEGENDARY: "var(--color-card-legendary)",
+  TRENDING: "var(--color-card-trending)",
+  SELECTION: "var(--color-card-selection)",
+  EPIC: "var(--color-card-epic)",
+  HIGHLIGHT: "var(--color-card-highlight)",
+  STRIKE_ARENA: "var(--color-card-strike-arena)",
 };
 
 // Konami registered-position index → POSITIONS.
@@ -40,38 +37,83 @@ export function positionOf(idx: number): Position | "—" {
   return POSITION_BY_INDEX[idx]!;
 }
 
-// Stat color tier for display.
+// Stat colour tier for display — five tiers over the `--color-tier-*` tokens
+// (globals.css @theme, the single source): ≥ 100 max (magenta, efootbase's
+// colour for trained stats past 99), 90–99 elite, 80–89 high, 70–79 mid,
+// < 70 low.
+export type StatTier = "max" | "elite" | "high" | "mid" | "low";
+export function statTier(value: number): StatTier {
+  if (value >= 100) return "max";
+  if (value >= 90) return "elite";
+  if (value >= 80) return "high";
+  if (value >= 70) return "mid";
+  return "low";
+}
+// Literal class strings (Tailwind only generates utilities it can see in source).
+const TIER_TEXT_CLASS: Readonly<Record<StatTier, string>> = {
+  max: "text-[var(--color-tier-max)]",
+  elite: "text-[var(--color-tier-elite)]",
+  high: "text-[var(--color-tier-high)]",
+  mid: "text-[var(--color-tier-mid)]",
+  low: "text-[var(--color-tier-low)]",
+};
+const TIER_BG_CLASS: Readonly<Record<StatTier, string>> = {
+  max: "bg-[var(--color-tier-max)]",
+  elite: "bg-[var(--color-tier-elite)]",
+  high: "bg-[var(--color-tier-high)]",
+  mid: "bg-[var(--color-tier-mid)]",
+  low: "bg-[var(--color-tier-low)]",
+};
+export const tierTextClass = (tier: StatTier): string => TIER_TEXT_CLASS[tier];
+export const tierBgClass = (tier: StatTier): string => TIER_BG_CLASS[tier];
 export function statTierClass(value: number): string {
-  if (value >= 90) return "text-[var(--color-tier-elite)]";
-  if (value >= 80) return "text-[var(--color-tier-high)]";
-  if (value >= 70) return "text-[var(--color-tier-mid)]";
-  return "text-[var(--color-tier-low)]";
+  return TIER_TEXT_CLASS[statTier(value)];
 }
 
 export function statTierBg(value: number): string {
-  if (value >= 90) return "bg-[var(--color-tier-elite)]";
-  if (value >= 80) return "bg-[var(--color-tier-high)]";
-  if (value >= 70) return "bg-[var(--color-tier-mid)]";
-  return "bg-[var(--color-tier-low)]";
+  return TIER_BG_CLASS[statTier(value)];
+}
+
+/** Text colour that reads on a tier-coloured pill: the four bright tiers
+ *  (magenta, teal, lime, amber) take the dark on-accent text, red takes white. */
+export function statTierForeground(value: number): string {
+  return statTier(value) === "low" ? "text-white" : "text-[var(--color-accent-foreground)]";
+}
+
+/** Body-model values run 1–10: 7+ reads as high, 4–6 as mid, 1–3 as low. */
+export function physiqueTier(value: number): StatTier {
+  if (value >= 7) return "high";
+  if (value >= 4) return "mid";
+  return "low";
+}
+
+// Stat labels that are not a plain camelCase → "Title Case" split (game naming
+// differs from the internal key, or the key carries an acronym). The wording
+// follows efootbase's player page ("Place Kicking", "Jumping", "Tackling" —
+// capture 2026-10-18); the dump keys stay `set_piece_taking` / `jumping` /
+// `tackling` → placeKicking / jump / ballWinning.
+const STAT_LABEL_OVERRIDES: Partial<Record<BaseStat, string>> = {
+  placeKicking: "Place Kicking",
+  jump: "Jumping",
+  ballWinning: "Tackling",
+  gkAwareness: "GK Awareness",
+  gkCatching: "GK Catching",
+  gkParrying: "GK Parrying",
+  gkReflexes: "GK Reflexes",
+  gkReach: "GK Reach",
+};
+
+/** Split a camelCase key into capitalised words: "defensiveAwareness" →
+ *  "Defensive Awareness", "kickingPower" → "Kicking Power". A leading
+ *  upper-case key ("DefensiveAwareness") splits the same way. */
+export function splitCamelCase(key: string): string {
+  return key
+    .replace(/([a-z\d])([A-Z])/g, "$1 $2")
+    .replace(/^./, (c) => c.toUpperCase());
 }
 
 export function statLabel(key: BaseStat): string {
-  const map: Partial<Record<BaseStat, string>> = {
-    offensiveAwareness: "Offensive Awareness",
-    ballControl: "Ball Control",
-    tightPossession: "Tight Possession",
-    lowPass: "Low Pass",
-    loftedPass: "Lofted Pass",
-    placeKicking: "Set Piece Taking",
-    gkAwareness: "GK Awareness",
-    gkCatching: "GK Catching",
-    gkParrying: "GK Parrying",
-    gkReflexes: "GK Reflexes",
-    gkReach: "GK Reach",
-    ballWinning: "Tackling",
-    defensiveEngagement: "Defensive Engagement",
-  };
-  return map[key] ?? (key[0] ? key[0].toUpperCase() + key.slice(1) : key);
+  return STAT_LABEL_OVERRIDES[key] ?? splitCamelCase(key);
 }
 
 // Map BASE_STATS to rows.
@@ -137,8 +179,11 @@ export const PHYSIQUE_LABEL: Readonly<Record<PhysiqueField, string>> = {
 // efootbase "Body Model" panel render order (mirrors the verbatim efootbase layout).
 export const PHYSIQUE_ORDER: readonly PhysiqueField[] = PHYSIQUE_FIELDS;
 
-// Derived body-model float label + efootbase display label.
-export const DERIVED_LABEL: Readonly<Record<string, string>> = {
+// Derived body-model float label + efootbase display label, in efootbase's
+// "Body Model" order (keys = PlayerCardDTO.bodyMetrics).
+export type BodyMetricKey = "legCoverage" | "armCoverage" | "peakJumpHeight" | "torsoCollisionWidth" | "dribbleHeight";
+export const BODY_METRIC_ORDER: readonly BodyMetricKey[] = ["legCoverage", "armCoverage", "peakJumpHeight", "torsoCollisionWidth", "dribbleHeight"];
+export const DERIVED_LABEL: Readonly<Record<BodyMetricKey, string>> = {
   legCoverage: "Leg Coverage Radius",
   armCoverage: "Arm Coverage Radius",
   peakJumpHeight: "Jump Height",

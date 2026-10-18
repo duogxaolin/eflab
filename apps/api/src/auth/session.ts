@@ -9,6 +9,7 @@
 import { randomBytes } from "node:crypto";
 import { hashPassword, verifyPassword } from "better-auth/crypto";
 import { prisma, type PrismaClientType } from "@eflab/db";
+import { isDev } from "../env.js";
 
 // Session cookie name (consumed by the protectedProcedure middleware).
 export const SESSION_COOKIE = "eflab_session";
@@ -60,6 +61,9 @@ export function userToSession(u: {
   };
 }
 
+// Parse a Cookie header. A value that is not valid percent-encoding (e.g.
+// `promo=50%off` set by some other app on the same host) is skipped instead of
+// throwing — one malformed third-party cookie must not fail every request.
 export function parseCookieHeader(header: string): Record<string, string> {
   const out: Record<string, string> = {};
   if (!header) return out;
@@ -68,9 +72,20 @@ export function parseCookieHeader(header: string): Record<string, string> {
     if (idx <= 0) continue;
     const k = part.slice(0, idx).trim();
     const v = part.slice(idx + 1).trim();
-    out[k] = decodeURIComponent(v);
+    try {
+      out[k] = decodeURIComponent(v);
+    } catch {
+      // undecodable cookie value — ignore it
+    }
   }
   return out;
+}
+
+// Session-cookie attributes. `Secure` is set unless the API runs in explicit
+// development mode (NODE_ENV=development from the `dev` script), so a
+// production deployment without NODE_ENV still gets a Secure cookie.
+export function sessionCookieFlags(): string[] {
+  return ["Path=/", "HttpOnly", "SameSite=Lax", ...(isDev ? [] : ["Secure"])];
 }
 
 // Read the session cookie header, look up the active session row, then return the

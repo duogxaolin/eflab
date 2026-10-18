@@ -1,5 +1,9 @@
 # pro-paywall-scaffold Specification
 
+> **API removed in change `remove-dead-surface` (2026-10-18)** — the Build table that carried the `isPro` build gating was dropped; `User.isPro` / `proUntil` remain as schema fields only.
+
+> **Status: removed from the web UI on 2026-10-07** (`/pro` is gone; the `isPro`/`proUntil` schema fields remain). Requirements below are kept as the historical record.
+
 ## Purpose
 Pro subscription landing page and build gating scaffold (schema fields `isPro`/`proUntil` only — no payment processing this phase).
 ## Requirements

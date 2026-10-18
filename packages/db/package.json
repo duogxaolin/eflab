@@ -16,11 +16,12 @@
     "lint": "tsc -p tsconfig.json --noEmit",
     "clean": "rm -rf src/generated dist .turbo",
     "db:generate": "prisma generate --schema=prisma/schema.prisma",
-    "db:push": "prisma db push --schema=prisma/schema.prisma --accept-data-loss",
+    "db:push": "prisma db push --schema=prisma/schema.prisma",
     "db:migrate": "prisma migrate deploy --schema=prisma/schema.prisma",
     "db:migrate:dev": "prisma migrate dev --schema=prisma/schema.prisma",
-    "db:seed": "tsx src/seed-efootbase-full.ts",
-    "db:crossfill": "tsx src/seed-efhub-crossfill.ts"
+    "db:seed": "tsx --env-file-if-exists=../../.env src/seed-efootbase-full.ts",
+    "db:crossfill": "tsx --env-file-if-exists=../../.env src/seed-efhub-crossfill.ts",
+    "db:refresh": "pnpm run db:seed && pnpm run db:crossfill"
   },
   "dependencies": {
     "@eflab/config": "workspace:*",

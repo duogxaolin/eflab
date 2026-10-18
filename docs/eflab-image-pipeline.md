@@ -18,6 +18,8 @@ PlayerCard render **ảnh card Konami chính chủ** từ `efimg.com` (CDN của
 
 ## URL helpers — `apps/web/lib/efhub-images.ts`
 
+> 2026-10-18: file này đã bị xoá trong change `remove-dead-surface` (không còn caller). Helper hiện tại là `apps/web/lib/r2-images.ts` — xem `CLAUDE.md` "Image pipeline". Phần dưới là snapshot lịch sử.
+
 ```ts
 const EFIMG_BASE = "https://efimg.com/efootballhub22/images";
 

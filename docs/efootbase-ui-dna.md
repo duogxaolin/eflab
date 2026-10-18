@@ -696,7 +696,7 @@ APP_FEEDBACK_LABEL_ID=<REDACTED>    # Wiredash label for app feedback
 EFBASE_API_KEY=<REDACTED>            # the key that gates api2.efootbase.com/api/players (401 without)
 DEEPL_AUTH_KEY=<REDACTED>           # DeepL API — comment auto-translate
 KLIPY_API_KEY_ANDROID=<REDACTED>    # Klipy GIF picker (Android)
-#TEST KEY: aZMyDUAR9XyNtfPcnD6sxPAaG1a7pkkoK7MABrf8LMasQuxR6gKvNWacDIGIJJk5
+#TEST KEY: <redacted>
 KLIPY_API_KEY_IOS=<REDACTED>        # Klipy (iOS — plist mirror)
 ```
 

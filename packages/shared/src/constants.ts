@@ -1,8 +1,8 @@
 // eFootball domain constants — derived from the efhub SQLite schema (259 cols)
 // and the verified field surveys (2026-09-28).
 
-// 26 base stats (value 40–99). camelCase is the internal standardized name.
-// Aliases from providers documented below each.
+// 26 base stats (value 40–99). camelCase is the internal standardized name;
+// provider aliases are noted inline (the seeder maps the dump's keys itself).
 export const BASE_STATS = [
   "offensiveAwareness",
   "ballControl",
@@ -34,55 +34,6 @@ export const BASE_STATS = [
 
 export type BaseStat = (typeof BASE_STATS)[number];
 
-// Alias map: external provider name → standardized internal name.
-// per spec: GKClearing → gkParrying, BallWinning → tackling (internal uses tackling? No —
-// we standardize to efhub-style camelCase with parrying normalized).
-export const STAT_ALIAS_MAP: Record<string, BaseStat> = {
-  OffensiveAwareness: "offensiveAwareness",
-  BallControl: "ballControl",
-  Dribbling: "dribbling",
-  TightPossession: "tightPossession",
-  LowPass: "lowPass",
-  LoftedPass: "loftedPass",
-  Finishing: "finishing",
-  Heading: "heading",
-  PlaceKicking: "placeKicking",
-  Curl: "curl",
-  Speed: "speed",
-  Acceleration: "acceleration",
-  KickingPower: "kickingPower",
-  Jump: "jump",
-  PhysicalContact: "physicalContact",
-  Balance: "balance",
-  Stamina: "stamina",
-  DefensiveAwareness: "defensiveAwareness",
-  BallWinning: "ballWinning", // efhub
-  Tackling: "ballWinning", // pesdb/efootbase alias
-  DefensiveEngagement: "defensiveEngagement",
-  Aggression: "aggression",
-  GKAwareness: "gkAwareness",
-  GKCatching: "gkCatching",
-  GKClearing: "gkParrying", // explicit normalization per spec
-  gk_parrying: "gkParrying",
-  GKParrying: "gkParrying",
-  GKReflexes: "gkReflexes",
-  GKReach: "gkReach",
-};
-
-// The 6 macro dimensions used by the comparison radar (SHT, PAS, PHY, DEF, DRI, SPD).
-export const RADAR_AXES = ["SHT", "PAS", "PHY", "DEF", "DRI", "SPD"] as const;
-export type RadarAxis = (typeof RADAR_AXES)[number];
-
-// Map each radar axis to its constituent base stats (averaged for the radar value).
-export const RADAR_STAT_MAP: Record<RadarAxis, BaseStat[]> = {
-  SHT: ["finishing", "heading", "placeKicking", "curl", "kickingPower"],
-  PAS: ["lowPass", "loftedPass"],
-  PHY: ["physicalContact", "balance", "stamina", "jump"],
-  DEF: ["defensiveAwareness", "ballWinning", "defensiveEngagement", "aggression"],
-  DRI: ["ballControl", "dribbling", "tightPossession"],
-  SPD: ["speed", "acceleration"],
-};
-
 // 11 physique / body-model fields (PlayerAppearance table).
 export const PHYSIQUE_FIELDS = [
   "neckLength",
@@ -98,16 +49,6 @@ export const PHYSIQUE_FIELDS = [
   "legLength",
 ] as const;
 export type PhysiqueField = (typeof PHYSIQUE_FIELDS)[number];
-
-// 5 derived physics metrics (computed from physique + height).
-export const DERIVED_FIELDS = [
-  "legCoverage",
-  "armCoverage",
-  "peakJumpHeight",
-  "torsoCollisionWidth",
-  "dribbleHeight",
-] as const;
-export type DerivedField = (typeof DERIVED_FIELDS)[number];
 
 // 13 play positions used in the position aptitude / heatmap matrix.
 export const POSITIONS = [
@@ -127,112 +68,81 @@ export const POSITIONS = [
 ] as const;
 export type Position = (typeof POSITIONS)[number];
 
-// 12-position familiarity heatmap (excludes the registered position from the "grid" slots;
-// efootbase shows 12 markers on the pitch). We surface all 13 aptitudes but visually present 12
-// on the pitch diagram (GK is usually separate). For the heatmap we use the 12 outfield slots.
-export const HEATMAP_POSITIONS: readonly Position[] = POSITIONS;
+// Position proficiency of a card at a position, derived from its aptitude code
+// (`PlayerCardDTO.positionAptitudes`: 0 = full / registered, 1 = half /
+// secondary, 2 = none). The progression engine's overall estimate is fitted at
+// full proficiency and applies a fitted penalty for the other two levels
+// (ovrWeights.ts `OVR_PROFICIENCY_ADJUST`).
+export const POSITION_PROFICIENCIES = ["full", "half", "none"] as const;
+export type PositionProficiency = (typeof POSITION_PROFICIENCIES)[number];
+export const proficiencyFromAptitude = (aptitude: number | null | undefined): PositionProficiency =>
+  aptitude === 0 ? "full" : aptitude === 1 ? "half" : "none";
+export const PROFICIENCY_LABELS: Readonly<Record<PositionProficiency, string>> = {
+  full: "full",
+  half: "half",
+  none: "none",
+};
 
-// Card types / player tiers.
+// Card types — one value per efootbase `card_type` code, in code order. The Prisma
+// `CardType` enum (packages/db/prisma/schema.prisma) mirrors this list exactly.
+//   code 0 STANDARD · 1 LEGENDARY · 3 TRENDING · 4 SELECTION · 5 EPIC ·
+//   6 HIGHLIGHT · 7 STRIKE_ARENA   (code 2 is unused in the 2026-10 dump)
 export const CARD_TYPES = [
   "STANDARD",
-  "TRENDING",
-  "EPIC",
-  "BIG_TIME",
-  "HIGHLIGHT",
-  "SHOW_TIME",
-  "STRIKE_ARENA",
   "LEGENDARY",
+  "TRENDING",
+  "SELECTION",
+  "EPIC",
+  "HIGHLIGHT",
+  "STRIKE_ARENA",
 ] as const;
 export type CardType = (typeof CARD_TYPES)[number];
 
-// 67 skills (canonical eFootball skill set — matches efootbase's 67 skill pages).
-// Ordered by category. Each has a slug derived from its name.
-export const SKILL_IDS = [
-  // Passing
-  "OneTouchPass",
-  "ThroughPassing",
-  "WeightedPass",
-  "PinpointCrossing",
-  "LowLoftedPass",
-  "OutsideCurler",
-  "NoLookPass",
-  "Rabona",
-  // Shooting
-  "LongRange",
-  "LongRangeShooting",
-  "LongRangeDrive",
-  "AcrobaticFinishing",
-  "FirstTimeShot",
-  "HellTrick",
-  "ChipShotControl",
-  "KnuckleShot",
-  "DippingShot",
-  "RisingShots",
-  "PenaltySpecialist",
-  // Dribbling / ball control
-  "ScissorsFeint",
-  "DoubleTouch",
-  "FlipFlap",
-  "MarseilleTurn",
-  "Sombrero",
-  "CrossOverTurn",
-  "CutBehindTurn",
-  "ScotchMove",
-  "StepOnSkillControl",
-  "MazingRun",
-  "DribbleMotion",
-  // GK
-  "GKLowPunt",
-  "GKHighPunt",
-  "GKLongThrow",
-  "GKPenaltySaver",
-  // Defending
-  "ManMarking",
-  "Interception",
-  "TrackBack",
-  "Blocker",
-  "AerialSuperiority",
-  "SlidingTackle",
-  "AcrobaticClear",
-  "Captaincy",
-  "SuperSub",
-  "FightingSpirit",
-  "Gamesmanship",
-  "LongReachTackle",
-  // Set pieces / movement
-  "LongThrow",
-  "CornerKick",
-  "FreeKick",
-  "PenaltyKick",
-  "EarlyCross",
-  "LongBallExpert",
-  "incisiveRun",
-  "SpeedingBullet",
-  "Trickster",
-  // Heading variants
-  "sHeading", // slot heading skill
-  // Running motions
-  "DribblingHunching",
-  "DribblingArmMovement",
-  "RunningHunching",
-  "RunningArmMovement",
-  // Phenomenal / Showtime skills (newer)
-  "momentumDribbling",
-  "PhenomenalFinishing",
-  "PhenomenalPassing",
-  "edgedCrossing",
-  "gameChangingPass",
-  "visionaryPass",
-  "fortress",
-  "accelerationBurst",
-  "bulletHeader",
-  "BlitzCurler",
-  "LowScreamer",
-  "AerialForte",
-] as const;
-export type SkillId = (typeof SKILL_IDS)[number];
+// Display label per card type — the label efootbase itself declares for the code in
+// dump/efootbase/players_meta.json (`card_type.values[code]`), so the UI never shows a
+// raw enum name. Two codes have no usable meta label and are resolved from the pack
+// names of the cards that carry them (the seeder re-validates this on every run):
+//   · code 4 — meta repeats "Legendary", but every code-4 card comes from a 2022
+//     club/league "Selection" pack (Piqué, Salah, Mbappé…), and efootbase's own card
+//     page labels them "Selection".
+//   · code 7 — meta is blank; all 42 cards come from the "Strike Arena" pack.
+// "Big Time" and "Show Time" are pack campaigns, not card-type codes: Big Time cards
+// are EPIC (code 5) and Show Time cards are HIGHLIGHT (code 6) in the dump, so a
+// filter for "Epic & Big Time" is simply the EPIC type; the campaign is only visible
+// in `featuredPackId` / the pack name.
+export const CARD_TYPE_LABELS: Readonly<Record<CardType, string>> = {
+  STANDARD: "Standard",
+  LEGENDARY: "Legendary",
+  TRENDING: "Trending",
+  SELECTION: "Selection",
+  EPIC: "Epic",
+  HIGHLIGHT: "Highlight",
+  STRIKE_ARENA: "Strike Arena",
+};
 
-// 8 training categories for the build simulator progression engine.
+// efootbase `card_type` code → CardType. Source of truth for the seeder; the seeder
+// additionally asserts that `players_meta.json` still carries the labels above for
+// every code and that pack names agree, so a changed dump fails loudly.
+export const CARD_TYPE_BY_EFOOTBASE_CODE: Readonly<Record<number, CardType>> = {
+  0: "STANDARD",
+  1: "LEGENDARY",
+  3: "TRENDING",
+  4: "SELECTION",
+  5: "EPIC",
+  6: "HIGHLIGHT",
+  7: "STRIKE_ARENA",
+};
+
+// Skills are catalogued in packages/db/fixtures/skills.json (84 entries) and
+// served by the `skill` router; there is no skill-id constant in code.
+
+// 10 training categories of the progression engine (player-progression-simulator).
+// Recovered from the eFHUB `player export` table: `MAX<stat> − <stat>` equals
+// the category's group value for every stat of the category on all 44,103
+// cards (exceptions: goalkeeper Jump, which carries a card-specific offset —
+// see progression.ts — and one outfield card, hub PlayerID 179425, whose Jump
+// rises one point more than its Aerial value). Order = the hub's
+// `MAX<Group>Group` columns.
 export const TRAINING_CATEGORIES = [
   "Shooting",
   "Passing",
@@ -241,32 +151,41 @@ export const TRAINING_CATEGORIES = [
   "LowerBody",
   "Aerial",
   "Defending",
-  "Goalkeeping",
+  "GK1",
+  "GK2",
+  "GK3",
 ] as const;
 export type TrainingCategory = (typeof TRAINING_CATEGORIES)[number];
 
-// 6 manager tactic masteries.
-export const MANAGER_TACTICS = [
-  "possessionGame",
-  "quickCounter",
-  "longBallCounter",
-  "outWide",
-  "longBall",
-  "overload",
-] as const;
-export type ManagerTactic = (typeof MANAGER_TACTICS)[number];
+// Category → the stats it raises, one stat point each per stat point bought.
+export const TRAINING_STATS: Readonly<Record<TrainingCategory, readonly BaseStat[]>> = {
+  Shooting: ["finishing", "placeKicking", "curl"],
+  Passing: ["lowPass", "loftedPass"],
+  Dribbling: ["dribbling", "ballControl", "tightPossession"],
+  Dexterity: ["offensiveAwareness", "acceleration", "balance"],
+  LowerBody: ["kickingPower", "speed", "stamina"],
+  Aerial: ["heading", "physicalContact", "jump"],
+  Defending: ["defensiveAwareness", "defensiveEngagement", "ballWinning", "aggression"],
+  GK1: ["gkAwareness"],
+  // eFHUB calls the second GK2 stat GKClearing — it is efootbase's gk_parrying,
+  // i.e. the `gkParrying` BaseStat (see the alias note on BASE_STATS).
+  GK2: ["gkParrying", "gkReach"],
+  GK3: ["gkCatching", "gkReflexes"],
+};
 
-// 5 player tactic-compat fields (subset of the 6 manager tactics — no overload).
-export const PLAYER_TACTICS: readonly ManagerTactic[] = [
-  "possessionGame",
-  "quickCounter",
-  "longBallCounter",
-  "outWide",
-  "longBall",
-] as const;
-
-// Booster slot count.
-export const BOOSTER_SLOT_COUNT = 2;
+// Display labels (efootbase progression sheet wording).
+export const TRAINING_CATEGORY_LABELS: Readonly<Record<TrainingCategory, string>> = {
+  Shooting: "Shooting",
+  Passing: "Passing",
+  Dribbling: "Dribbling",
+  Dexterity: "Dexterity",
+  LowerBody: "Lower Body",
+  Aerial: "Aerial",
+  Defending: "Defending",
+  GK1: "GK 1",
+  GK2: "GK 2",
+  GK3: "GK 3",
+};
 
 // 32 eFootball playing styles (attacking + defensive, single enum shared by both
 // `playingStyleAttack` and `playingStyleDefense`). Numeric IDs from efootbase
@@ -313,6 +232,112 @@ export function playingStyleName(id: number | null | undefined): string {
   if (id == null) return "Basic";
   return PLAYING_STYLES[id] ?? "Basic";
 }
+
+// Playing-style filter groups (efootbase-parity-round2, capture of efootbase
+// /players → "Playing Style" dialog, 2026-10-18). efootbase groups the styles
+// by *style*, not by the slot a card stores it in, and filters with one
+// `playingStyle=<id>` parameter — so the API matches a style in either slot
+// (`playingStyleAttack` OR `playingStyleDefense`). The groups list only ids
+// that real cards in the 2026-10 dump carry (read-only counts, 2026-10-18):
+//   attack slot  → ids 1–22 and 35;  defence slot → 7, 8, 9, 16, 17, 24–30, 33.
+// Verified on real cards against the capture: Neuer / Courtois / Provedel
+// store Attacking GK / Defensive GK in the defence slot, Benjamin André and
+// David Bates store The Destroyer there (efootbase shows all of them under
+// "Defence"). Anchor Man (8) and Box-to-Box (7) sit in both groups on
+// efootbase and in both slots in the dump.
+// Styles efootbase offers that no card in the database carries (they appeared
+// after the dump was taken: Romero's cards still carry The Destroyer where
+// efootbase now shows Tough Marker, Doku's defence slot is Basic where
+// efootbase shows Press Back) are listed by name only — no ids are invented.
+export const PLAYING_STYLE_GROUPS: Readonly<Record<"attack" | "defence", readonly number[]>> = {
+  attack: [1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15, 18, 19, 20, 21, 22, 35],
+  defence: [7, 8, 9, 16, 17, 24, 25, 26, 27, 28, 29, 30, 33],
+};
+export const PLAYING_STYLES_UNAVAILABLE: Readonly<Record<"attack" | "defence", readonly string[]>> = {
+  attack: ["Build-up GK"],
+  defence: ["Deep Defender", "Press Back", "Tough Marker"],
+};
+
+// AI playing styles (efootbase "AI Playing Styles" group) → the boolean flag
+// columns of Player. efootbase also lists "Long Ranger", which has no column
+// in the dump and is therefore not offered.
+export const AI_PLAYING_STYLES = [
+  { key: "earlyCross", label: "Early Crosser" },
+  { key: "incisiveRun", label: "Incisive Run" },
+  { key: "longBallExpert", label: "Long Ball Expert" },
+  { key: "mazingRun", label: "Mazing Run" },
+  { key: "speedingBullet", label: "Speeding Bullet" },
+  { key: "trickster", label: "Trickster" },
+] as const;
+export type AiPlayingStyleKey = (typeof AI_PLAYING_STYLES)[number]["key"];
+export const AI_PLAYING_STYLE_KEYS = AI_PLAYING_STYLES.map((s) => s.key) as readonly AiPlayingStyleKey[];
+
+// ---- Player filter vocabularies (efootbase /players sidebar) ----
+// Condition letters as stored (dump `condition` → [E,D,C,B,A]); the filter
+// shows them worst → best with efootbase's aria labels.
+export const CONDITIONS = ["E", "D", "C", "B", "A"] as const;
+export type Condition = (typeof CONDITIONS)[number];
+export const CONDITION_FILTER_LABELS: Readonly<Record<Condition, string>> = {
+  E: "Slump Form",
+  D: "Poor Form",
+  C: "Normal Form",
+  B: "Good Form",
+  A: "Peak Form",
+};
+// Form 0..2 (dump meta: Inconsistent / Standard / Unwavering) — efootbase
+// filters it as 1–3 stars, i.e. stars = value + 1.
+export const FORM_LABELS = ["Inconsistent", "Standard", "Unwavering"] as const;
+// Weak-foot usage / accuracy 0..3 (dump meta) — efootbase filters them as
+// 1–4 stars (stars = value + 1).
+export const WEAK_FOOT_USAGE_LABELS = ["Almost Never", "Rarely", "Occasionally", "Regularly"] as const;
+export const WEAK_FOOT_ACCURACY_LABELS = ["Low", "Medium", "High", "Very High"] as const;
+
+// Range bounds accepted by the list filters (Zod + UI). Wider than the data
+// (height 155–206, weight 41–113, age 15–50, stats 40–105, body 0–14 in the
+// 2026-10 dump) so a future dump never trips a 400; efootbase's sliders use
+// 100–220 / 30–120 / 16–100 / 40–120 / 0–15.
+export const FILTER_RANGE_BOUNDS = {
+  ovr: [0, 100],
+  maxOvr: [0, 120],
+  height: [100, 250],
+  weight: [30, 150],
+  age: [10, 100],
+  stat: [0, 200],
+  physique: [0, 15],
+} as const satisfies Record<string, readonly [number, number]>;
+
+// Upper bound of the id lists of the multi-valued Nation / League / Team
+// filters (change multi-select-filters): the OR stays an `IN (…)` of at most
+// 50 ids; Position is bounded by the 13-entry catalogue (POSITIONS.length).
+// Shared by the Zod input, the router's merge of list + single-value fields
+// and the URL helper of the web.
+export const MAX_FILTER_IDS = 50;
+
+// Sort presets of the players page (efootbase "Sort by" radio group:
+// Trending · New cards · Top rated · High to low · Low to high). The keys are
+// efootbase's own URL values where they were observed (`sort=top`,
+// `sort=highest`, `sort=new`; Trending = parameter absent); `lowest` is our
+// name for the unobserved fifth value. Definitions (all end on the id
+// tiebreaker, see `orderByFor` in the API's player router):
+//   trending → releaseDate DESC (nulls last), maxOvr DESC, id DESC
+//              (the strongest cards of the newest release first — efootbase's
+//              real "Trending" mixes community signals we do not hold)
+//   new      → releaseDate DESC (nulls last), id DESC
+//   top      → maxOvr DESC, id DESC          (max overall rating)
+//   highest  → ovr DESC, id DESC             (base overall rating)
+//   lowest   → ovr ASC, id ASC
+// A preset ignores `order`; the explicit field sorts (SORT_FIELDS) keep it.
+export const SORT_PRESETS = ["trending", "new", "top", "highest", "lowest"] as const;
+export type SortPreset = (typeof SORT_PRESETS)[number];
+export const DEFAULT_SORT_PRESET: SortPreset = "trending";
+export const SORT_PRESET_LABELS: Readonly<Record<SortPreset, string>> = {
+  trending: "Trending",
+  new: "New cards",
+  top: "Top rated",
+  highest: "High to low",
+  lowest: "Low to high",
+};
+export const isSortPreset = (s: string): s is SortPreset => (SORT_PRESETS as readonly string[]).includes(s);
 
 // efootbase playing-style id → short description (from efootbase player detail page).
 // Used on the player detail page tactical box. Keys without a known description are
@@ -383,33 +408,17 @@ export const PLAYING_STYLE_DESCRIPTIONS: Partial<Record<string, string>> = {
     "A forward who poaches goals by lurking on the edge of the defensive line.",
 };
 
-// 11 filter dimensions for /players.
-export const PLAYER_FILTER_DIMENSIONS = [
-  "cardType",
-  "position",
-  "playingStyle",
-  "defensiveStyle",
-  "ovr",
-  "weakFoot",
-  "physicality",
-  "nationality",
-  "club",
-  "league",
-  "skills",
-] as const;
-
-// Stat color tiers (matches spec: 90+ purple/red, 80-89 orange, 70-79 blue).
-export function statTierColor(value: number): {
-  tier: "elite" | "high" | "mid" | "low";
-  color: string;
-} {
-  if (value >= 90) return { tier: "elite", color: "#f472b6" }; // pink/red accent
-  if (value >= 80) return { tier: "high", color: "#fb923c" }; // orange
-  if (value >= 70) return { tier: "mid", color: "#06b6d4" }; // cyan
-  return { tier: "low", color: "#64748b" }; // slate
-}
-
-// 60+ sort fields exposed to the directory (matches pesdb's sort list).
+// Sort fields exposed to the directory. Every entry is backed by a real Player
+// column (see packages/db/prisma/schema.prisma and `orderByFor` in the API's
+// player router). The pesdb-style sorts that had no column behind them
+// (squadNumber, nationalShirtNumber, sumOfAbilities, averageAbility, legCoverage,
+// armCoverage, peakJumpHeight, torsoCollisionWidth, club) were removed in
+// eflab-parity-fixes rather than silently falling back to OVR. `playerValue`
+// stays because `Player.marketValue` now carries the dump's `player_value`.
+//   releaseDate / recentlyAdded → releaseDate · playerId → id · name/namePrint →
+//   name · japName · chineseName · nationality → nationalityId · ovr · maxOvr ·
+//   age · height · weight · maxLevel → levelCap · playerValue → marketValue ·
+//   26 base stats · 26 max stats · 13 per-position ratings (ratingGk … ratingCf).
 export type SortField =
   | "recentlyAdded"
   | "releaseDate"
@@ -418,9 +427,6 @@ export type SortField =
   | "namePrint"
   | "japName"
   | "chineseName"
-  | "squadNumber"
-  | "nationalShirtNumber"
-  | "club"
   | "nationality"
   | "ovr"
   | "maxOvr"
@@ -429,18 +435,11 @@ export type SortField =
   | "weight"
   | "maxLevel"
   | "playerValue"
-  | "sumOfAbilities"
-  | "averageAbility"
   | BaseStat
   | `max${Capitalize<BaseStat>}`
-  | "physicalContact"
-  | "legCoverage"
-  | "armCoverage"
-  | "peakJumpHeight"
-  | "torsoCollisionWidth"
-  | `rating${Capitalize<Position>}`;
+  | `rating${Capitalize<Lowercase<Position>>}`;
 
-export const SORT_FIELDS: readonly string[] = [
+export const SORT_FIELDS: readonly SortField[] = [
   "releaseDate",
   "recentlyAdded",
   "playerId",
@@ -448,9 +447,6 @@ export const SORT_FIELDS: readonly string[] = [
   "namePrint",
   "japName",
   "chineseName",
-  "squadNumber",
-  "nationalShirtNumber",
-  "club",
   "nationality",
   "ovr",
   "maxOvr",
@@ -459,15 +455,9 @@ export const SORT_FIELDS: readonly string[] = [
   "weight",
   "maxLevel",
   "playerValue",
-  "sumOfAbilities",
-  "averageAbility",
   ...BASE_STATS,
-  ...BASE_STATS.map((s) => `max${(s[0] ?? "o").toUpperCase()}${s.slice(1)}`),
-  "legCoverage",
-  "armCoverage",
-  "peakJumpHeight",
-  "torsoCollisionWidth",
-  ...POSITIONS.map((p) => `rating${p[0]}${p.slice(1).toLowerCase()}`),
+  ...BASE_STATS.map((s) => `max${(s[0] ?? "o").toUpperCase()}${s.slice(1)}` as `max${Capitalize<BaseStat>}`),
+  ...POSITIONS.map((p) => `rating${p[0]}${p.slice(1).toLowerCase()}` as `rating${Capitalize<Lowercase<Position>>}`),
 ];
 
 // Helper for type-level capitalize.

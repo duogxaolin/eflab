@@ -1,293 +1,318 @@
 "use client";
 import Link from "next/link";
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback, useId } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { Search, Menu, X, ChevronDown, Sparkles } from "lucide-react";
+import { Search, Menu, X } from "lucide-react";
 import { trpc } from "@/lib/trpc";
+import { CARD_TYPE_LABEL } from "@/lib/card-display";
+import { EflabWordmark } from "./EflabWordmark";
+import { useDebouncedValue, SEARCH_MIN_LENGTH } from "@/lib/use-debounced-value";
 
 const NAV_LINKS = [
   { href: "/players", label: "Players" },
   { href: "/compare", label: "Compare" },
   { href: "/packs", label: "Packs" },
-];
+  { href: "/skills", label: "Skills" },
+] as const;
 
 export function SiteHeader() {
   const router = useRouter();
   const pathname = usePathname();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const [searchModalOpen, setSearchModalOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
-  const modalInputRef = useRef<HTMLInputElement>(null);
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  // Element that had focus when the palette opened — focus returns to it on close.
+  const openerRef = useRef<HTMLElement | null>(null);
+  const mobileMenuId = useId();
+  const paletteTitleId = useId();
+  const paletteInputId = useId();
+  const paletteResultsId = useId();
 
-  // Global Cmd+K / Ctrl+K listener
+  const openPalette = useCallback(() => setPaletteOpen(true), []);
+  const closePalette = useCallback(() => setPaletteOpen(false), []);
+
+  // Global ⌘K / Ctrl+K toggles the palette. Escape is handled by the native
+  // <dialog> (cancel → close event) so it needs no window listener.
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
+    const onKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
-        setSearchModalOpen((v) => !v);
-      } else if (e.key === "Escape") {
-        setSearchModalOpen(false);
+        setPaletteOpen((v) => !v);
       }
     };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
-  // Auto-focus input when search modal opens
+  // Sync React state with the native modal dialog: showModal() gives the focus
+  // trap (everything outside becomes inert) and the top layer; close() fires
+  // the `close` event, which restores focus to the opener.
   useEffect(() => {
-    if (searchModalOpen) {
-      setTimeout(() => modalInputRef.current?.focus(), 50);
-    } else {
-      setSearchQuery("");
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    if (paletteOpen) {
+      if (!dialog.open) {
+        openerRef.current =
+          document.activeElement instanceof HTMLElement ? document.activeElement : null;
+        dialog.showModal();
+      }
+      inputRef.current?.focus();
+    } else if (dialog.open) {
+      dialog.close();
     }
-  }, [searchModalOpen]);
+  }, [paletteOpen]);
 
-  // Live search query for modal
+  const handleDialogClose = useCallback(() => {
+    setPaletteOpen(false);
+    setSearchQuery("");
+    const opener = openerRef.current;
+    openerRef.current = null;
+    if (opener && opener.isConnected) opener.focus();
+  }, []);
+
+  // Debounced query: one request per typing pause, nothing under 2 characters.
+  const debouncedQuery = useDebouncedValue(searchQuery.trim(), 250);
+  const canSearch = debouncedQuery.length >= SEARCH_MIN_LENGTH;
   const searchResults = trpc.player.search.useQuery(
-    { q: searchQuery, limit: 8 },
-    { enabled: searchQuery.trim().length > 0 }
+    { q: debouncedQuery, limit: 8 },
+    { enabled: paletteOpen && canSearch },
   );
+  const results = searchResults.data ?? [];
+  const typedEnough = searchQuery.trim().length >= SEARCH_MIN_LENGTH;
+  const waiting = typedEnough && (!canSearch || debouncedQuery !== searchQuery.trim() || searchResults.isLoading);
 
   const handleSelectPlayer = (baseId: string, cardId: string) => {
-    setSearchModalOpen(false);
+    closePalette();
     router.push(`/players/${baseId}/${cardId}`);
   };
 
   const handleSearchSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (searchQuery.trim()) {
-      setSearchModalOpen(false);
-      router.push(`/players?q=${encodeURIComponent(searchQuery.trim())}`);
+    const q = searchQuery.trim();
+    if (q.length >= SEARCH_MIN_LENGTH) {
+      closePalette();
+      router.push(`/players?search=${encodeURIComponent(q)}`);
     }
   };
 
+  const isActive = (href: string) =>
+    pathname === href || (href !== "/" && (pathname?.startsWith(href) ?? false));
+
   return (
     <>
-      <nav className="efb-navbar">
-        <div className="mx-auto flex h-16 max-w-6xl items-center gap-4 px-4">
-          {/* Mobile hamburger menu toggle */}
+      <header className="efb-navbar">
+        <nav className="mx-auto flex h-16 w-full max-w-6xl items-center gap-3 px-4" aria-label="Primary">
+          {/* Mobile menu toggle */}
           <button
             type="button"
-            className="md:!hidden flex items-center justify-center p-2 rounded-lg text-white/70 hover:text-white hover:bg-white/10"
-            aria-label="Menu"
+            className="button button--sm button--ghost md:hidden px-2"
+            aria-label={mobileMenuOpen ? "Close menu" : "Open menu"}
+            aria-expanded={mobileMenuOpen}
+            aria-controls={mobileMenuId}
             onClick={() => setMobileMenuOpen((v) => !v)}
           >
-            {mobileMenuOpen ? <X className="size-5" /> : <Menu className="size-5" />}
+            {mobileMenuOpen ? <X className="size-5" aria-hidden /> : <Menu className="size-5" aria-hidden />}
           </button>
 
           {/* Logo */}
-          <Link
-            className="text-foreground flex items-center gap-2 text-lg font-bold no-underline"
-            href="/"
-          >
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src="/efbase_icon.webp"
-              alt=""
-              width={32}
-              height={32}
-              className="size-8 shrink-0 rounded-lg"
-              aria-hidden="true"
-            />
-            <span className="tracking-tight text-white font-bold">
-              eFoot<span className="text-[var(--color-accent)]">Base</span>
-            </span>
+          <Link className="flex shrink-0 items-center text-white no-underline" href="/" aria-label="eFootLab home">
+            <EflabWordmark height={26} />
           </Link>
 
-          {/* Desktop Nav Links */}
-          <ul className="ml-2 hidden items-center gap-1 md:flex list-none">
-            {NAV_LINKS.map((link) => {
-              const active =
-                pathname === link.href || (link.href !== "/" && pathname?.startsWith(link.href));
-              return (
-                <li key={link.href}>
-                  <Link
-                    href={link.href}
-                    className={`efb-navbar__link ${active ? "efb-navbar__link--active" : ""}`}
-                  >
-                    {link.label}
-                  </Link>
-                </li>
-              );
-            })}
+          {/* Desktop nav links */}
+          <ul className="ml-2 hidden list-none items-center gap-1 md:flex">
+            {NAV_LINKS.map((link) => (
+              <li key={link.href}>
+                <Link
+                  href={link.href}
+                  className={`efb-navbar__link ${isActive(link.href) ? "efb-navbar__link--active" : ""}`}
+                  aria-current={isActive(link.href) ? "page" : undefined}
+                >
+                  {link.label}
+                </Link>
+              </li>
+            ))}
           </ul>
 
-          {/* Right Action Controls */}
+          {/* Right action controls */}
           <div className="efb-navbar__actions">
-            {/* Desktop Search Trigger */}
+            {/* Desktop search trigger */}
             <button
               type="button"
-              onClick={() => setSearchModalOpen(true)}
-              aria-label="Search players"
-              className="hidden md:flex items-center justify-between h-8 w-52 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 px-2.5 text-xs text-white/60 hover:text-white transition-all cursor-pointer"
+              onClick={openPalette}
+              aria-label="Search players (Command K)"
+              aria-haspopup="dialog"
+              className="hidden h-8 w-52 cursor-pointer items-center justify-between rounded-lg border border-white/10 bg-white/5 px-2.5 text-xs text-white/60 transition-all hover:bg-white/10 hover:text-white md:flex"
             >
               <span className="flex items-center gap-2 truncate">
-                <Search className="size-3.5 text-white/50" />
+                <Search className="size-3.5 text-white/50" aria-hidden />
                 <span>Search players</span>
               </span>
-              <kbd className="efb-navbar-search-kbd flex items-center gap-0.5 pointer-events-none">
+              <kbd className="efb-navbar-search-kbd pointer-events-none flex items-center gap-0.5" aria-hidden>
                 <span className="text-[10px]">⌘</span>K
               </kbd>
             </button>
 
-            {/* Mobile Search Button */}
+            {/* Mobile search button (hidden from md up — utility wins because
+                .button lives in @layer components) */}
             <button
               type="button"
-              onClick={() => setSearchModalOpen(true)}
+              onClick={openPalette}
               className="button button--sm button--ghost md:hidden px-2"
-              aria-label="Search"
+              aria-label="Search players"
+              aria-haspopup="dialog"
+              data-testid="mobile-search-button"
             >
-              <Search className="size-4" />
+              <Search className="size-4" aria-hidden />
             </button>
-
-            {/* Divider */}
-            <div className="efb-navbar__divider hidden sm:block" aria-hidden="true" />
-
-            {/* Language Switcher Mock */}
-            <button
-              type="button"
-              className="button button--sm button--ghost gap-1.5 px-2 text-xs"
-              title="Language"
-            >
-              <span className="text-sm">🇬🇧</span>
-              <ChevronDown className="size-3 text-white/50" />
-            </button>
-
-            {/* Divider */}
-            <div className="efb-navbar__divider hidden lg:block" aria-hidden="true" />
-
-            {/* App Store / Google Play Icons */}
-            <div className="hidden lg:flex items-center gap-2 text-white/60">
-              <a
-                href="https://apps.apple.com"
-                target="_blank"
-                rel="noopener noreferrer"
-                aria-label="App Store"
-                className="hover:text-white transition-colors p-1"
-                title="iOS App"
-              >
-                <svg className="size-4" viewBox="0 0 24 24" fill="currentColor">
-                  <path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.81-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M15.97 4.54c.64-.78 1.08-1.86.96-2.95-1 .04-2.13.67-2.78 1.44-.58.67-1.1 1.77-.96 2.83 1.12.09 2.14-.54 2.78-1.32z" />
-                </svg>
-              </a>
-              <a
-                href="https://play.google.com"
-                target="_blank"
-                rel="noopener noreferrer"
-                aria-label="Google Play"
-                className="hover:text-white transition-colors p-1"
-                title="Android App"
-              >
-                <svg className="size-4" viewBox="0 0 24 24" fill="currentColor">
-                  <path d="M3.609 1.814L13.792 12 3.61 22.186a1.94 1.94 0 0 1-.61-1.447V3.261c0-.568.225-1.096.609-1.447zm11.242 11.245l2.49 2.49-11.75 6.78 9.26-9.27zm0-2.118L5.591 1.671l11.75 6.78-2.49 2.49zM18.84 10.87l2.84 1.64c.73.42.73 1.1 0 1.52l-2.84 1.64-2.15-2.15 2.15-2.65z" />
-                </svg>
-              </a>
-            </div>
           </div>
-        </div>
+        </nav>
 
         {/* Mobile dropdown menu */}
-        {mobileMenuOpen && (
-          <div className="md:hidden border-t border-[var(--color-line-separator)] bg-[var(--color-canvas)] px-4 py-3 space-y-1">
-            {NAV_LINKS.map((link) => {
-              const active =
-                pathname === link.href || (link.href !== "/" && pathname?.startsWith(link.href));
-              return (
-                <Link
-                  key={link.href}
-                  href={link.href}
-                  onClick={() => setMobileMenuOpen(false)}
-                  className={`block px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
-                    active
-                      ? "bg-[var(--color-panel)] text-[var(--color-accent)] font-semibold"
-                      : "text-[var(--color-text-secondary)] hover:text-white hover:bg-[var(--color-panel)]"
-                  }`}
-                >
-                  {link.label}
-                </Link>
-              );
-            })}
-          </div>
-        )}
-      </nav>
-
-      {/* ⌘K Global Search Palette Modal */}
-      {searchModalOpen && (
         <div
-          role="dialog"
-          aria-modal="true"
-          className="fixed inset-0 z-50 flex items-start justify-center pt-20 px-4 bg-black/75 backdrop-blur-sm animate-in fade-in"
-          onClick={() => setSearchModalOpen(false)}
+          id={mobileMenuId}
+          hidden={!mobileMenuOpen}
+          className="space-y-1 border-t border-[var(--color-line-separator)] bg-[var(--color-canvas)] px-4 py-3 md:hidden"
         >
-          <div
-            className="w-full max-w-xl rounded-2xl bg-[var(--color-panel)] border border-[var(--color-line)] shadow-2xl overflow-hidden"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <form onSubmit={handleSearchSubmit} className="relative border-b border-[var(--color-line)]">
-              <Search className="absolute left-4 top-1/2 -translate-y-1/2 size-4 text-[var(--color-text-dim)]" />
-              <input
-                ref={modalInputRef}
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search players (e.g. Messi, Haaland, Mbappe)…"
-                className="w-full h-12 pl-11 pr-12 text-sm bg-transparent text-[var(--color-text-primary)] placeholder-[var(--color-text-dim)] focus:outline-none"
-              />
+          {NAV_LINKS.map((link) => (
+            <Link
+              key={link.href}
+              href={link.href}
+              onClick={() => setMobileMenuOpen(false)}
+              aria-current={isActive(link.href) ? "page" : undefined}
+              className={`block rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+                isActive(link.href)
+                  ? "bg-[var(--color-panel)] font-semibold text-[var(--color-accent)]"
+                  : "text-[var(--color-text-secondary)] hover:bg-[var(--color-panel)] hover:text-white"
+              }`}
+            >
+              {link.label}
+            </Link>
+          ))}
+        </div>
+      </header>
+
+      {/* ⌘K search palette — native modal dialog: named, focus-trapped
+          (showModal makes the page inert), Escape closes via `cancel`, focus
+          returns to the opener in handleDialogClose. */}
+      <dialog
+        ref={dialogRef}
+        className="efb-palette"
+        aria-labelledby={paletteTitleId}
+        onClose={handleDialogClose}
+        onClick={(e) => {
+          // A click on the dialog element itself (outside the panel) = backdrop.
+          if (e.target === e.currentTarget) closePalette();
+        }}
+      >
+        <div className="efb-palette__panel">
+          <h2 id={paletteTitleId} className="sr-only">
+            Search players
+          </h2>
+          <form onSubmit={handleSearchSubmit} role="search" className="relative border-b border-[var(--color-line)]">
+            <label htmlFor={paletteInputId} className="sr-only">
+              Player name
+            </label>
+            <Search className="pointer-events-none absolute left-4 top-1/2 size-4 -translate-y-1/2 text-[var(--color-text-dim)]" aria-hidden />
+            <input
+              ref={inputRef}
+              id={paletteInputId}
+              type="search"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search players by name…"
+              autoComplete="off"
+              enterKeyHint="search"
+              aria-controls={paletteResultsId}
+              aria-describedby={`${paletteTitleId}-hint`}
+              className="h-12 w-full bg-transparent pl-11 pr-24 text-sm text-[var(--color-text-primary)] placeholder-[var(--color-text-dim)] focus:outline-none"
+            />
+            <div className="absolute right-3 top-1/2 flex -translate-y-1/2 items-center gap-1.5">
+              {/* efootbase palette: an "Esc" chip; pressing it closes like the key. */}
               <button
                 type="button"
-                onClick={() => setSearchModalOpen(false)}
-                className="absolute right-3 top-1/2 -translate-y-1/2 p-1 rounded-md text-[var(--color-text-dim)] hover:text-white hover:bg-white/10"
+                onClick={closePalette}
+                aria-label="Close search (Escape)"
+                className="rounded-md border border-[var(--color-line)] bg-[var(--color-elevated)] px-1.5 py-0.5 font-mono text-[10px] font-medium text-[var(--color-text-secondary)] hover:text-white"
               >
-                <X className="size-4" />
+                Esc
               </button>
-            </form>
+              <button
+                type="button"
+                onClick={closePalette}
+                aria-label="Close search"
+                className="rounded-md p-1 text-[var(--color-text-dim)] hover:bg-white/10 hover:text-white md:hidden"
+              >
+                <X className="size-4" aria-hidden />
+              </button>
+            </div>
+          </form>
 
-            <div className="max-h-80 overflow-y-auto p-2 divide-y divide-[var(--color-line-separator)]/40">
-              {searchQuery.trim().length === 0 ? (
-                <div className="py-8 text-center text-xs text-[var(--color-text-dim)]">
-                  Type a player name or keyword to search across 48,000+ cards.
-                </div>
-              ) : searchResults.isLoading ? (
-                <div className="py-8 text-center text-xs text-[var(--color-text-dim)] animate-pulse">
-                  Searching database…
-                </div>
-              ) : (searchResults.data ?? []).length === 0 ? (
-                <div className="py-8 text-center text-xs text-[var(--color-text-dim)]">
-                  No cards found matching &quot;{searchQuery}&quot;.
-                </div>
-              ) : (
-                (searchResults.data ?? []).map((p) => (
-                  <button
-                    key={p.id}
-                    type="button"
-                    onClick={() => handleSelectPlayer(p.baseId, p.id)}
-                    className="w-full flex items-center justify-between gap-3 px-3 py-2.5 rounded-lg hover:bg-[var(--color-elevated)] transition-colors text-left cursor-pointer"
-                  >
-                    <div className="min-w-0">
-                      <div className="text-sm font-semibold text-[var(--color-text-primary)] truncate">
-                        {p.name}
-                      </div>
-                      <div className="text-xs text-[var(--color-text-dim)] truncate">
-                        {p.cardType.replace(/_/g, " ")}
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2 shrink-0">
-                      <span className="font-mono text-xs font-bold text-[var(--color-accent)] px-2 py-0.5 rounded-full bg-[var(--color-accent)]/10">
+          <div
+            id={paletteResultsId}
+            className="max-h-80 divide-y divide-[var(--color-line-separator)]/40 overflow-y-auto p-2"
+          >
+            {!typedEnough ? (
+              <div className="py-8 text-center text-xs text-[var(--color-text-dim)]">
+                Type at least {SEARCH_MIN_LENGTH} characters of a player name.
+              </div>
+            ) : waiting ? (
+              <div className="animate-pulse py-8 text-center text-xs text-[var(--color-text-dim)]">
+                Searching…
+              </div>
+            ) : searchResults.isError ? (
+              <div className="py-8 text-center text-xs text-[var(--color-accent-danger)]">
+                Search failed.{" "}
+                <button
+                  type="button"
+                  onClick={() => searchResults.refetch()}
+                  className="underline hover:text-white"
+                >
+                  Retry
+                </button>
+              </div>
+            ) : results.length === 0 ? (
+              <div className="py-8 text-center text-xs text-[var(--color-text-dim)]">
+                No cards found matching &quot;{debouncedQuery}&quot;.
+              </div>
+            ) : (
+              <ul className="m-0 list-none p-0">
+                {results.map((p) => (
+                  <li key={p.id}>
+                    <button
+                      type="button"
+                      onClick={() => handleSelectPlayer(p.baseId, p.id)}
+                      className="flex w-full cursor-pointer items-center justify-between gap-3 rounded-lg px-3 py-2.5 text-left transition-colors hover:bg-[var(--color-elevated)] focus-visible:bg-[var(--color-elevated)] focus-visible:outline-none"
+                    >
+                      <span className="min-w-0">
+                        <span className="block truncate text-sm font-semibold text-[var(--color-text-primary)]">
+                          {p.name}
+                        </span>
+                        <span className="block truncate text-xs text-[var(--color-text-dim)]">
+                          {CARD_TYPE_LABEL[p.cardType] ?? p.cardType}
+                        </span>
+                      </span>
+                      <span className="shrink-0 rounded-full bg-[var(--color-accent)]/10 px-2 py-0.5 font-mono text-xs font-bold text-[var(--color-accent)]">
                         {p.ovr} OVR
                       </span>
-                    </div>
-                  </button>
-                ))
-              )}
-            </div>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
 
-            <div className="px-4 py-2 border-t border-[var(--color-line)] bg-[var(--color-canvas)]/40 flex items-center justify-between text-[11px] text-[var(--color-text-dim)] font-mono">
-              <span>Press ESC to close</span>
-              <span>Press ENTER to see all results</span>
-            </div>
+          <div
+            id={`${paletteTitleId}-hint`}
+            className="flex items-center justify-between border-t border-[var(--color-line)] bg-[var(--color-canvas)]/40 px-4 py-2 font-mono text-[11px] text-[var(--color-text-dim)]"
+          >
+            <span>Esc to close</span>
+            <span>Enter to see all results</span>
           </div>
         </div>
-      )}
+      </dialog>
     </>
   );
 }

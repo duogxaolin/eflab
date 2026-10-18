@@ -1,5 +1,9 @@
 # user-profiles Specification
 
+> **API removed in change `remove-dead-surface` (2026-10-18)** — the `user` router and the Follow table were deleted; the User table (auth) stays.
+
+> **Status: removed from the web UI on 2026-10-07; API remains** (`/u/[username]` is gone; the `user` router and Follow table are still registered but unused). Requirements below are kept as the historical record.
+
 ## Purpose
 Public user profile pages, follow/follower graph, and user-scoped listings of builds, reviews, and tier votes.
 ## Requirements

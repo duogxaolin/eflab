@@ -1,175 +1,190 @@
 "use client";
 import { useRef, useCallback, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import type { CardPreview } from "@eflab/shared";
-import { CARD_TYPE_COLOR_VAR, positionOf } from "@/lib/card-display";
 import { playingStyleName } from "@eflab/shared";
-import {
-  playerCardDynamicUrl,
-  conditionUrl,
-} from "@/lib/r2-images";
+import { CARD_TYPE_COLOR_VAR, CARD_TYPE_LABEL, positionOf } from "@/lib/card-display";
+import { playerCardDynamicUrl, conditionUrl } from "@/lib/r2-images";
+import { usePrefersReducedMotion } from "./usePrefersReducedMotion";
+import { useNearViewport } from "./useNearViewport";
 
-// efootbase-aligned card render (DNA §10): 4-layer composite —
-//   layer 1: background  (card-backgrounds/{Type}.webp, or gradient fallback)
-//   layer 2: face        (R2 cards/{pid}_transparent.webp)
-//   layer 3: frame       (frames/{Name}_Frame.webp — optional)
-//   layer 4: condition   (conditions/condition_{a-e}.svg — optional, bottom-right)
+// efootbase-aligned card tile. The face is the single `cards/{id}_dynamic.webp`
+// render from R2 (animated background + frame baked in); the OVR block,
+// condition badge, detail overlays and glare are markup on top, positioned by
+// the proportional `.pcb*` CSS in globals.css (container-query units, so the
+// geometry is identical at every card width). This component only supplies
+// markup + class names — no inline position/size classes on `.pcb__*`.
 //
-// All overlay geometry (OVR block, condition badge) is driven by the proportional
-// `.pcb*` CSS in globals.css using container-query units (cqw) — so badges land
-// at the exact same spot whether the card is w-24 (trending) or w-full (grid),
-// matching efootbase's geometry exactly. This component only supplies the markup
-// + class names; NO inline Tailwind position/size classes on .pcb__* (those would
-// override the proportional CSS and cause drift at different card sizes).
-//
-// With `showName`, a separate <a> "Name" link is rendered BELOW the card (efootbase
-// verbatim: `mt-1 block text-center text-xs truncate text-foreground/80`), wrapped
-// together in `<div class="block">`. CSS 3D tilt + glare preserved as the eflab
-// signature (pointer-driven, no default chrome). NO flag in card list.
+// Accessibility / performance contract (site-quality-baseline):
+//   · the whole tile (card + optional name block) is ONE real <Link> with an
+//     explicit accessible name, keyboard-focusable with a visible focus ring;
+//   · images are lazy + async-decoded with explicit dimensions, and the face
+//     only receives its `src` once the card is within FACE_LOAD_MARGIN of the
+//     viewport (native lazy loading alone fetches ~1250 px ahead, far too much
+//     for a 190-card page); `priority` opts the first row into eager loading;
+//   · tilt + glare are pointer-driven and disabled under prefers-reduced-motion.
 
 type CardSize = "sm" | "md" | "full";
 
 const SIZE_CLASS: Record<CardSize, string> = {
   sm: "w-24",     // 96px — trending horizontal scroll (efootbase w-24)
   md: "w-28",     // 112px — pack grids (efootbase w-28)
-  full: "w-full", // dense players grid (cell fills column)
+  full: "w-full", // grid cell fills its column / carousel slot
 };
+
+/** Native size of the R2 card art (cards/{id}_dynamic.webp). */
+export const CARD_ART_WIDTH = 240;
+export const CARD_ART_HEIGHT = 339;
+/** Distance from the viewport at which a card face starts loading. */
+const FACE_LOAD_MARGIN = "200px";
+
+/** Card input: the slim preview, optionally carrying the full DTO's `levelCap`
+ *  (PlayerCardDTO extends CardPreview, so the detail page can pass it as is). */
+export type PlayerCardData = CardPreview & { levelCap?: number | null };
 
 export function PlayerCard({
   player,
   size = "full",
   showName = false,
   showDetails = false,
+  priority = false,
+  levelCap,
   className = "",
 }: {
-  player: CardPreview;
+  player: PlayerCardData;
   size?: CardSize;
-  /** Render the player name as a separate <a> link below the card, matching
-   *  efootbase's verbatim `<a class="mt-1 block text-center text-xs ...">`. */
+  /** Render the player name (+ attack/defence playing-style pills) below the
+   *  card, inside the same link — efootbase grid/list layout. */
   showName?: boolean;
-  /** Render the 3 detail-only overlays (efootbase dna §10 /players/{id}):
+  /** Render the detail-only overlays (efootbase /players/{id} card):
    *    .pcb__nation            — circular nationality flag (left-mid)
-   *    .pcb__badge--max-level   — "MAX LEVEL NN" pill (bottom-left, green)
-   *    .pcb__badge--max-ovr    — "MAX NN" pill (bottom-right, replaces condition)
-   *  Grid view defaults to false (matches efootbase homepage / list cards,
-   *  which render only bg + face + frame + OVR block + condition). The detail
-   *  page passes showDetails=true. Added 2026-10-08 — was the missing diff. */
+   *    .pcb__badge--max-level   — "MAX LVL NN" pill (bottom-left, green)
+   *    .pcb__badge--max-ovr    — "MAX NN" pill (bottom-right, replaces condition) */
   showDetails?: boolean;
+  /** Eager-load the face (first row of a grid / above the fold). Everything
+   *  else is lazy. */
+  priority?: boolean;
+  /** Real max level for the MAX LEVEL badge (efootbase `level_cap`). Falls back
+   *  to `player.levelCap` when the full DTO is passed; the badge is omitted
+   *  when neither is known (never a substitute number). */
+  levelCap?: number | null;
   className?: string;
 }) {
   const cardRef = useRef<HTMLDivElement>(null);
   const [tilt, setTilt] = useState({ rx: 0, ry: 0, glare: 50 });
   const [faceError, setFaceError] = useState(false);
+  const reducedMotion = usePrefersReducedMotion();
+  const nearViewport = useNearViewport(cardRef, FACE_LOAD_MARGIN, priority);
   const cardColor = CARD_TYPE_COLOR_VAR[player.cardType];
+  const typeLabel = CARD_TYPE_LABEL[player.cardType] ?? player.cardType;
 
-  const handleMove = useCallback((e: ReactPointerEvent<HTMLDivElement>) => {
-    const el = cardRef.current;
-    if (!el) return;
-    const rect = el.getBoundingClientRect();
-    const px = (e.clientX - rect.left) / rect.width;
-    const py = (e.clientY - rect.top) / rect.height;
-    const ry = (px - 0.5) * 16;
-    const rx = -(py - 0.5) * 16;
-    setTilt({ rx, ry, glare: px * 100 });
-  }, []);
-
+  const handleMove = useCallback(
+    (e: ReactPointerEvent<HTMLDivElement>) => {
+      if (reducedMotion) return;
+      const el = cardRef.current;
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      if (rect.width === 0 || rect.height === 0) return;
+      const px = (e.clientX - rect.left) / rect.width;
+      const py = (e.clientY - rect.top) / rect.height;
+      const ry = (px - 0.5) * 16;
+      const rx = -(py - 0.5) * 16;
+      setTilt({ rx, ry, glare: px * 100 });
+    },
+    [reducedMotion],
+  );
   const reset = useCallback(() => setTilt({ rx: 0, ry: 0, glare: 50 }), []);
 
   const pos = positionOf(player.registeredPosition);
-  // efootbase renders the card as a single dynamic.webp (animated bg + frame
-  // baked-in). Matching efootbase 1:1: use the dynamic variant instead of the
-  // layered bg+face+frame composite. OVR block + condition + detail overlays +
-  // glare stay as markup on top.
   const faceUrl = playerCardDynamicUrl(player.id);
-  // Condition letter (DNA §12): stored as "A"–"E" or null; lowercase for URL.
+  // Condition letter: stored as "A"–"E" (seeded from the dump) or null.
   const condLetter =
-    typeof player.condition === "string" &&
-    player.condition.length === 1 &&
-    /[a-eA-E]/.test(player.condition)
-      ? player.condition
+    typeof player.condition === "string" && /^[a-eA-E]$/.test(player.condition)
+      ? player.condition.toUpperCase()
       : null;
+  const maxLevel = levelCap ?? player.levelCap ?? null;
+  const showMaxOvr = player.maxOvr != null && player.maxOvr > 0;
+  const href = `/players/${player.baseId}/${player.id}` as const;
+  const accessibleName = `${player.name}, ${typeLabel} ${player.ovr} OVR, ${pos}`;
+  const tiltActive = !reducedMotion && (tilt.rx !== 0 || tilt.ry !== 0);
 
   const cardEl = (
     <div className={`perspective-card select-none ${SIZE_CLASS[size]} ${className}`}>
       <div
         ref={cardRef}
-        onPointerMove={handleMove}
+        onPointerMove={reducedMotion ? undefined : handleMove}
         onPointerLeave={reset}
         onPointerCancel={reset}
-        aria-label={player.name}
-        className="pcb card-3d-surface preserve-3d cursor-pointer"
-        style={{
-          transform: `rotateX(${tilt.rx}deg) rotateY(${tilt.ry}deg)`,
-        }}
+        className="pcb card-3d-surface preserve-3d"
+        style={tiltActive ? { transform: `rotateX(${tilt.rx}deg) rotateY(${tilt.ry}deg)` } : undefined}
       >
-        {/* Face — efootbase renders a single dynamic.webp with animated bg +
-            frame baked-in. OVR block + condition + detail overlays sit on top.
-            Gradient+initial fallback on error. */}
         {faceError ? (
+          // Face unavailable (R2 404 / offline): keep the geometry and render
+          // OVR + position in-card on a card-type tinted gradient.
           <div
             className="pcb__placeholder"
             style={{
-              background: `linear-gradient(180deg, ${cardColor}22, var(--color-canvas) 80%)`,
+              background: `linear-gradient(180deg, color-mix(in srgb, ${cardColor} 18%, transparent) 0%, var(--color-canvas) 80%)`,
             }}
           >
-            <span className="font-black text-[var(--color-text-primary)] tabular-nums" style={{ fontSize: "12cqw" }}>
+            <span className="font-black tabular-nums text-[var(--color-text-primary)]" style={{ fontSize: "12cqw" }}>
               {player.ovr}
             </span>
-            <span className="uppercase font-mono text-[var(--color-text-secondary)]" style={{ fontSize: "5cqw" }}>
+            <span className="font-mono uppercase text-[var(--color-text-secondary)]" style={{ fontSize: "5cqw" }}>
               {pos}
             </span>
           </div>
         ) : (
           // eslint-disable-next-line @next/next/no-img-element
           <img
-            src={faceUrl}
-            alt={player.name}
+            // src is withheld until the card nears the viewport (see useNearViewport)
+            src={nearViewport ? faceUrl : undefined}
+            data-src={faceUrl}
+            alt=""
+            width={CARD_ART_WIDTH}
+            height={CARD_ART_HEIGHT}
+            loading={priority ? "eager" : "lazy"}
+            fetchPriority={priority ? "high" : "auto"}
+            decoding="async"
             onError={() => setFaceError(true)}
             className="pcb__face"
             draggable={false}
           />
         )}
 
-        {/* OVR + position block — position/typography driven by .pcb__ovr-block
-            in globals.css (proportional cqw, matches efootbase geometry). */}
+        {/* OVR + position block (proportional .pcb__ovr-block geometry). */}
         {!faceError && (
-          <div className="pcb__ovr-block">
+          <div className="pcb__ovr-block" aria-hidden>
             <span className="pcb__ovr">{player.ovr}</span>
             <span className="pcb__position">{pos}</span>
           </div>
         )}
 
-        {/* Layer 4 — condition badge (optional, A–E). Wrapped in .pcb__condition
-            so the badge sits BOTTOM-right per efootbase (was top-right).
-            NOTE: on the detail card (showDetails=true) efootbase REPLACES this
-            bottom-right slot with the "MAX OVR" badge — so the condition badge
-            is hidden when showDetails is on, and max-ovr renders below. */}
+        {/* Condition badge (A–E, bottom-right). On the detail card efootbase
+            replaces this slot with the MAX OVR badge, so it is hidden when
+            showDetails is on. */}
         {condLetter && !faceError && !showDetails && (
           <div className="pcb__condition">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src={conditionUrl(condLetter)}
-              alt={`Condition ${condLetter.toUpperCase()}`}
-              title={`Condition ${condLetter.toUpperCase()}`}
+              alt={`Condition ${condLetter}`}
+              title={`Condition ${condLetter}`}
+              width={32}
+              height={32}
               loading="lazy"
+              decoding="async"
               draggable={false}
               className="pcb__condition-img"
             />
           </div>
         )}
 
-        {/* Detail-only overlays (efootbase dna §10 /players/{id} render):
-         *    nation flag (left-mid) + MAX LEVEL badge (bottom-left) +
-         *    MAX OVR badge (bottom-right, replacing condition). Grid cards omit
-         *    these three; the detail page passes showDetails=true. Added
-         *    2026-10-08 — these were the missing layers users noticed. */}
+        {/* Detail-only overlays: nation flag (left-mid), MAX LEVEL (bottom-left),
+            MAX OVR (bottom-right). */}
         {showDetails && !faceError && (
           <>
-            {/* Nation flag circle (left-mid). flagUrl comes from the API join
-                (Country.flagUrl, R2 SHA256 hash filename). If absent, skip the
-                overlay rather than render an empty circle. */}
             {player.flagUrl && (
               <div className="pcb__nation">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -177,94 +192,69 @@ export function PlayerCard({
                   src={player.flagUrl}
                   alt=""
                   aria-hidden
+                  width={42}
+                  height={42}
                   loading="lazy"
+                  decoding="async"
                   draggable={false}
                   className="pcb__nation-img"
                 />
               </div>
             )}
-            {/* Max LEVEL badge — efootbase shows the player's max level number.
-                We don't store maxLevel separately in CardPreview yet, so render
-                maxOvr here as the "max" proxy (efootbase's bottom-left pill shows
-                the max-level value; on eflab the meaningful "max" number is maxOvr).
-                TODO: when CardPreview carries maxLevel, switch to "MAX LEVEL {n}". */}
-            {player.maxOvr != null && player.maxOvr > 0 && (
+            {maxLevel != null && maxLevel > 0 && (
               <div className="pcb__badge pcb__badge--bottom-left pcb__badge--max-level">
-                MAX {player.maxOvr}
+                <span className="sr-only">Max level </span>
+                <span aria-hidden>MAX LVL </span>
+                {maxLevel}
               </div>
             )}
-            {/* Max OVR badge (bottom-right, replaces condition on detail). */}
-            {player.maxOvr != null && player.maxOvr > 0 && (
+            {showMaxOvr && (
               <div className="pcb__badge pcb__badge--bottom-right pcb__badge--max-ovr">
-                MAX {player.maxOvr}
+                <span className="sr-only">Max overall </span>
+                <span aria-hidden>MAX </span>
+                {player.maxOvr}
               </div>
             )}
           </>
         )}
 
-        {/* Glare overlay (CSS 3D signature — pointer-driven, no default chrome) */}
+        {/* Glare overlay — pointer-driven; static under reduced motion. */}
         <div
-          className="pointer-events-none absolute inset-0"
-          style={{
-            background: `radial-gradient(circle at ${tilt.glare}% 0%, rgba(255,255,255,0.12) 0%, rgba(255,255,255,0) 60%)`,
-            transition: "background 50ms linear",
-            zIndex: 4,
-          }}
+          className="pcb__glare"
+          aria-hidden
+          style={
+            reducedMotion
+              ? undefined
+              : {
+                  background: `radial-gradient(circle at ${tilt.glare}% 0%, rgba(255,255,255,0.12) 0%, rgba(255,255,255,0) 60%)`,
+                }
+          }
         />
       </div>
     </div>
   );
 
-  const router = useRouter();
-  const href = `/players/${player.baseId}/${player.id}`;
+  const hasPlaystyle = player.playingStyleAttack != null || player.playingStyleDefense != null;
 
-  const handleCardClick = () => {
-    router.push(href);
-  };
-
-  if (showName) {
-    // efootbase grid/list card name link: name + 2 playstyle lines, all inside one <a>.
-    //   <a class="mt-1 block text-center text-xs">
-    //     <span class="sr-only">Name. </span>  ← efootbase uses sr-only for the name
-    //     <span class="flex flex-col gap-0.5 text-[11px] leading-tight">
-    //       <span> ↑icon  Attack: <style>
-    //       <span> ↓icon  Defence: <style>
-    // Both playstyle ids resolve via PLAYING_STYLES; 0/absent → "Basic".
-    const hasPlaystyle = player.playingStyleAttack != null || player.playingStyleDefense != null;
-    const atk = playingStyleName(player.playingStyleAttack);
-    const def = playingStyleName(player.playingStyleDefense);
-    return (
-      <div className="block">
-        <div onClick={handleCardClick} className="block cursor-pointer">
-          {cardEl}
-        </div>
-        <Link
-          href={href}
-          className="mt-1 block text-center text-xs focus:outline-none text-[var(--color-text-primary)]/80 hover:text-[var(--color-text-primary)] transition-colors"
-        >
+  return (
+    <Link href={href} className="card-link block" aria-label={accessibleName}>
+      {cardEl}
+      {showName && (
+        <span className="mt-1 block text-center text-xs text-[var(--color-text-primary)]/80 transition-colors">
           <span className="block truncate">{player.name}</span>
-          {/* Playstyle badges — pill style: attack pill border red (#FF3464),
-              defence pill border cyan (#00EFFF), text white. Phân biệt bằng màu,
-              k prefix. Only rendered when the card carries playstyle ids. */}
+          {/* Playing-style pills: attack (red border) / defence (cyan border). */}
           {hasPlaystyle && (
             <span className="mt-1 flex flex-col items-center gap-1 leading-tight">
-              <span className="inline-flex min-w-0 max-w-full items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium text-white truncate"
-                style={{ borderColor: "#FF346466", background: "#FF34641a" }}>
-                {atk}
+              <span className="pcb__style-pill pcb__style-pill--attack">
+                {playingStyleName(player.playingStyleAttack)}
               </span>
-              <span className="inline-flex min-w-0 max-w-full items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium text-white truncate"
-                style={{ borderColor: "#00EFFF66", background: "#00EFFF1a" }}>
-                {def}
+              <span className="pcb__style-pill pcb__style-pill--defence">
+                {playingStyleName(player.playingStyleDefense)}
               </span>
             </span>
           )}
-        </Link>
-      </div>
-    );
-  }
-  return (
-    <div onClick={handleCardClick} className="block cursor-pointer">
-      {cardEl}
-    </div>
+        </span>
+      )}
+    </Link>
   );
 }

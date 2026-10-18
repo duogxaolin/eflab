@@ -18,19 +18,37 @@
 //      load the existing User (by the google Account row) or create a fresh
 //      User + Account (providerId="google", accountId=Google `sub`).
 //   5. We issue a session cookie and 302 back to the web frontend.
+//
+// Account linking (eflab-parity-fixes, "Safe Account Linking"): a Google login
+// is attached to an existing local account with the same email only when
+// Google reports the address as verified AND the local account's email is
+// verified. Otherwise the login is refused (no merge, no duplicate user) and
+// the browser is sent back to the home page with a `google_error` flag — the
+// home page is the only page that exists; `/login` was removed.
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { prisma } from "@eflab/db";
 import type { FastifyInstance, FastifyPluginCallback, FastifyReply } from "fastify";
-import { issueSession, parseCookieHeader, SESSION_COOKIE } from "./session.js";
+import { issueSession, parseCookieHeader, SESSION_COOKIE, sessionCookieFlags } from "./session.js";
+import { API_ORIGIN, primaryWebOrigin } from "../env.js";
 
 const STATE_COOKIE = "eflab_oauth_state";
-// Web origin (POST-OAuth landing) — default to the dev web server.
-const WEB_ORIGIN = process.env.WEB_ORIGIN ?? "http://localhost:3000";
-const API_ORIGIN = process.env.API_ORIGIN ?? `http://localhost:${process.env.API_PORT ?? 4000}`;
 
 // OAuth client config — both must be set; the routes 503 cleanly if missing.
 const CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
 const CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
+
+// Error codes surfaced to the web as `/?google_error=<code>`.
+type GoogleErrorCode =
+  | "access_denied"
+  | "oauth_failed"
+  | "invalid_state"
+  | "missing_code"
+  | "email_unverified"
+  | "account_unverified";
+
+function errorRedirect(res: FastifyReply, code: GoogleErrorCode) {
+  return res.redirect(`${primaryWebOrigin}/?google_error=${encodeURIComponent(code)}`, 302);
+}
 
 // PKCE-style state — a random nonce signed with the secret so we can verify it
 // came from us, without storing server-side state.
@@ -59,15 +77,7 @@ function verifyState(cookieValue: string | undefined, queryState: string | undef
 }
 
 function setStateCookie(res: FastifyReply, state: string): void {
-  const isProd = process.env.NODE_ENV === "production";
-  const parts = [
-    `${STATE_COOKIE}=${state}`,
-    "Path=/",
-    "HttpOnly",
-    "SameSite=Lax",
-    isProd ? "Secure" : "",
-    `Max-Age=600`,
-  ].filter(Boolean);
+  const parts = [`${STATE_COOKIE}=${state}`, ...sessionCookieFlags(), "Max-Age=600"];
   res.header("Set-Cookie", parts.join("; "));
 }
 
@@ -140,14 +150,14 @@ export const googleOAuthRoutes: FastifyPluginCallback = (server: FastifyInstance
     }
     const query = req.query as { code?: string; state?: string; error?: string };
     if (query.error) {
-      return res.redirect(`${WEB_ORIGIN}/login?google_error=${encodeURIComponent(query.error)}`, 302);
+      return errorRedirect(res, "access_denied");
     }
     const cookieState = parseCookieHeader(req.headers.cookie ?? "")[STATE_COOKIE];
     if (!verifyState(cookieState, query.state)) {
-      return res.code(400).send({ error: "Invalid OAuth state" });
+      return errorRedirect(res, "invalid_state");
     }
     if (!query.code) {
-      return res.code(400).send({ error: "Missing authorization code" });
+      return errorRedirect(res, "missing_code");
     }
     const redirectUri = `${API_ORIGIN}/auth/google/callback`;
     let tokens: { access_token: string; refresh_token?: string; expires_in?: number; scope?: string };
@@ -157,7 +167,11 @@ export const googleOAuthRoutes: FastifyPluginCallback = (server: FastifyInstance
       info = await fetchUserInfo(tokens.access_token);
     } catch (err) {
       server.log.error({ err: (err as Error).message }, "Google OAuth callback failed");
-      return res.redirect(`${WEB_ORIGIN}/login?google_error=oauth_failed`, 302);
+      return errorRedirect(res, "oauth_failed");
+    }
+    const email = info.email?.trim().toLowerCase();
+    if (!email) {
+      return errorRedirect(res, "oauth_failed");
     }
 
     // Find-or-create the user via the google Account row (accountId = Google sub).
@@ -169,29 +183,39 @@ export const googleOAuthRoutes: FastifyPluginCallback = (server: FastifyInstance
     if (existingAccount) {
       userId = existingAccount.userId;
     } else {
-      // First-time Google sign-in: create a User + google Account row.
-      // Derive a unique username from the email local-part, suffixing if taken.
-      const baseUsername = (info.email.split("@")[0] ?? "user")
-        .toLowerCase()
-        .replace(/[^a-z0-9_]/g, "")
-        .slice(0, 18) || "user";
-      let username = baseUsername;
-      for (let i = 1; i < 1000; i++) {
-        const clash = await prisma.user.findUnique({ where: { username }, select: { id: true } });
-        if (!clash) break;
-        username = `${baseUsername}${i}`;
+      // Only a Google-verified address may ever be matched against local accounts.
+      if (!info.email_verified) {
+        return errorRedirect(res, "email_unverified");
       }
-      const emailClash = await prisma.user.findUnique({ where: { email: info.email }, select: { id: true } });
+      const emailClash = await prisma.user.findUnique({
+        where: { email },
+        select: { id: true, emailVerified: true },
+      });
       if (emailClash) {
-        // Email already exists (registered via email/password) — link the google
-        // Account to that user instead of creating a duplicate.
+        // Email already exists (registered via email/password). Link only when
+        // the local account proved ownership of the address too; otherwise
+        // refuse — never merge into an unverified account.
+        if (!emailClash.emailVerified) {
+          return errorRedirect(res, "account_unverified");
+        }
         userId = emailClash.id;
       } else {
+        // First-time Google sign-in: create a User + google Account row.
+        // Derive a unique username from the email local-part, suffixing if taken.
+        const baseUsername = (email.split("@")[0] ?? "user")
+          .replace(/[^a-z0-9_]/g, "")
+          .slice(0, 18) || "user";
+        let username = baseUsername;
+        for (let i = 1; i < 1000; i++) {
+          const clash = await prisma.user.findUnique({ where: { username }, select: { id: true } });
+          if (!clash) break;
+          username = `${baseUsername}${i}`;
+        }
         const created = await prisma.user.create({
           data: {
             username,
-            email: info.email,
-            emailVerified: !!info.email_verified,
+            email,
+            emailVerified: true,
             displayName: info.name ?? null,
             avatarUrl: info.picture ?? null,
           },
@@ -224,14 +248,13 @@ export const googleOAuthRoutes: FastifyPluginCallback = (server: FastifyInstance
       ua: req.headers["user-agent"] ?? null,
     });
     // Set the session cookie + clear the state cookie in one Set-Cookie header.
-    const cookieFlags = `Path=/; HttpOnly; SameSite=Lax; ${process.env.NODE_ENV === "production" ? "Secure; " : ""}`;
+    const flags = sessionCookieFlags().join("; ");
     res.header("Set-Cookie", [
-      `${SESSION_COOKIE}=${token}; ${cookieFlags}Max-Age=${60 * 60 * 24 * 30}`,
-      `${STATE_COOKIE}=; ${cookieFlags}Max-Age=0`,
+      `${SESSION_COOKIE}=${token}; ${flags}; Max-Age=${60 * 60 * 24 * 30}`,
+      `${STATE_COOKIE}=; ${flags}; Max-Age=0`,
     ]);
-    return res.redirect(`${WEB_ORIGIN}/`, 302);
+    return res.redirect(`${primaryWebOrigin}/`, 302);
   });
 
   done();
 };
-

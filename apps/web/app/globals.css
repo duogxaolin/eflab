@@ -1,5 +1,12 @@
 @import "tailwindcss";
 
+/*
+  Cascade layers: Tailwind 4 declares `theme, base, components, utilities`.
+  Every hand-written class below lives in `@layer components` (or `base`) so
+  that utility classes in markup (`md:hidden`, `w-full`, …) always win — an
+  unlayered rule would beat every utility regardless of specificity.
+*/
+
 @font-face {
   font-family: 'efootballStencil';
   src: url('/fonts/eFootballStencil-Regular.ttf') format('truetype');
@@ -25,641 +32,758 @@
 }
 
 /*
-  efootbase-aligned palette (extracted from efootbase live CSS 2026-10-07).
-  efootbase = shadcn/ui design system, zinc neutral + lime accent.
-  These values match the dark theme tokens efootbase ships to browsers
-  (see tmp/efootbase-ref/3_izlxu8hsiw8.css, `.dark` block):
-    --background #060607  --surface #18181b  --surface-secondary #232325
-    --surface-tertiary #262728  --muted #9f9fa9  --border #28282c
-    --separator #212124  --accent #acf41a  --snow #fcfcfc  --radius .5rem
-  Token NAMES are kept (canvas/panel/elevated/line/...) so existing
-  components don't break — only the VALUES change to the efootbase palette.
+  Palette: zinc neutrals + lime accent (dark only).
+  Token NAMES (canvas/panel/elevated/line/…) are stable across the app.
 */
 @theme {
-  /* ---- Zinc neutrals (efootbase dark theme) ---- */
-  --color-canvas: #060607;        /* Page background (efootbase --background) */
-  --color-panel: #18181b;         /* Card / section surface (efootbase --surface, zinc-900) */
-  --color-elevated: #232325;      /* Modal / hover surface (efootbase --surface-secondary) */
-  --color-line: #28282c;          /* Subtle boundary (efootbase --border) */
-  --color-line-active: #3f3f45;  /* Hover border (brighter than --border) */
-  --color-line-separator: #212124; /* efootbase --separator (fainter than --border) */
+  /* ---- Zinc neutrals ---- */
+  --color-canvas: #060607;         /* Page background */
+  --color-panel: #18181b;          /* Card / section surface (zinc-900) */
+  --color-elevated: #232325;       /* Modal / hover surface */
+  --color-line: #28282c;           /* Subtle boundary */
+  --color-line-active: #3f3f45;    /* Hover border */
+  --color-line-separator: #212124; /* Fainter separator */
 
-  /* ---- Accent = lime (efootbase brand, EFLAB keeps own name) ---- */
-  --color-accent: #acf41a;        /* Lime — primary (efootbase --accent) */
-  --color-accent-foreground: #080d02; /* lime-on-dark text (efootbase --accent-foreground) */
-  --color-accent-secondary: #06b6d4; /* Cyan — kept for tactical/diff blue (compare valB) */
-  --color-accent-warn: #f59e0b;   /* Amber — boost / caution / mid-tier */
-  --color-accent-danger: #ef4444; /* Red — alerts / negative diffs */
+  /* ---- Accent = lime ---- */
+  --color-accent: #acf41a;
+  --color-accent-foreground: #080d02; /* lime-on-dark text */
+  --color-accent-secondary: #06b6d4;  /* Cyan — tactical / diff blue (compare valB) */
+  --color-accent-warn: #f59e0b;       /* Amber — boost / caution */
+  --color-accent-danger: #ef4444;     /* Red — alerts / negative diffs */
 
-  /* ---- Text on zinc (efootbase --snow / --muted) ---- */
-  --color-text-primary: #fcfcfc;  /* Snow — high-contrast foreground */
-  --color-text-secondary: #9f9fa9; /* efootbase --muted — metadata & labels */
-  --color-text-dim: #6b6b73;      /* Dimmer than muted — timestamps / inactive */
+  /* ---- Text ---- */
+  --color-text-primary: #fcfcfc;
+  --color-text-secondary: #9f9fa9;
+  --color-text-dim: #6b6b73;
 
-  /* Tier colors (kept — efootbase tier dots are similar) */
-  --color-tier-elite: #00ffb4;   /* 90+ Teal */
-  --color-tier-high: #96ff00;    /* 80-89 Lime */
-  --color-tier-mid: #ffbe00;     /* 70-79 Amber */
-  --color-tier-low: #ff3200;     /* <70 Red */
+  /* ---- Stat tier colours — the SINGLE source for every tier colour.
+     Consumers: statTierClass/statTierBg (lib/card-display.ts) and the
+     `.text-stat-tier-*` / `.bg-stat-tier-*` aliases below. ---- */
+  --color-tier-max: #ff2fb4;     /* 100+ (trained past 99 — efootbase magenta) */
+  --color-tier-elite: #00ffb4;   /* 90–99 */
+  --color-tier-high: #96ff00;    /* 80–89 */
+  --color-tier-mid: #ffbe00;     /* 70–79 */
+  --color-tier-low: #ff3200;     /* <70 */
 
-  /* Card-type accent (stripe / badge; NOT the bg image) */
+  /* ---- Card-type accent (badge text / placeholder tint) — one token per
+     CardType enum value (STANDARD, LEGENDARY, TRENDING, SELECTION, EPIC,
+     HIGHLIGHT, STRIKE_ARENA); see CARD_TYPE_COLOR_VAR in lib/card-display.ts ---- */
   --color-card-standard: #64748b;
-  --color-card-trending: #06b6d4;
-  --color-card-epic: #8b5cf6;
-  --color-card-big-time: #fb923c;
-  --color-card-highlight: #10b981;
-  --color-card-show-time: #f472b6;
-  --color-card-strike-arena: #ef4444;
   --color-card-legendary: #fbbf24;
+  --color-card-trending: #06b6d4;
+  --color-card-selection: #fb923c;
+  --color-card-epic: #8b5cf6;
+  --color-card-highlight: #10b981;
+  --color-card-strike-arena: #ef4444;
 }
 
-:root {
-  color-scheme: dark;
-}
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
 
-html {
-  background-color: var(--color-canvas);
-  color: var(--color-text-primary);
-  font-family: var(--font-inter), Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  min-height: 100vh;
-}
+  html {
+    background-color: var(--color-canvas);
+    color: var(--color-text-primary);
+    font-family: var(--font-inter), Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    min-height: 100vh;
+  }
 
-body {
-  background-color: transparent;
-  color: var(--color-text-primary);
-  min-height: 100vh;
-}
+  body {
+    background-color: transparent;
+    color: var(--color-text-primary);
+    min-height: 100vh;
+    /* Safety net only: real overflow causes are fixed in the components; this
+       stops a stray wide element from scrolling the whole page sideways. */
+    overflow-x: hidden;
+  }
 
-/*
-  efootbase aurora backdrop — fixed behind everything carrying ambient glow
-  plus faint fractal-noise grain via inline SVG at ~7% opacity.
-*/
-.efb-backdrop {
-  pointer-events: none;
-  position: fixed;
-  inset: 0;
-  overflow: hidden;
-  z-index: 0;
-}
-.efb-backdrop::after {
-  content: "";
-  opacity: 0.07;
-  mix-blend-mode: soft-light;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.82' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
-  background-size: 140px 140px;
-  position: absolute;
-  inset: 0;
-}
-.efb-backdrop__aurora {
-  --efb-aurora-a: #34d9c8;
-  --efb-aurora-b: #3b82f6;
-  --efb-aurora-c: #8b5cf6;
-  position: absolute;
-  inset: 0;
-  opacity: 0.55;
-}
-.efb-backdrop__aurora::before {
-  content: "";
-  pointer-events: none;
-  background: radial-gradient(120% 80% at 12% -12%, var(--efb-aurora-a) 0%, transparent 56%),
-              radial-gradient(110% 72% at 88% -6%, var(--efb-aurora-b) 0%, transparent 54%),
-              radial-gradient(135% 68% at 50% 0%, var(--efb-aurora-c) 0%, transparent 60%);
-  opacity: 0.55;
-  position: absolute;
-  inset: 0;
-}
-.efb-backdrop__aurora::after {
-  content: "";
-  pointer-events: none;
-  background: linear-gradient(to bottom, transparent 0%, transparent 42%, var(--color-canvas) 96%);
-  position: absolute;
-  inset: 0;
-}
+  /* Scrollbar — thin translucent thumb */
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb {
+    background: color-mix(in oklch, var(--color-text-primary) 15%, transparent);
+    border-radius: 8px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: color-mix(in oklch, var(--color-text-primary) 25%, transparent);
+  }
 
-.aurora-container {
-  width: 100%;
-  height: 100%;
-}
+  /* Touch target ≥ 44px on coarse pointers */
+  @media (pointer: coarse) {
+    button, a, [role="button"] {
+      min-height: 44px;
+      min-width: 44px;
+    }
+  }
 
-/* Touch target ≥ 44px */
-@media (pointer: coarse) {
-  button, a, [role="button"] {
-    min-height: 44px;
-    min-width: 44px;
+  /* Reduced motion: no card tilt transition, no smooth scrolling. The JS side
+     (usePrefersReducedMotion) also stops the tilt handlers and the carousel
+     auto-advance; this is the CSS belt to that brace. */
+  @media (prefers-reduced-motion: reduce) {
+    .card-3d-surface {
+      transition: none;
+      transform: none !important;
+    }
+    .scroll-smooth,
+    html {
+      scroll-behavior: auto;
+    }
   }
 }
 
-/* CSS 3D card primitives — layered composite + tilt/glare */
-.preserve-3d {
-  transform-style: preserve-3d;
-}
-.perspective-card {
-  perspective: 1200px;
-}
-.card-3d-surface {
-  transform-style: preserve-3d;
-  will-change: transform;
-  transition: transform 120ms ease-out;
-}
+@layer components {
+  /* ── Aurora backdrop (fixed behind everything) ─────────────────────────── */
+  .efb-backdrop {
+    pointer-events: none;
+    position: fixed;
+    inset: 0;
+    overflow: hidden;
+    z-index: 0;
+  }
+  .efb-backdrop::after {
+    content: "";
+    opacity: 0.07;
+    mix-blend-mode: soft-light;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.82' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+    background-size: 140px 140px;
+    position: absolute;
+    inset: 0;
+  }
+  .efb-backdrop__aurora {
+    --efb-aurora-a: #34d9c8;
+    --efb-aurora-b: #3b82f6;
+    --efb-aurora-c: #8b5cf6;
+    position: absolute;
+    inset: 0;
+    opacity: 0.55;
+  }
+  .efb-backdrop__aurora::before {
+    content: "";
+    pointer-events: none;
+    background: radial-gradient(120% 80% at 12% -12%, var(--efb-aurora-a) 0%, transparent 56%),
+                radial-gradient(110% 72% at 88% -6%, var(--efb-aurora-b) 0%, transparent 54%),
+                radial-gradient(135% 68% at 50% 0%, var(--efb-aurora-c) 0%, transparent 60%);
+    opacity: 0.55;
+    position: absolute;
+    inset: 0;
+  }
+  .efb-backdrop__aurora::after {
+    content: "";
+    pointer-events: none;
+    background: linear-gradient(to bottom, transparent 0%, transparent 42%, var(--color-canvas) 96%);
+    position: absolute;
+    inset: 0;
+  }
+  .aurora-container {
+    width: 100%;
+    height: 100%;
+  }
 
-/* Scrollbar — efootbase uses thin translucent thumb */
-::-webkit-scrollbar { width: 10px; height: 10px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb {
-  background: color-mix(in oklch, var(--color-text-primary) 15%, transparent);
-  border-radius: 8px;
-}
-::-webkit-scrollbar-thumb:hover {
-  background: color-mix(in oklch, var(--color-text-primary) 25%, transparent);
-}
+  /* ── CSS 3D card primitives — tilt/glare ───────────────────────────────── */
+  .preserve-3d {
+    transform-style: preserve-3d;
+  }
+  .perspective-card {
+    perspective: 1200px;
+  }
+  .card-3d-surface {
+    transform-style: preserve-3d;
+    will-change: transform;
+    transition: transform 120ms ease-out;
+  }
 
-/* Hide horizontal scroll bar on carousels */
-.hide-scrollbar::-webkit-scrollbar { display: none; }
-.hide-scrollbar { scrollbar-width: none; }
+  /* Card tile link: the whole tile is one focusable link with a visible ring. */
+  .card-link {
+    display: block;
+    min-width: 0;
+    border-radius: 0.5rem;
+    outline: none;
+    color: inherit;
+    text-decoration: none;
+  }
+  .card-link:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 3px;
+  }
+  .card-link:hover .pcb__style-pill,
+  .card-link:focus-visible .pcb__style-pill {
+    color: #fff;
+  }
 
-/* Auth forms (CSS kept even when routes hidden — avoid breaking other consumers) */
-.auth-input {
-  width: 100%;
-  border: 1px solid var(--color-line);
-  background: var(--color-canvas);
-  border-radius: 0.5rem;
-  padding: 0.5rem 0.75rem;
-  font-size: 0.875rem;
-  color: var(--color-text-primary);
-  outline: none;
-}
-.auth-input:focus {
-  border-color: var(--color-accent);
-  box-shadow: 0 0 0 2px color-mix(in oklch, var(--color-accent) 25%, transparent);
-}
-.auth-btn {
-  width: 100%;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.5rem;
-  background: var(--color-accent);
-  color: var(--color-accent-foreground);
-  font-weight: 600;
-  padding: 0.5rem 1rem;
-  border-radius: 0.5rem;
-  font-size: 0.875rem;
-  transition: opacity 120ms;
-}
-.auth-btn:hover { opacity: 0.9; }
-.auth-btn:disabled { opacity: 0.55; cursor: not-allowed; }
+  /* Hide horizontal scroll bar on carousels */
+  .hide-scrollbar::-webkit-scrollbar { display: none; }
+  .hide-scrollbar { scrollbar-width: none; }
 
-/* Tier drag-and-drop (CSS kept) */
-.tier-dropzone {
-  min-height: 120px;
-  border: 1.5px dashed var(--color-line);
-  border-radius: 0.75rem;
-  padding: 0.75rem;
-  background: var(--color-panel);
-  transition: border-color 120ms, background 120ms;
-}
-.tier-dropzone[data-drag-over="true"] {
-  border-color: var(--color-accent);
-  background: color-mix(in oklch, var(--color-accent) 8%, transparent);
-}
-.tier-card-thumb {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.5rem;
-  background: var(--color-elevated);
-  border: 1px solid var(--color-line);
-  border-radius: 0.5rem;
-  padding: 0.25rem 0.5rem;
-  font-size: 0.75rem;
-  color: var(--color-text-secondary);
-  cursor: grab;
-}
+  /* ── Auth forms (CSS kept even when routes are hidden) ─────────────────── */
+  .auth-input {
+    width: 100%;
+    border: 1px solid var(--color-line);
+    background: var(--color-canvas);
+    border-radius: 0.5rem;
+    padding: 0.5rem 0.75rem;
+    font-size: 0.875rem;
+    color: var(--color-text-primary);
+    outline: none;
+  }
+  .auth-input:focus {
+    border-color: var(--color-accent);
+    box-shadow: 0 0 0 2px color-mix(in oklch, var(--color-accent) 25%, transparent);
+  }
+  .auth-btn {
+    width: 100%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    background: var(--color-accent);
+    color: var(--color-accent-foreground);
+    font-weight: 600;
+    padding: 0.5rem 1rem;
+    border-radius: 0.5rem;
+    font-size: 0.875rem;
+    transition: opacity 120ms;
+  }
+  .auth-btn:hover { opacity: 0.9; }
+  .auth-btn:disabled { opacity: 0.55; cursor: not-allowed; }
 
-/* ──────────────────────────────────────────────────────────────────────────
- * Player Card Block (.pcb) — proportional efootbase-exact render.
- *
- * efootbase drives every card overlay position through container-query units
- * (cqw), so the OVR/position/condition badges scale with the card and land at
- * the exact same spot whether the card is w-24 (trending) or w-full (grid).
- * eflab previously used static Tailwind `top-1 left-1` + `text-sm font-black` →
- * badges drifted at different card sizes and the OVR weight was wrong.
- *
- * This block mirrors efootbase's .pcb stylesheet (dumped 2026-10-07 from
- * /tmp/efootbase-ref/1dottcc19ka7f.css) EXACTLY in geometry/typography.
- * Branding: eflab does NOT copy efootbase's eFootballStencil/eFootballSans
- * web fonts (not public) — falls back to system-ui. Visual fidelity of the
- * card *geometry* matches; the typeface is intentionally different.
- * ────────────────────────────────────────────────────────────────────────── */
-.pcb {
-  aspect-ratio: 240 / 339;
-  --pcb-radius: 1.667%;
-  border-radius: var(--pcb-radius);
-  -webkit-user-select: none;
-  user-select: none;
-  /* text-stroke scales with card width: 2px on a 240px card */
-  --pcb-text-stroke: calc(100cqw * 2 / 240);
-  background: transparent;       /* NO panel fill — transparent art floats (efootbase) */
-  width: 100%;
-  position: relative;
-  overflow: hidden;
-  container-type: inline-size;    /* enables cqw units below */
-}
-.pcb__background {
-  object-fit: cover;
-  pointer-events: none;
-  z-index: 0;
-  width: 100%;
-  height: 100%;
-  position: absolute;
-  inset: 0;
-}
-.pcb__face {
-  object-fit: cover;             /* efootbase uses cover, NOT contain */
-  z-index: 1;
-  width: 100%;
-  height: 100%;
-  position: absolute;
-  inset: 0;
-}
-.pcb__frame {
-  object-fit: cover;
-  pointer-events: none;
-  z-index: 2;
-  width: 100%;
-  height: 100%;
-  position: absolute;
-  inset: 0;
-}
-.pcb__ovr-block {
-  z-index: 2;
-  pointer-events: none;
-  flex-direction: column;
-  align-items: center;
-  width: 33.3333cqw;             /* ~80px on a 240px card — scales with card */
-  display: flex;
-  position: absolute;
-  top: 0;
-  left: 0.833333cqw;             /* 2px on a 240px card */
-}
-.pcb__ovr,
-.pcb__position {
-  color: #fff;
-  paint-order: stroke fill;
-  -webkit-text-stroke: var(--pcb-text-stroke) #00000073;
-  text-shadow:
-    0 0.625cqw 2.08333cqw #00000061,
-    0 0.208333cqw 0.833333cqw #00000047;
-}
-.pcb__ovr {
-  font-family: 'efootballStencil', var(--font-pcb-stencil, system-ui), sans-serif;
-  font-variant-numeric: tabular-nums;
-  margin-top: 0.833333cqw;
-  font-size: 19.1667cqw;
-  font-weight: 400;
-  line-height: 1;
-  position: relative;
-  text-shadow: 0 0.625cqw 2.08333cqw rgba(0,0,0,0.38), 0 0.208333cqw 0.833333cqw rgba(0,0,0,0.28);
-}
-.pcb__position {
-  text-align: center;
-  width: 100%;
-  font-family: 'efootballSans', var(--font-pcb-sans, system-ui), sans-serif;
-  margin-top: 0.416667cqw;
-  font-size: 10.4167cqw;
-  font-weight: 700;
-  line-height: 1;
-  position: relative;
-}
-.pcb__condition {
-  z-index: 3;
-  pointer-events: none;
-  width: 13.3333cqw;             /* 32px on a 240px card */
-  height: 13.3333cqw;
-  position: absolute;
-  bottom: 3.33333cqw;           /* BOTTOM-right (efootbase), NOT top-right */
-  right: 3.33333cqw;
-}
-.pcb__condition-img {
-  width: 100%;
-  height: 100%;
-  display: block;
-  object-fit: contain;
-}
-/* Face-error fallback keeps geometry but renders OVR/pos in-card */
-.pcb__placeholder {
-  z-index: 1;
-  width: 100%;
-  height: 100%;
-  position: absolute;
-  inset: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  text-align: center;
-  color: var(--color-text-secondary);
-  background: var(--color-panel);
-  padding: 3.33333cqw;
-  font-size: 5cqw;
-  line-height: 1.2;
-}
+  /* ── Tier drag-and-drop (CSS kept) ─────────────────────────────────────── */
+  .tier-dropzone {
+    min-height: 120px;
+    border: 1.5px dashed var(--color-line);
+    border-radius: 0.75rem;
+    padding: 0.75rem;
+    background: var(--color-panel);
+    transition: border-color 120ms, background 120ms;
+  }
+  .tier-dropzone[data-drag-over="true"] {
+    border-color: var(--color-accent);
+    background: color-mix(in oklch, var(--color-accent) 8%, transparent);
+  }
+  .tier-card-thumb {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    background: var(--color-elevated);
+    border: 1px solid var(--color-line);
+    border-radius: 0.5rem;
+    padding: 0.25rem 0.5rem;
+    font-size: 0.75rem;
+    color: var(--color-text-secondary);
+    cursor: grab;
+  }
 
-/* ── Detail-card overlays (efootbase dna §10 detail render — not on grid) ──
- * efootbase shows these 3 layers ONLY on /players/{baseId}/{playerId}:
- *   .pcb__nation       — circle nationality flag at left-mid
- *   .pcb__badge--max-level  — green "Max LVL NN" pill at bottom-left
- *   .pcb__badge--max-ovr   — "MAX NN" pill at bottom-right (replaces condition
- *                           on the detail card; grid view keeps condition only).
- * The shape + geometry below is copied verbatim from efootbase's css (the cqw
- * values are identical to efootbase's), so the card lines up 1:1 with the
- * reference at any card size. Added 2026-10-08 — was the most-noticed "thiếu
- * gì đó" diff between efootbase detail and local.
- */
-.pcb__nation {
-  z-index: 2;
-  background: #111;
-  border: 0.833333cqw solid #fff;
-  border-radius: 9999px;
-  width: 17.5cqw;
-  height: 17.5cqw;
-  position: absolute;
-  top: 34.5833cqw;
-  left: 8.75cqw;
-  overflow: hidden;
-  transform: translate(-50%);
-  pointer-events: none;
-}
-.pcb__nation-img {
-  object-fit: cover;
-  width: 100%;
-  height: 100%;
-  display: block;
-}
-.pcb__badge {
-  z-index: 3;
-  min-width: 13.3333cqw;
-  height: 13.3333cqw;
-  font-family: 'efootballSans', var(--font-pcb-sans, system-ui), sans-serif;
-  font-variant-numeric: tabular-nums;
-  pointer-events: none;
-  background: #262626;
-  border: 0.625cqw solid #acf41a4d;
-  border-radius: 2.5cqw;
-  justify-content: center;
-  align-items: center;
-  padding: 0.833333cqw 1.66667cqw;
-  font-size: 11.6667cqw;
-  font-weight: 500;
-  line-height: 1;
-  display: flex;
-  position: absolute;
-}
-.pcb__badge--bottom-left { bottom: 3.33333cqw; left: 3.33333cqw; }
-.pcb__badge--bottom-right { bottom: 3.33333cqw; right: 3.33333cqw; }
-.pcb__badge--top-right { top: 3.33333cqw; right: 3.33333cqw; }
-.pcb__badge--max-level {
-  color: #7dff1f;
-  transform: translateY(-0.416667cqw);
-}
-.pcb__badge--max-ovr {
-  color: #fff;
-  text-shadow: 1px 0 #000;
-  transform: translateY(-0.625cqw);
-}
+  /* ──────────────────────────────────────────────────────────────────────────
+   * Player Card Block (.pcb) — proportional card render.
+   *
+   * Every overlay is positioned in container-query units (cqw) so the
+   * OVR/position/condition badges scale with the card and land at the same
+   * spot whether the card is w-24 (trending) or w-full (grid). Only the
+   * geometry is mirrored from the reference; the typeface falls back to
+   * system-ui where the stencil font is unavailable.
+   * ────────────────────────────────────────────────────────────────────────── */
+  .pcb {
+    aspect-ratio: 240 / 339;
+    --pcb-radius: 1.667%;
+    border-radius: var(--pcb-radius);
+    -webkit-user-select: none;
+    user-select: none;
+    /* text-stroke scales with card width: 2px on a 240px card */
+    --pcb-text-stroke: calc(100cqw * 2 / 240);
+    background: transparent;       /* transparent art floats — no panel fill */
+    width: 100%;
+    position: relative;
+    overflow: hidden;
+    container-type: inline-size;    /* enables cqw units below */
+  }
+  .pcb__face {
+    object-fit: cover;
+    z-index: 1;
+    width: 100%;
+    height: 100%;
+    position: absolute;
+    inset: 0;
+  }
+  .pcb__glare {
+    pointer-events: none;
+    position: absolute;
+    inset: 0;
+    z-index: 4;
+    transition: background 50ms linear;
+  }
+  .pcb__ovr-block {
+    z-index: 2;
+    pointer-events: none;
+    flex-direction: column;
+    align-items: center;
+    width: 33.3333cqw;             /* ~80px on a 240px card */
+    display: flex;
+    position: absolute;
+    top: 0;
+    left: 0.833333cqw;             /* 2px on a 240px card */
+  }
+  .pcb__ovr,
+  .pcb__position {
+    color: #fff;
+    paint-order: stroke fill;
+    -webkit-text-stroke: var(--pcb-text-stroke) #00000073;
+    text-shadow:
+      0 0.625cqw 2.08333cqw #00000061,
+      0 0.208333cqw 0.833333cqw #00000047;
+  }
+  .pcb__ovr {
+    font-family: 'efootballStencil', var(--font-pcb-stencil, system-ui), sans-serif;
+    font-variant-numeric: tabular-nums;
+    margin-top: 0.833333cqw;
+    font-size: 19.1667cqw;
+    font-weight: 400;
+    line-height: 1;
+    position: relative;
+    text-shadow: 0 0.625cqw 2.08333cqw rgba(0,0,0,0.38), 0 0.208333cqw 0.833333cqw rgba(0,0,0,0.28);
+  }
+  .pcb__position {
+    text-align: center;
+    width: 100%;
+    font-family: 'efootballSans', var(--font-pcb-sans, system-ui), sans-serif;
+    margin-top: 0.416667cqw;
+    font-size: 10.4167cqw;
+    font-weight: 700;
+    line-height: 1;
+    position: relative;
+  }
+  .pcb__condition {
+    z-index: 3;
+    pointer-events: none;
+    width: 13.3333cqw;             /* 32px on a 240px card */
+    height: 13.3333cqw;
+    position: absolute;
+    bottom: 3.33333cqw;
+    right: 3.33333cqw;
+  }
+  .pcb__condition-img {
+    width: 100%;
+    height: 100%;
+    display: block;
+    object-fit: contain;
+  }
+  /* Face-error fallback keeps geometry but renders OVR/pos in-card */
+  .pcb__placeholder {
+    z-index: 1;
+    width: 100%;
+    height: 100%;
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    color: var(--color-text-secondary);
+    background: var(--color-panel);
+    padding: 3.33333cqw;
+    font-size: 5cqw;
+    line-height: 1.2;
+  }
 
-/* ──────────────────────────────────────────────────────────────────────────
- * efootbase Navigation & Shell
- * ────────────────────────────────────────────────────────────────────────── */
-.efb-navbar {
-  z-index: 40;
-  background: color-mix(in oklch, var(--color-canvas) 70%, transparent);
-  -webkit-backdrop-filter: blur(20px) saturate(1.45);
-  backdrop-filter: blur(20px) saturate(1.45);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-  position: sticky;
-  top: 0;
-  box-shadow: inset 0 1px rgba(255, 255, 255, 0.07), 0 1px 12px rgba(0, 0, 0, 0.25);
-}
-.efb-navbar__link {
-  border-radius: 0.5rem;
-  color: rgba(255, 255, 255, 0.65);
-  padding: 0.375rem 0.75rem;
-  font-size: 0.875rem;
-  line-height: 1.25rem;
-  font-weight: 500;
-  text-decoration: none;
-  transition: color 0.15s, background-color 0.15s, box-shadow 0.15s;
-}
-.efb-navbar__link:hover {
-  color: #fff;
-  background: rgba(255, 255, 255, 0.06);
-}
-.efb-navbar__link--active {
-  color: #fff;
-  background: rgba(255, 255, 255, 0.1);
-  box-shadow: inset 0 1px rgba(255, 255, 255, 0.12), 0 0 0 1px rgba(255, 255, 255, 0.08);
-}
-.efb-navbar__actions {
-  align-items: center;
-  gap: 0.75rem;
-  margin-left: auto;
-  display: flex;
-}
-.efb-navbar__divider {
-  background: rgba(255, 255, 255, 0.08);
-  flex-shrink: 0;
-  align-self: center;
-  width: 1px;
-  height: 1.75rem;
-}
-.efb-navbar-search-kbd {
-  color: rgba(255, 255, 255, 0.55);
-  height: 1.25rem;
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 0.25rem;
-  padding-inline: 0.375rem;
-  font-size: 0.75rem;
-}
+  /* Detail-card overlays (shown only with showDetails):
+   *   .pcb__nation            — circle nationality flag at left-mid
+   *   .pcb__badge--max-level  — green "MAX LVL NN" pill at bottom-left
+   *   .pcb__badge--max-ovr    — "MAX NN" pill at bottom-right (replaces condition) */
+  .pcb__nation {
+    z-index: 2;
+    background: #111;
+    border: 0.833333cqw solid #fff;
+    border-radius: 9999px;
+    width: 17.5cqw;
+    height: 17.5cqw;
+    position: absolute;
+    top: 34.5833cqw;
+    left: 8.75cqw;
+    overflow: hidden;
+    transform: translate(-50%);
+    pointer-events: none;
+  }
+  .pcb__nation-img {
+    object-fit: cover;
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
+  .pcb__badge {
+    z-index: 3;
+    min-width: 13.3333cqw;
+    height: 13.3333cqw;
+    font-family: 'efootballSans', var(--font-pcb-sans, system-ui), sans-serif;
+    font-variant-numeric: tabular-nums;
+    pointer-events: none;
+    background: #262626;
+    border: 0.625cqw solid color-mix(in srgb, var(--color-accent) 30%, transparent);
+    border-radius: 2.5cqw;
+    justify-content: center;
+    align-items: center;
+    padding: 0.833333cqw 1.66667cqw;
+    font-size: 11.6667cqw;
+    font-weight: 500;
+    line-height: 1;
+    display: flex;
+    position: absolute;
+    white-space: nowrap;
+  }
+  .pcb__badge--bottom-left { bottom: 3.33333cqw; left: 3.33333cqw; }
+  .pcb__badge--bottom-right { bottom: 3.33333cqw; right: 3.33333cqw; }
+  .pcb__badge--max-level {
+    color: #7dff1f;
+    font-size: 7.5cqw;             /* "MAX LVL NN" is longer than "MAX NN" */
+    transform: translateY(-0.416667cqw);
+  }
+  .pcb__badge--max-ovr {
+    color: #fff;
+    text-shadow: 1px 0 #000;
+    transform: translateY(-0.625cqw);
+  }
 
-/* ──────────────────────────────────────────────────────────────────────────
- * Buttons & Interactive Badges
- * ────────────────────────────────────────────────────────────────────────── */
-.button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-weight: 500;
-  border-radius: 0.5rem;
-  transition: all 0.15s ease;
-  cursor: pointer;
-  text-decoration: none;
-}
-.button--sm {
-  height: 2rem;
-  padding-left: 0.75rem;
-  padding-right: 0.75rem;
-  font-size: 0.75rem;
-}
-.button--md {
-  height: 2.5rem;
-  padding-left: 1rem;
-  padding-right: 1rem;
-  font-size: 0.875rem;
-}
-.button--secondary {
-  background-color: var(--color-panel);
-  color: var(--color-text-primary);
-  border: 1px solid var(--color-line);
-}
-.button--secondary:hover {
-  background-color: var(--color-elevated);
-  border-color: var(--color-line-active);
-}
-.button--ghost {
-  background-color: transparent;
-  color: var(--color-text-secondary);
-}
-.button--ghost:hover {
-  background-color: rgba(255, 255, 255, 0.06);
-  color: var(--color-text-primary);
-}
-.button--outline {
-  background-color: transparent;
-  border: 1px solid var(--color-line);
-  color: var(--color-text-primary);
-}
-.button--outline:hover {
-  background-color: var(--color-panel);
-  border-color: var(--color-line-active);
-}
+  /* Playing-style pills under the card name (attack = red, defence = cyan). */
+  .pcb__style-pill {
+    display: inline-flex;
+    align-items: center;
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    border-radius: 0.375rem;
+    border: 1px solid transparent;
+    padding: 0.125rem 0.375rem;
+    font-size: 10px;
+    font-weight: 500;
+    color: rgba(255, 255, 255, 0.9);
+  }
+  .pcb__style-pill--attack {
+    border-color: rgba(255, 52, 100, 0.4);
+    background: rgba(255, 52, 100, 0.1);
+  }
+  .pcb__style-pill--defence {
+    border-color: rgba(0, 239, 255, 0.4);
+    background: rgba(0, 239, 255, 0.1);
+  }
 
-/* Filter trigger pills */
-.efb-filter-trigger {
-  background-color: var(--color-panel);
-  color: var(--color-text-primary);
-  border: 1px solid var(--color-line);
-  border-radius: 0.5rem;
-  padding: 0.375rem 0.75rem;
-  font-size: 0.75rem;
-  font-weight: 500;
-  display: inline-flex;
-  align-items: center;
-  gap: 0.375rem;
-  cursor: pointer;
-  transition: all 0.15s ease;
-}
-.efb-filter-trigger:hover, .efb-filter-trigger[data-active="true"] {
-  background-color: var(--color-elevated);
-  border-color: var(--color-line-active);
-}
+  /* ── Pack carousel controls ────────────────────────────────────────────── */
+  .pack-carousel__btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.5rem;
+    height: 1.5rem;
+    border-radius: 9999px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: rgba(255, 255, 255, 0.06);
+    color: rgba(255, 255, 255, 0.8);
+    cursor: pointer;
+    transition: background-color 0.15s, border-color 0.15s, color 0.15s;
+  }
+  .pack-carousel__btn:hover {
+    background: rgba(255, 255, 255, 0.14);
+    border-color: rgba(255, 255, 255, 0.2);
+    color: #fff;
+  }
+  .pack-carousel__btn:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+  }
+  .pack-carousel__btn[aria-pressed="true"] {
+    color: var(--color-accent);
+    border-color: color-mix(in srgb, var(--color-accent) 50%, transparent);
+  }
 
-/* Chips */
-.chip {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 9999px;
-  font-weight: 700;
-  line-height: 1;
-}
-.chip--accent {
-  background-color: var(--color-accent);
-  color: var(--color-accent-foreground);
-}
-.chip--lg {
-  padding: 0.375rem 0.75rem;
-  font-size: 0.875rem;
-}
+  /* ── Navigation & shell ────────────────────────────────────────────────── */
+  .efb-navbar {
+    z-index: 40;
+    background: color-mix(in oklch, var(--color-canvas) 70%, transparent);
+    -webkit-backdrop-filter: blur(20px) saturate(1.45);
+    backdrop-filter: blur(20px) saturate(1.45);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    position: sticky;
+    top: 0;
+    box-shadow: inset 0 1px rgba(255, 255, 255, 0.07), 0 1px 12px rgba(0, 0, 0, 0.25);
+  }
+  .efb-navbar__link {
+    border-radius: 0.5rem;
+    color: rgba(255, 255, 255, 0.65);
+    padding: 0.375rem 0.75rem;
+    font-size: 0.875rem;
+    line-height: 1.25rem;
+    font-weight: 500;
+    text-decoration: none;
+    transition: color 0.15s, background-color 0.15s, box-shadow 0.15s;
+  }
+  .efb-navbar__link:hover {
+    color: #fff;
+    background: rgba(255, 255, 255, 0.06);
+  }
+  .efb-navbar__link--active {
+    color: #fff;
+    background: rgba(255, 255, 255, 0.1);
+    box-shadow: inset 0 1px rgba(255, 255, 255, 0.12), 0 0 0 1px rgba(255, 255, 255, 0.08);
+  }
+  .efb-navbar__actions {
+    align-items: center;
+    gap: 0.75rem;
+    margin-left: auto;
+    display: flex;
+    min-width: 0;
+  }
+  .efb-navbar__divider {
+    background: rgba(255, 255, 255, 0.08);
+    flex-shrink: 0;
+    align-self: center;
+    width: 1px;
+    height: 1.75rem;
+  }
+  .efb-navbar-search-kbd {
+    color: rgba(255, 255, 255, 0.55);
+    height: 1.25rem;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 0.25rem;
+    padding-inline: 0.375rem;
+    font-size: 0.75rem;
+  }
 
-/* ──────────────────────────────────────────────────────────────────────────
- * Stat Tiers & Stat Row
- * ────────────────────────────────────────────────────────────────────────── */
-.text-stat-tier-cyan { color: #00ffb4; }
-.bg-stat-tier-cyan { background-color: #00ffb4; }
-.text-stat-tier-green { color: #96ff00; }
-.bg-stat-tier-green { background-color: #96ff00; }
-.text-stat-tier-yellow { color: #ffbe00; }
-.bg-stat-tier-yellow { background-color: #ffbe00; }
-.text-stat-tier-red { color: #ff3200; }
-.bg-stat-tier-red { background-color: #ff3200; }
+  /* ── ⌘K search palette (native <dialog>) ───────────────────────────────── */
+  .efb-palette {
+    /* Reset the UA dialog box and make it cover the viewport; the panel is
+       centred inside so a click on the dialog itself = backdrop click. */
+    position: fixed;
+    inset: 0;
+    margin: 0;
+    padding: 5rem 1rem 1rem;
+    border: 0;
+    width: 100%;
+    height: 100%;
+    max-width: none;
+    max-height: none;
+    background: rgba(0, 0, 0, 0.75);
+    color: var(--color-text-primary);
+    overflow: hidden;
+  }
+  .efb-palette:not([open]) {
+    display: none;
+  }
+  .efb-palette[open] {
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+  }
+  .efb-palette::backdrop {
+    background: transparent;
+    -webkit-backdrop-filter: blur(4px);
+    backdrop-filter: blur(4px);
+  }
+  .efb-palette__panel {
+    width: 100%;
+    max-width: 36rem;
+    border-radius: 1rem;
+    background: var(--color-panel);
+    border: 1px solid var(--color-line);
+    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.6);
+    overflow: hidden;
+  }
 
-.efb-stat-row {
-  display: flex;
-  width: 100%;
-  align-items: center;
-  gap: 0.5rem;
-  border-radius: 0.5rem;
-  padding: 0.375rem 0.625rem;
-  text-align: left;
-  background-color: var(--color-panel);
-  border: 1px solid transparent;
-  transition: background-color 0.15s ease, border-color 0.15s ease;
-}
-.efb-stat-row:hover {
-  background-color: var(--color-elevated);
-  border-color: var(--color-line);
-}
-.efb-stat-row__label {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 0.875rem;
-  font-weight: 500;
-}
-.efb-stat-row__boost {
-  font-family: monospace;
-  font-size: 0.75rem;
-  font-weight: 700;
-  padding: 0.125rem 0.375rem;
-  border-radius: 0.25rem;
-}
-.efb-stat-row__boost--orange {
-  color: #f97316;
-  background-color: rgba(249, 115, 22, 0.15);
-}
-.efb-stat-row__boost--cyan {
-  color: #06b6d4;
-  background-color: rgba(6, 182, 212, 0.15);
-}
-.efb-stat-row__value {
-  width: 2.25rem;
-  flex-shrink: 0;
-  border-radius: 0.375rem;
-  padding-top: 0.125rem;
-  padding-bottom: 0.125rem;
-  text-align: center;
-  font-size: 0.875rem;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-  color: #080d02;
-}
+  /* ── Buttons & interactive badges ──────────────────────────────────────── */
+  .button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 500;
+    border-radius: 0.5rem;
+    transition: all 0.15s ease;
+    cursor: pointer;
+    text-decoration: none;
+  }
+  .button--sm {
+    height: 2rem;
+    padding-left: 0.75rem;
+    padding-right: 0.75rem;
+    font-size: 0.75rem;
+  }
+  .button--md {
+    height: 2.5rem;
+    padding-left: 1rem;
+    padding-right: 1rem;
+    font-size: 0.875rem;
+  }
+  .button--secondary {
+    background-color: var(--color-panel);
+    color: var(--color-text-primary);
+    border: 1px solid var(--color-line);
+  }
+  .button--secondary:hover {
+    background-color: var(--color-elevated);
+    border-color: var(--color-line-active);
+  }
+  .button--ghost {
+    background-color: transparent;
+    color: var(--color-text-secondary);
+  }
+  .button--ghost:hover {
+    background-color: rgba(255, 255, 255, 0.06);
+    color: var(--color-text-primary);
+  }
+  .button--outline {
+    background-color: transparent;
+    border: 1px solid var(--color-line);
+    color: var(--color-text-primary);
+  }
+  .button--outline:hover {
+    background-color: var(--color-panel);
+    border-color: var(--color-line-active);
+  }
 
-/* ──────────────────────────────────────────────────────────────────────────
- * Breadcrumbs
- * ────────────────────────────────────────────────────────────────────────── */
-.breadcrumbs {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.375rem;
-  font-size: 0.75rem;
-  color: var(--color-text-dim);
-}
-.breadcrumbs__item {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.375rem;
-}
-.breadcrumbs__link {
-  color: var(--color-text-secondary);
-  text-decoration: none;
-  transition: color 0.15s ease;
-}
-.breadcrumbs__link:hover {
-  color: var(--color-text-primary);
-}
-.breadcrumbs__separator {
-  color: var(--color-text-dim);
+  /* Filter trigger pills */
+  .efb-filter-trigger {
+    background-color: var(--color-panel);
+    color: var(--color-text-primary);
+    border: 1px solid var(--color-line);
+    border-radius: 0.5rem;
+    padding: 0.375rem 0.75rem;
+    font-size: 0.75rem;
+    font-weight: 500;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+  .efb-filter-trigger:hover, .efb-filter-trigger[data-active="true"] {
+    background-color: var(--color-elevated);
+    border-color: var(--color-line-active);
+  }
+
+  /* Chips */
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 9999px;
+    font-weight: 700;
+    line-height: 1;
+  }
+  .chip--accent {
+    background-color: var(--color-accent);
+    color: var(--color-accent-foreground);
+  }
+  .chip--lg {
+    padding: 0.375rem 0.75rem;
+    font-size: 0.875rem;
+  }
+
+  /* ── Progression slider (efootbase row: label, − n +, 0–N slider) ─────── */
+  .progression-slider {
+    accent-color: var(--color-accent);
+    height: 0.75rem;
+    cursor: pointer;
+  }
+
+  /* ── Stat tiers & stat row ─────────────────────────────────────────────── */
+  /* Aliases over the tier tokens (no second copy of the hex values). */
+  .text-stat-tier-magenta { color: var(--color-tier-max); }
+  .bg-stat-tier-magenta   { background-color: var(--color-tier-max); }
+  .text-stat-tier-cyan   { color: var(--color-tier-elite); }
+  .bg-stat-tier-cyan     { background-color: var(--color-tier-elite); }
+  .text-stat-tier-green  { color: var(--color-tier-high); }
+  .bg-stat-tier-green    { background-color: var(--color-tier-high); }
+  .text-stat-tier-yellow { color: var(--color-tier-mid); }
+  .bg-stat-tier-yellow   { background-color: var(--color-tier-mid); }
+  .text-stat-tier-red    { color: var(--color-tier-low); }
+  .bg-stat-tier-red      { background-color: var(--color-tier-low); }
+
+  .efb-stat-row {
+    display: flex;
+    width: 100%;
+    min-width: 0;
+    align-items: center;
+    gap: 0.5rem;
+    border-radius: 0.5rem;
+    padding: 0.375rem 0.625rem;
+    text-align: left;
+    background-color: var(--color-panel);
+    border: 1px solid transparent;
+    transition: background-color 0.15s ease, border-color 0.15s ease;
+  }
+  .efb-stat-row:hover {
+    background-color: var(--color-elevated);
+    border-color: var(--color-line);
+  }
+  /* The label is never truncated: the grid gives each column room for the
+     longest name ("Defensive Engagement") from 390 px up, and a narrower
+     container wraps the words instead of clipping them. */
+  .efb-stat-row__label {
+    flex: 1;
+    min-width: 0;
+    overflow-wrap: anywhere;
+    font-size: 0.875rem;
+    font-weight: 500;
+    line-height: 1.2;
+  }
+  /* Click-to-highlight: rows outside the selected category / stat dim. */
+  .efb-stat-row[data-dim="true"] {
+    opacity: 0.4;
+  }
+  .efb-stat-row[data-hit="true"] {
+    border-color: color-mix(in srgb, var(--color-accent) 55%, transparent);
+    background-color: color-mix(in srgb, var(--color-accent) 10%, var(--color-panel));
+  }
+  .efb-stat-row__boost {
+    font-family: monospace;
+    font-size: 0.75rem;
+    font-weight: 700;
+    padding: 0.125rem 0.375rem;
+    border-radius: 0.25rem;
+  }
+  .efb-stat-row__boost--orange {
+    color: #f97316;
+    background-color: rgba(249, 115, 22, 0.15);
+  }
+  .efb-stat-row__boost--cyan {
+    color: var(--color-accent-secondary);
+    background-color: rgba(6, 182, 212, 0.15);
+  }
+  .efb-stat-row__value {
+    width: 2.25rem;
+    flex-shrink: 0;
+    border-radius: 0.375rem;
+    padding-top: 0.125rem;
+    padding-bottom: 0.125rem;
+    text-align: center;
+    font-size: 0.875rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    color: var(--color-accent-foreground);
+  }
+
+  /* ── Breadcrumbs ───────────────────────────────────────────────────────── */
+  .breadcrumbs {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.375rem;
+    font-size: 0.75rem;
+    color: var(--color-text-dim);
+  }
+  .breadcrumbs__item {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+  }
+  .breadcrumbs__link {
+    color: var(--color-text-secondary);
+    text-decoration: none;
+    transition: color 0.15s ease;
+  }
+  .breadcrumbs__link:hover {
+    color: var(--color-text-primary);
+  }
+  .breadcrumbs__separator {
+    color: var(--color-text-dim);
+  }
 }

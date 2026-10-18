@@ -1,5 +1,9 @@
 # community-feed Specification
 
+> **API removed in change `remove-dead-surface` (2026-10-18)** — the `feed` router and the Post / PostLike / Comment tables were deleted (migration `20261018000000_remove_dead_surface`).
+
+> **Status: removed from the web UI on 2026-10-07; API remains** (`feed` router and Post/Comment/PostLike tables are still present but have no web caller). Requirements below are kept as the historical record.
+
 ## Purpose
 Community feed with text/image/player-card-share posts, likes, comments, and region/country filtering — the efhub `/community` equivalent.
 ## Requirements

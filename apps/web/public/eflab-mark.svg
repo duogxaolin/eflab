@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="eFootLab">
+  <rect width="64" height="64" rx="14" fill="#acf41a"/>
+  <!-- football pentagon panel -->
+  <polygon points="32,15 48,27 42,46 22,46 16,27" fill="#060607"/>
+  <!-- lab-flask neck cut-out -->
+  <path d="M27 24h10v8l6 10H21l6-10z" fill="#acf41a"/>
+  <path d="M29 36h6l3 5H26z" fill="#060607"/>
+</svg>
