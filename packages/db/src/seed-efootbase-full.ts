@@ -6,8 +6,9 @@
 //
 // Run:  pnpm db:seed            (seed only — keeps whatever the cross-fill wrote)
 //       pnpm db:refresh         (seed, then pnpm db:crossfill — the documented refresh)
-// Flags: --reset-users  also wipe User/Session/Account/Build/Review/TierVote/Post/
-//                       Comment/Follow/PostLike/TierList (never done by default)
+// Flags: --reset-users  also wipe User/Session/Account (never done by default;
+//                       the user-content tables were dropped in change
+//                       remove-dead-surface)
 //        --prune        delete Player rows that are not in the dump (e.g. the 3
 //                       eFHUB-only players the cross-fill inserts); default: keep + log
 //
@@ -595,9 +596,9 @@ async function main(): Promise<void> {
   const stats = { players: 0, playerSkills: 0, packCards: 0, bundles: 0, bundleCards: 0, aptitudeMismatch: [] as string[] };
   await prisma.$transaction(async (tx) => {
     if (RESET_USERS) {
-      // Every user table hangs off User with ON DELETE CASCADE.
+      // Session and Account hang off User with ON DELETE CASCADE.
       const { count } = await tx.user.deleteMany({});
-      console.log(`  --reset-users: deleted ${count} users (+ sessions, accounts, builds, reviews, votes, posts, tier lists)`);
+      console.log(`  --reset-users: deleted ${count} users (+ sessions, accounts)`);
     }
 
     // Replace the catalogue tables. Order respects foreign keys; Team→Player is

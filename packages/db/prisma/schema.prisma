@@ -225,12 +225,7 @@ model Player {
   // otherVersions is implemented via a manual `WHERE baseId = ?` (no enforced self-relation FK,
   // since base versions can be missing from a partial dataset).
   packCards    PackCard[]
-  builds       Build[]
-  reviews      Review[]
-  tierVotes    TierVote[]
   team         Team?    @relation(fields: [teamId], references: [id])
-  // Phase 2 reverse relation — posts sharing this card into the feed.
-  posts        Post[]    @relation("PostPlayer")
   // community tier aggregate (cached)
   communityTier String?
   // efootbase homepage featured bundles (specialPlayerList) — ordered card spots.
@@ -288,8 +283,6 @@ model Manager {
   boostId2 Int?
   booster1Stat String?
   booster2Stat String?
-  // relations
-  builds Build[]
 
   @@index([name])
 }
@@ -457,7 +450,11 @@ model League {
   teams Team[]
 }
 
-// ---- Community ----
+// ---- Auth (User + Session + Account; the `auth` router and Google OAuth) ----
+// The user-content tables (Build, Review, TierVote, TierList, Follow, Post,
+// PostLike, Comment) were dropped in migration 20261018000000_remove_dead_surface
+// (change remove-dead-surface) — nothing served them after the web shrank to the
+// four efootbase pages.
 
 model User {
   id             String   @id @default(cuid())
@@ -475,65 +472,11 @@ model User {
   followingCount Int      @default(0)
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
-  builds         Build[]
-  tierVotes      TierVote[]
-  reviews        Review[]
   sessions       Session[]
   accounts       Account[]
-  following      Follow[] @relation("FollowFollowing")
-  followers      Follow[] @relation("FollowFollower")
-  posts          Post[]
-  postLikes      PostLike[]
-  comments       Comment[]
-  tierLists     TierList[]
 
   @@index([username])
 }
-
-model Build {
-  id            String   @id @default(cuid())
-  authorId      String
-  playerId       BigInt
-  managerId      BigInt?
-  level         Int
-  trainingPoints Json
-  boosters       Json
-  note          String?
-  isPublic      Boolean  @default(true)
-  isPro         Boolean  @default(false)
-  createdAt     DateTime @default(now())
-  author        User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
-  player        Player   @relation(fields: [playerId], references: [id], onDelete: Cascade)
-  manager       Manager? @relation(fields: [managerId], references: [id], onDelete: SetNull)
-
-  @@index([playerId, isPublic])
-  @@index([authorId])
-}
-
-model Review {
-  id        String   @id @default(cuid())
-  authorId  String
-  playerId   BigInt
-  rating    Int
-  content   String
-  createdAt DateTime @default(now())
-  author    User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
-  player    Player   @relation(fields: [playerId], references: [id], onDelete: Cascade)
-
-  @@index([playerId])
-}
-
-model TierVote {
-  userId    String
-  playerId   BigInt
-  tier       String
-  author     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
-  player     Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
-
-  @@id([userId, playerId])
-  @@index([playerId])
-}
-// ---- Phase 2: Authentication + Social + Feed + Tier Lists ----
 
 model Session {
   id        String   @id @default(cuid())
@@ -567,78 +510,4 @@ model Account {
 
   @@unique([providerId, accountId])
   @@index([userId])
-}
-
-model Follow {
-  followerId String
-  followingId String
-  createdAt   DateTime @default(now())
-  follower    User @relation("FollowFollower", fields: [followerId], references: [id], onDelete: Cascade)
-  following   User @relation("FollowFollowing", fields: [followingId], references: [id], onDelete: Cascade)
-
-  @@id([followerId, followingId])
-  @@index([followingId])
-}
-
-model Post {
-  id         String   @id @default(cuid())
-  authorId   String
-  content    String
-  mediaUrls  String[]
-  playerId   BigInt?
-  region     String?
-  country    String?
-  likesCount Int      @default(0)
-  commentsCount Int   @default(0)
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
-  author     User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
-  player     Player?  @relation("PostPlayer", fields: [playerId], references: [id], onDelete: SetNull)
-  likes      PostLike[]
-  comments   Comment[]
-
-  @@index([authorId])
-  @@index([createdAt])
-  @@index([region])
-  @@index([country])
-}
-
-model PostLike {
-  postId    String
-  userId    String
-  createdAt DateTime @default(now())
-  post      Post @relation(fields: [postId], references: [id], onDelete: Cascade)
-  user      User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@id([postId, userId])
-  @@index([userId])
-}
-
-model Comment {
-  id        String   @id @default(cuid())
-  postId    String
-  authorId  String
-  content   String
-  createdAt DateTime @default(now())
-  post      Post @relation(fields: [postId], references: [id], onDelete: Cascade)
-  author    User @relation(fields: [authorId], references: [id], onDelete: Cascade)
-
-  @@index([postId])
-  @@index([authorId])
-}
-
-model TierList {
-  id          String   @id @default(cuid())
-  authorId    String
-  name        String
-  tiers       Json
-  isPublic    Boolean  @default(true)
-  submissions Int      @default(0)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  author      User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
-
-  @@index([authorId])
-  @@index([createdAt])
-  @@index([isPublic])
 }

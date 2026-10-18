@@ -11,7 +11,7 @@ aggregates and per-row fields with the database through a READ-ONLY psql session
 Usage (from the repo root, stdlib only):
   python3 -I scripts/verify-seed.py                      # seed + cross-fill checks
   python3 -I scripts/verify-seed.py --seed-only          # skip cross-fill checks
-  python3 -I scripts/verify-seed.py --users 8,12,8,1     # also assert User/Session/Account/TierList counts
+  python3 -I scripts/verify-seed.py --users 8,12,8       # also assert User/Session/Account counts
   python3 -I scripts/verify-seed.py --database-url postgresql://…   # default: DATABASE_URL env, then .env
 
 psql is taken from PSQL (env), then `psql` on PATH, then
@@ -151,7 +151,7 @@ def database_url(cli: str | None) -> str:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--seed-only", action="store_true", help="skip the cross-fill checks")
-    ap.add_argument("--users", help="expected User,Session,Account,TierList counts, e.g. 8,12,8,1")
+    ap.add_argument("--users", help="expected User,Session,Account counts, e.g. 8,12,8")
     ap.add_argument("--database-url")
     ap.add_argument("--jsonl", default=str(DUMP_DIR / "players.jsonl"))
     ap.add_argument("--meta", default=str(DUMP_DIR / "players_meta.json"))
@@ -375,8 +375,9 @@ def main() -> int:
     if args.users:
         print("user tables")
         want = [int(x) for x in args.users.split(",")]
-        got = [db.count(f'SELECT count(*) FROM "{t}"') for t in ("User", "Session", "Account", "TierList")]
-        check(got == want, f"User/Session/Account/TierList counts {got} == expected {want}")
+        # The user-content tables (TierList & co.) were dropped in change remove-dead-surface.
+        got = [db.count(f'SELECT count(*) FROM "{t}"') for t in ("User", "Session", "Account")]
+        check(got == want, f"User/Session/Account counts {got} == expected {want}")
 
     print(f"\n{passes} checks passed, {len(failures)} failed")
     for f_ in failures:

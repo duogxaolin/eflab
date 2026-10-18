@@ -1,16 +1,4 @@
-import type { z } from "zod";
-import type {
-  BaseStat,
-  CardType,
-  ManagerTactic,
-  Position,
-  PositionProficiency,
-  TrainingCategory,
-} from "./constants";
-
-// BigInt helpers — IDs serialize as strings via SuperJSON but are BigInt in TS.
-export type PlayerId = bigint;
-export type ManagerId = bigint;
+import type { BaseStat, CardType, Position, PositionProficiency, TrainingCategory } from "./constants";
 
 // Serialized DTO shapes (what tRPC returns after SuperJSON). BigInt → string.
 /** Everything a PlayerCard tile needs in a list/grid (player.list, trending,
@@ -105,31 +93,6 @@ export interface PlayerCardDTO extends CardPreview {
   leagueEmblemUrl: string | null;
 }
 
-
-export interface ManagerDTO {
-  id: string;
-  name: string;
-  accentedName: string | null;
-  japName: string | null;
-  chineseName: string | null;
-  age: number;
-  adaptability: number;
-  affinity: number;
-  /** R2 card art (65 efootbase managers), rebased onto R2_PUBLIC_BASE; null for
-   *  the eFHUB-only managers that have no art. */
-  imageUrl: string | null;
-  tactics: Record<ManagerTactic, number>;
-  boosts: number[];
-}
-
-export interface PackDTO {
-  id: string;
-  name: string;
-  releaseDate: string;
-  type: string;
-  playerCount: number;
-}
-
 export interface SkillDTO {
   id: number;
   slug: string;
@@ -162,8 +125,6 @@ export interface BoosterDTO {
   tier: string;
   stats: Partial<Record<BaseStat, number>>;
 }
-
-export type SortDirection = "asc" | "desc";
 
 /** player.list result — slim card previews (design decision 14). */
 export interface PlayerListResult {
@@ -213,7 +174,7 @@ export interface BuildResult {
   jumpNotProjected: boolean;
 }
 
-// ---- Phase 2: community + profiles + feed + tier lists ----
+// ---- Auth session (auth.getSession; consumed by apps/web/lib/auth.tsx) ----
 
 export interface SessionUserDTO {
   id: string;
@@ -228,99 +189,6 @@ export interface SessionUserDTO {
   role: "USER" | "MODERATOR" | "ADMIN";
 }
 
-export interface UserDTO {
-  id: string;
-  username: string;
-  displayName: string | null;
-  avatarUrl: string | null;
-  region: string | null;
-  country: string | null;
-  followersCount: number;
-  followingCount: number;
-  isPro: boolean;
-  isFollowing: boolean;
-}
-
-export interface UserBuildDTO {
-  id: string;
-  playerId: string;
-  level: number;
-  note: string | null;
-  isPro: boolean;
-  isPublic: boolean;
-  createdAt: string;
-  player: { id: string; baseId: string; name: string; cardType: string; ovr: number };
-}
-
-export interface UserReviewDTO {
-  id: string;
-  playerId: string;
-  rating: number;
-  content: string;
-  createdAt: string;
-  player: { id: string; baseId: string; name: string; cardType: string; ovr: number };
-}
-
-export interface UserTierVoteDTO {
-  playerId: string;
-  tier: string;
-  player: { id: string; baseId: string; name: string; cardType: string; ovr: number };
-}
-
-export interface FollowDTO {
-  id: string;
-  username: string;
-  displayName: string | null;
-  avatarUrl: string | null;
-}
-
-export interface TierListItemDTO {
-  id: string;
-  authorId: string;
-  authorName: string;
-  name: string;
-  tiers: Record<string, string[]>;
-  isPublic: boolean;
-  submissions: number;
-  createdAt: string;
-}
-
-export interface FeedPostDTO {
-  id: string;
-  authorId: string;
-  authorName: string;
-  authorAvatar: string | null;
-  content: string;
-  mediaUrls: string[];
-  playerId: string | null;
-  playerCard: { id: string; baseId: string; name: string; cardType: string; ovr: number; registeredPosition: number } | null;
-  region: string | null;
-  country: string | null;
-  likesCount: number;
-  commentsCount: number;
-  likedByMe: boolean;
-  createdAt: string;
-}
-
-export interface FeedCommentDTO {
-  id: string;
-  postId: string;
-  authorId: string;
-  authorName: string;
-  authorAvatar: string | null;
-  content: string;
-  createdAt: string;
-}
-
-export interface NewPlayerPackDTO {
-  id: string;
-  name: string;
-  releaseDate: string;
-  type: string;
-  playerCount: number;
-  players: Array<{ id: string; baseId: string; name: string; cardType: string; ovr: number; maxOvr: number; registeredPosition: number; condition: string }>;
-}
-
 /** efootbase homepage "Latest Packs" featured bundle (specialPlayerList entry).
  *  Cards are pre-ordered by `ordinal` (efootbase's exact display order — note
  *  this includes legend spotlights pulled from other packs, so OVR is not
@@ -333,18 +201,3 @@ export interface FeaturedBundleDTO {
   position: number;
   cards: CardPreview[];
 }
-
-export interface LeaderboardTeamDTO {
-  id: number;
-  name: string;
-  country: string;
-  points: number;
-  rank: number;
-}
-
-// Diagnostic type so backend router files can share the inferred input types.
-export type RouterInput<T extends { _def: { input: z.ZodTypeAny } }> =
-  z.infer<T["_def"]["input"]>;
-
-export const isStringId = (v: unknown): v is string =>
-  typeof v === "string" && /^\d{6,20}$/.test(v);

@@ -67,8 +67,8 @@ const BUILD_UTC = process.env.NEXT_PUBLIC_BUILD_UTC || (GIT_SHA ? buildUtcStamp(
 // Image hosts: the optimiser may only fetch from the R2 public host. The
 // default mirrors the code fallback in lib/r2-images.ts (kept in sync by hand;
 // NEXT_PUBLIC_R2_PUBLIC_BASE overrides both). efimg.com is not listed because
-// no component renders an efimg URL any more (lib/efhub-images.ts has no
-// callers); add it here if that changes.
+// no component renders an efimg URL (the efimg fallback helper was deleted in
+// change remove-dead-surface); add it here if that changes.
 // ---------------------------------------------------------------------------
 const DEFAULT_R2_PUBLIC_BASE = "https://pub-1a19c30950c04ef3964669ac4792f6f0.r2.dev";
 function r2Host(): { protocol: "https" | "http"; hostname: string } {

@@ -1,27 +1,17 @@
 import { router } from "./trpc.js";
 import { playerRouter } from "./routers/player.js";
-import { managerRouter } from "./routers/manager.js";
 import { skillRouter } from "./routers/skill.js";
-import { packRouter } from "./routers/pack.js";
-import { communityRouter } from "./routers/community.js";
 import { authRouter } from "./routers/auth.js";
-import { userRouter } from "./routers/user.js";
-import { tierListRouter } from "./routers/tierList.js";
-import { feedRouter } from "./routers/feed.js";
-import { pagesRouter } from "./routers/pages.js";
 import { featuredRouter } from "./routers/featured.js";
 
+// The public tRPC surface. Only the routers the web app, the auth plumbing and
+// the smoke test use are mounted; the community / feed / tierList / user /
+// pages / pack / manager routers were deleted in change remove-dead-surface
+// (no caller — the Pack and Manager tables stay as data assets).
 export const appRouter = router({
   player: playerRouter,
-  manager: managerRouter,
   skill: skillRouter,
-  pack: packRouter,
-  community: communityRouter,
   auth: authRouter,
-  user: userRouter,
-  tierList: tierListRouter,
-  feed: feedRouter,
-  pages: pagesRouter,
   featured: featuredRouter,
 });
 

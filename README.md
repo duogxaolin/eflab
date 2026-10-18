@@ -23,7 +23,7 @@ Theme: efootbase-style **zinc + lime** dark UI (canvas `#060607`, panel `#18181b
 ```
 eflab/
 ├── apps/
-│   ├── api/        # Fastify + tRPC (player, featured, skill, pack, manager, community, auth, user, tierList, feed, pages)
+│   ├── api/        # Fastify + tRPC (player, featured, skill, auth) + /health + Google OAuth
 │   └── web/        # Next.js routes: / /players /players/[baseId]/[cardId] /compare /packs /packs/[slug] /skills /skills/[slug]
 ├── packages/
 │   ├── db/         # Prisma schema + migrations, seed-efootbase-full.ts, seed-efhub-crossfill.ts, fixtures/
@@ -37,7 +37,7 @@ eflab/
 │   └── smoke-test.sh         # API smoke test (boots the API on :4300)
 ├── docs/               # reference analyses (index: docs/README.md)
 ├── openspec/           # specs, changes, ui-dna.md
-├── docker-compose.yml  # postgres:16-alpine on 127.0.0.1:5433 · redis:7-alpine on 127.0.0.1:6380
+├── docker-compose.yml  # postgres:16-alpine on 127.0.0.1:5433
 └── .env.example        # every variable the API, seeders, scripts and web read
 ```
 
@@ -46,17 +46,18 @@ eflab/
 ### Prerequisites
 
 - Node.js ≥ 22, pnpm ≥ 10 (`corepack enable`; the repo pins `pnpm@11`)
-- Docker (Postgres + Redis)
+- Docker (Postgres)
 - The data dumps, which are **not in the repo** (`dump/` is gitignored):
   - `dump/efootbase/players.jsonl`, `players_meta.json`, `packs.json` — produced by `scripts/efootbase_dump.py`
   - `dump/efhub/efhub_db.sqlite` — eFHUB CDN SQLite (see `docs/efhub-sqlite-gap-analysis.md`) + a `sqlite3` CLI (`SQLITE3_BIN`)
 - `python3` (stdlib only) for `scripts/verify-seed.py` and the JSON parsing in `scripts/smoke-test.sh`
 
-### 1. Start Postgres + Redis
+### 1. Start Postgres
 
 ```bash
-docker compose up -d
-# postgres 127.0.0.1:5433 · redis 127.0.0.1:6380 (bound to loopback; 5433 avoids a local Postgres on 5432)
+docker compose up -d --remove-orphans
+# postgres 127.0.0.1:5433 (bound to loopback; 5433 avoids a local Postgres on 5432).
+# --remove-orphans retires the eflab-redis container of older checkouts (the redis service was removed 2026-10-18).
 ```
 
 ### 2. Install and configure
@@ -72,7 +73,7 @@ The single root `.env` is read by the API and the db scripts (`tsx --env-file-if
 
 ```bash
 pnpm db:generate   # prisma generate
-pnpm db:migrate    # prisma migrate deploy: 20261017000000_baseline (+ pg_trgm/unaccent) and 20261017000100_parity_fixes
+pnpm db:migrate    # prisma migrate deploy: 20261017000000_baseline (+ pg_trgm/unaccent), 20261017000100_parity_fixes, 20261018000000_remove_dead_surface
 pnpm db:refresh    # db:seed (efootbase dump → Postgres, upsert in one transaction) then db:crossfill (eFHUB SQLite)
 python3 -I scripts/verify-seed.py   # optional: assert the DB matches the dump
 ```
@@ -107,7 +108,7 @@ pnpm test        # unit tests (@eflab/shared: progression oracle + helpers) then
 pnpm build       # next build (web) + tsc --noEmit (api / db / shared)
 ```
 
-`scripts/smoke-test.sh` starts the API itself on port **4300** (`SMOKE_API_PORT` to change), waits for `/health`, runs ~19 checks against the refreshed database (featured bundle by slug, manager tactics, 84 skills, every card type non-empty, duplicate-free pagination, compare order, accent-insensitive search, 400 on out-of-range ids, malformed-cookie tolerance) and stops the API on exit. Set `API_URL=http://localhost:4000` to run the checks against an API that is already running.
+`scripts/smoke-test.sh` starts the API itself on port **4300** (`SMOKE_API_PORT` to change), waits for `/health`, runs 19 checks against the refreshed database (featured bundle by slug, removed routers answer 404, 84 skills, every card type non-empty, duplicate-free pagination, compare order, accent-insensitive search, 400 on out-of-range ids, malformed-cookie tolerance) and stops the API on exit; the manager tactic cross-fill is asserted by `scripts/verify-seed.py`. Set `API_URL=http://localhost:4000` to run the checks against an API that is already running.
 
 **There is no CI.** Run `pnpm typecheck` and `pnpm test` locally before pushing.
 
@@ -118,7 +119,7 @@ curl http://localhost:4000/health
 # {"status":"ok","db":"connected","time":"…"}   (503 "degraded" when Postgres is unreachable)
 ```
 
-tRPC lives under `/trpc/*` (GET with a superjson-wrapped `input`, batches of at most 10). Procedures the web app uses:
+tRPC lives under `/trpc/*` (GET with a superjson-wrapped `input`, batches of at most 10). Every mounted procedure:
 
 | Procedure | Purpose |
 |---|---|
@@ -129,9 +130,10 @@ tRPC lives under `/trpc/*` (GET with a superjson-wrapped `input`, batches of at 
 | `player.trending`, `player.countries` | home trending window, nationality list |
 | `featured.list` / `featured.bySlug` | the 24 featured bundles (home carousel, `/packs`, `/packs/[slug]`) |
 | `skill.list` / `skill.byId` / `skill.players` | 84 skills with holder counts, holders per skill |
-| `auth.getSession` / `auth.signOut` | session plumbing (no sign-in UI is routed) |
+| `auth.getSession` / `auth.signOut` | session plumbing used by `lib/auth.tsx` (no sign-in UI is routed) |
+| `auth.signUp` / `auth.signIn` | email/password registration and login (kept with the auth system; no web caller) |
 
-`manager.*`, `pack.*`, `community.*`, `user.*`, `tierList.*`, `feed.*` and `pages.*` are still registered but have no web caller (`community.simulate` runs the same progression engine the detail page runs client-side).
+The `manager`, `pack`, `community`, `user`, `tierList`, `feed` and `pages` routers were removed on 2026-10-18 (change `remove-dead-surface`) together with the Build / Review / TierVote / TierList / Follow / Post / PostLike / Comment tables; the Pack and Manager tables stay as seeded data.
 
 ## Progression panel
 
@@ -158,10 +160,10 @@ Changing the R2 domain = set `R2_PUBLIC_BASE` (API) and `NEXT_PUBLIC_R2_PUBLIC_B
 
 ## Known limitations
 
-- The Progression panel's overall is an estimate (fitted formula, ±1 at full-proficiency positions, lower confidence for GK and CB; half / non-proficient positions use a fitted penalty verified on held-out hub cards); goalkeeper Jump is shown as "n/a (card-specific)"; there is no manager control (no verifiable data); the weights follow the game version the eFHUB data reflects and must be regenerated with it; `community.saveBuild` does not persist the selected position (the `Build` table has no column for it).
+- The Progression panel's overall is an estimate (fitted formula, ±1 at full-proficiency positions, lower confidence for GK and CB; half / non-proficient positions use a fitted penalty verified on held-out hub cards); goalkeeper Jump is shown as "n/a (card-specific)"; there is no manager control (no verifiable data); the weights follow the game version the eFHUB data reflects and must be regenerated with it; builds are not saved anywhere.
 - 38,337 cards carry `levelCap` 1 in the dump; their max-level view equals the base view and they show no Progression panel.
 - Japanese/Chinese name search runs only for non-ASCII queries and is not index-backed.
-- Dead API procedures, tables and components are kept until the owner decides to remove them.
+- Kept on purpose: the `auth` router with Google OAuth (no sign-in UI), the Pack/PackCard and Manager tables (seeded data, no API reads them except the pack name on a card), and `better-auth` (only its crypto helpers are used).
 - The eFootball fonts in `apps/web/public/fonts/` have an unknown licence.
 - Git history still contains two third-party keys that were redacted from `docs/` on 2026-10-17.
 

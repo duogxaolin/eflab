@@ -295,27 +295,9 @@
     overflow: hidden;
     container-type: inline-size;    /* enables cqw units below */
   }
-  .pcb__background {
-    object-fit: cover;
-    pointer-events: none;
-    z-index: 0;
-    width: 100%;
-    height: 100%;
-    position: absolute;
-    inset: 0;
-  }
   .pcb__face {
     object-fit: cover;
     z-index: 1;
-    width: 100%;
-    height: 100%;
-    position: absolute;
-    inset: 0;
-  }
-  .pcb__frame {
-    object-fit: cover;
-    pointer-events: none;
-    z-index: 2;
     width: 100%;
     height: 100%;
     position: absolute;
@@ -448,7 +430,6 @@
   }
   .pcb__badge--bottom-left { bottom: 3.33333cqw; left: 3.33333cqw; }
   .pcb__badge--bottom-right { bottom: 3.33333cqw; right: 3.33333cqw; }
-  .pcb__badge--top-right { top: 3.33333cqw; right: 3.33333cqw; }
   .pcb__badge--max-level {
     color: #7dff1f;
     font-size: 7.5cqw;             /* "MAX LVL NN" is longer than "MAX NN" */

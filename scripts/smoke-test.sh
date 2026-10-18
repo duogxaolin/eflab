@@ -179,13 +179,16 @@ else
   fail "featured.list → 'National All-Stars' bundle with slug" "code=$CODE body=${BODY:0:200}"
 fi
 
-# 3. manager.list tacticMin quickCounter ≥ 88 → Antonio Conte (cross-fill tactics present)
-trpc_get "manager.list" '{"tacticMin":{"quickCounter":88},"limit":200}'
-CONTE_QC="$(result 'max([m["tactics"]["quickCounter"] for m in d["items"] if m["name"] == "Antonio Conte"] or [0])')"
-if [ "$CODE" = "200" ] && [ -n "$CONTE_QC" ] && [ "$CONTE_QC" -ge 88 ]; then
-  pass "manager.list quickCounter≥88 → Antonio Conte (quickCounter $CONTE_QC)"
+# 3. removed procedures answer 404 (community / feed / tierList / user / pages /
+#    pack / manager routers were deleted in change remove-dead-surface; the
+#    manager tactic cross-fill is asserted by scripts/verify-seed.py instead)
+trpc_get "manager.list" '{}'
+MANAGER_CODE="$CODE"
+trpc_get "pack.list" '{}'
+if [ "$MANAGER_CODE" = "404" ] && [ "$CODE" = "404" ]; then
+  pass "manager.list / pack.list → 404 (routers removed)"
 else
-  fail "manager.list quickCounter≥88 → Antonio Conte" "code=$CODE conte=$CONTE_QC (run pnpm db:refresh?) body=${BODY:0:200}"
+  fail "manager.list / pack.list → 404" "manager=$MANAGER_CODE pack=$CODE body=${BODY:0:160}"
 fi
 
 # 4. skill.list → exactly 84 skills (67 original + 17 added by eflab-parity-fixes)

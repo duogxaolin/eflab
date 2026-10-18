@@ -1,7 +1,7 @@
 # CLAUDE.md — eflab monorepo
 
 > Instructions for Claude Code (and any agent) working in this repo. Read first.
-> Last full pass: 2026-10-17 (openspec change `eflab-parity-fixes`).
+> Last full pass: 2026-10-17 (openspec change `eflab-parity-fixes`); dead surface removed 2026-10-18 (change `remove-dead-surface`).
 
 ## What this is
 
@@ -32,16 +32,17 @@ This repo is **distinct from the `bno` bot** (a separate eFootball scraper the u
 apps/web/app/         Routes: / (home), /players, /players/[baseId]/[cardId], /compare, /packs, /packs/[slug], /skills, /skills/[slug],
                       plus not-found.tsx, error.tsx, api/auth/google/route.ts. Detail routes = thin server page.tsx (fetch via lib/api-server.ts,
                       notFound(), generateMetadata) + *Client.tsx. The old /packs/[id] (Pack table) page is gone. Routes managers/tier-list/
-                      community/articles/tournaments/new-players/pro/login/register/u were removed 2026-10-07 (API routers remain, see below).
-apps/web/lib/         r2-images.ts (R2 URL helpers), api-server.ts (server-side API fetch), card-display.ts (labels/tier colours), trpc.tsx,
-                      auth.tsx, query-state.tsx, format-date.ts, use-debounced-value.ts, efhub-images.ts (efimg fallback — NO callers, dead)
-apps/web/components/  cards/PlayerCard.tsx (+useNearViewport, usePrefersReducedMotion), players/ (PitchMap, Pagination, SkillsList, StatGroup),
-                      packs/PackCarousel.tsx, layout/ (SiteHeader, SiteFooter, EflabWordmark, MobileBottomNav, useDebouncedValue),
-                      build-simulator/ProgressionPanel.tsx (detail-page Progression sheet, client-side engine), BuildSimulator.tsx (headless
-                      community.simulate variant — NO callers, kept compiling)
-apps/api/src/         server.ts, env.ts (NODE_ENV/WEB_ORIGIN/API_PORT/API_HOST/R2_PUBLIC_BASE), health.ts, auth/ (session, google), router/
-                      (player, featured, skill, pack, manager, community, auth, user, tierList, feed, pages — the web only calls player/featured/skill/auth)
-packages/db/prisma/   schema.prisma, migrations/ (20261017000000_baseline, 20261017000100_parity_fixes, migration_lock.toml)
+                      community/articles/tournaments/new-players/pro/login/register/u were removed 2026-10-07; their API routers were
+                      removed 2026-10-18 (change remove-dead-surface, see "API surface").
+apps/web/lib/         r2-images.ts (R2 URL helpers: r2Url, playerCardUrl, playerCardDynamicUrl, conditionUrl), api-server.ts (server-side
+                      API fetch), card-display.ts (labels/tier colours), trpc.tsx, auth.tsx, query-state.tsx, format-date.ts, use-debounced-value.ts
+apps/web/components/  cards/PlayerCard.tsx (+useNearViewport, usePrefersReducedMotion), players/ (PitchMap, Pagination),
+                      packs/PackCarousel.tsx, layout/ (SiteHeader, SiteFooter, EflabWordmark, MobileBottomNav),
+                      build-simulator/ProgressionPanel.tsx (detail-page Progression sheet, client-side engine)
+apps/api/src/         server.ts, env.ts (NODE_ENV/WEB_ORIGIN/API_PORT/API_HOST/R2_PUBLIC_BASE), health.ts, auth/ (session, google),
+                      router/ (root.ts, trpc.ts, context.ts, routers/ player · featured · skill · auth — nothing else is mounted)
+packages/db/prisma/   schema.prisma, migrations/ (20261017000000_baseline, 20261017000100_parity_fixes, 20261018000000_remove_dead_surface,
+                      migration_lock.toml)
 packages/db/src/      client.ts, seed-efootbase-full.ts (efootbase dump → Postgres), seed-efhub-crossfill.ts (eFHUB SQLite cross-fill)
 packages/db/fixtures/ skills.json (84), leagues.json (34), managers.json (65 with R2 art), boosters.json (fixture boosters; dump boosters win on id overlap)
 packages/shared/src/  constants.ts (CARD_TYPES, CARD_TYPE_LABELS, CARD_TYPE_BY_EFOOTBASE_CODE, SORT_FIELDS, POSITIONS, PLAYING_STYLES…),
@@ -51,15 +52,26 @@ scripts/              efootbase_dump.py (efootbase API → dump/), r2_upload.py 
                       verify-seed.py (dump ↔ DB integrity, read-only psql), smoke-test.sh (API smoke, self-booting)
 docs/                 reference analyses (index: docs/README.md)
 openspec/             changes/, specs/, ui-dna.md, config.yaml
-docker-compose.yml    postgres:16 on 127.0.0.1:5433, redis:7 on 127.0.0.1:6380 (loopback only)
+docker-compose.yml    postgres:16 on 127.0.0.1:5433 (loopback only; the unused redis service was removed 2026-10-18)
 ```
+
+## API surface (tRPC, `apps/api/src/router/root.ts`)
+
+| Router | Procedures | Caller |
+|---|---|---|
+| `player` | `list`, `byId`, `search`, `compare`, `trending`, `countries` | web (`/`, `/players`, detail, `/compare`), smoke test |
+| `featured` | `list`, `bySlug` | web (`/`, `/packs`, `/packs/[slug]`), smoke test |
+| `skill` | `list`, `byId`, `players` | web (`/skills`, `/skills/[slug]`), smoke test |
+| `auth` | `signUp`, `signIn`, `signOut`, `getSession` | `apps/web/lib/auth.tsx` (`getSession`/`signOut`; no sign-in UI is routed), Google OAuth routes |
+
+Plus `GET /health` and the Google OAuth routes (`apps/api/src/auth/google.ts`). The `community`, `feed`, `tierList`, `user`, `pages`, `pack` and `manager` routers, their Zod inputs / DTOs / constants in `@eflab/shared`, and the Build / Review / TierVote / TierList / Follow / Post / PostLike / Comment tables were deleted in change `remove-dead-surface` (2026-10-18) — see "Known limitations" for what is kept on purpose.
 
 ## Player data pipeline
 
 Player data is **not** self-datamined from the game (see `docs/efootball-apk-datamine-analysis.md`). Source of truth is the **efootbase dump**, with **eFHUB** as a secondary cross-fill.
 
 1. **Dump** — `scripts/efootbase_dump.py` (needs `EFBASE_API_KEY`; the script reads it from the `.env` passed with `--env`, default an APK-extract path) → `dump/efootbase/players.jsonl` (48,407 cards × 176 cols), `players_meta.json` (field labels, card-type labels), `packs.json` (featured bundles), `teams.json`, `images/` (~93k card/emblem files, ~6.5 GB). `dump/` is gitignored. See memory `efootbase-datapath`.
-2. **Seed** — `pnpm db:seed` (`packages/db/src/seed-efootbase-full.ts`). **Non-destructive upsert in ONE interactive transaction** (60-min timeout): Player and Manager are `INSERT … ON CONFLICT DO UPDATE` over a column list generated from the Prisma model minus `PLAYER_CROSSFILL_COLUMNS` / `MANAGER_CROSSFILL_COLUMNS`, so cross-fill-owned columns are **never written by the seed**. Country/League/Team/Pack/PackCard/Skill/PlayerSkill/FeaturedBundle(+Card) are replaced inside the same transaction (no FK reaches a user table). Booster is upserted by id (dump wins over fixtures). User tables (User/Account/Session/Build/Review/TierVote/TierList/Post/Comment/Follow/PostLike) are untouched unless `--reset-users`; players missing from the dump are kept and logged unless `--prune`. The JSONL is streamed twice (lookups, then writes). Field mapping uses the dump's real keys: `jumping→jump`, `set_piece_taking→placeKicking`, `tackling→ballWinning`, `pos→registeredPosition`, `condition` via `[E,D,C,B,A]`, `injury_resistance`, `player_value→marketValue`, `leg_length_height→dribbleHeight`, `name_normalized→nameNormalized`. Unmatched `s_*` skill keys, card-type codes that disagree with `players_meta.json`/pack names, and unknown booster stat keys abort the seed. Position ratings (`ratingGK…ratingCF`) are nullable and left null by the seed.
+2. **Seed** — `pnpm db:seed` (`packages/db/src/seed-efootbase-full.ts`). **Non-destructive upsert in ONE interactive transaction** (60-min timeout): Player and Manager are `INSERT … ON CONFLICT DO UPDATE` over a column list generated from the Prisma model minus `PLAYER_CROSSFILL_COLUMNS` / `MANAGER_CROSSFILL_COLUMNS`, so cross-fill-owned columns are **never written by the seed**. Country/League/Team/Pack/PackCard/Skill/PlayerSkill/FeaturedBundle(+Card) are replaced inside the same transaction (no FK reaches a user table). Booster is upserted by id (dump wins over fixtures). User tables (User/Account/Session) are untouched unless `--reset-users`; players missing from the dump are kept and logged unless `--prune`. The JSONL is streamed twice (lookups, then writes). Field mapping uses the dump's real keys: `jumping→jump`, `set_piece_taking→placeKicking`, `tackling→ballWinning`, `pos→registeredPosition`, `condition` via `[E,D,C,B,A]`, `injury_resistance`, `player_value→marketValue`, `leg_length_height→dribbleHeight`, `name_normalized→nameNormalized`. Unmatched `s_*` skill keys, card-type codes that disagree with `players_meta.json`/pack names, and unknown booster stat keys abort the seed. Position ratings (`ratingGK…ratingCF`) are nullable and left null by the seed.
 3. **Cross-fill** — `pnpm db:crossfill` (`packages/db/src/seed-efhub-crossfill.ts`) reads `dump/efhub/efhub_db.sqlite` through the `sqlite3` CLI (`SQLITE3_BIN`, ServBay: `/Applications/ServBay/bin/sqlite3`; `EFHUB_DB_PATH` overrides the file). Writes only what efootbase cannot expose: Manager tactic ratings (exact-id merge, then name merge with `ALIASES`, then create — 1,475 managers, all with tactics, 65 with R2 art), `Player.stars/reputation/overallPotential/gkClearing/maxGkClearing`, the 13 `ratingGK…ratingCF` from eFHUB `overallGK…overallCF`, `communityTier` (10,745 tier badges), and 3 eFHUB-only players (ovr/maxOvr 40 placeholders). `registeredPosition` is seed-owned (dump `pos`); the cross-fill only reports mismatches. All SQL uses bound parameters. Idempotent.
 4. **`pnpm db:refresh` = `db:seed` then `db:crossfill`** — the documented refresh. A standalone `db:seed` keeps earlier cross-fill values but cannot add them; it prints that notice.
 5. **Verify** — `python3 -I scripts/verify-seed.py` streams the dump and compares it with the DB over read-only psql (`PGOPTIONS=-c default_transaction_read_only=on`); exit 1 on any mismatch.
@@ -74,9 +86,9 @@ Player data is **not** self-datamined from the game (see `docs/efootball-apk-dat
 
 ## Image pipeline (eflab web)
 
-Cards render **one pre-composited image** from Cloudflare R2: `PlayerCard.tsx` loads `cards/{id}_dynamic.webp` (bg + art + frame baked in) and adds HTML overlays — `.pcb__ovr-block` (OVR + position), `.pcb__condition` (`conditions/condition_{a-e}.svg`) and, with `showDetails`, the nationality flag circle plus MAX LEVEL / MAX OVR badges. The home search dropdown thumbnails use `cards/{id}_transparent.webp`. The 4-layer composite (`cardBgUrl`/`cardFrameUrl` + `card-backgrounds/`, `frames/` on R2) is **dead code with no caller**, as is `lib/efhub-images.ts` (efimg.com fallback). CSS 3D tilt + glare stay (disabled under `prefers-reduced-motion`); Three.js/WebGL is rejected.
+Cards render **one pre-composited image** from Cloudflare R2: `PlayerCard.tsx` loads `cards/{id}_dynamic.webp` (bg + art + frame baked in) and adds HTML overlays — `.pcb__ovr-block` (OVR + position), `.pcb__condition` (`conditions/condition_{a-e}.svg`) and, with `showDetails`, the nationality flag circle plus MAX LEVEL / MAX OVR badges. The home search dropdown thumbnails use `cards/{id}_transparent.webp`. The 4-layer composite helpers (`cardBgUrl`/`cardFrameUrl`), the manager/emblem key helpers and `lib/efhub-images.ts` (efimg.com fallback) were deleted in change `remove-dead-surface` (the `card-backgrounds/`, `frames/`, `managers/` objects remain in the bucket, unused). CSS 3D tilt + glare stay (disabled under `prefers-reduced-motion`); Three.js/WebGL is rejected.
 
-- **Helper**: `apps/web/lib/r2-images.ts` — `r2Url(key)`, `playerCardDynamicUrl(id)` (used by PlayerCard), `playerCardUrl(id)` (`_transparent`, home thumbnails), `conditionUrl(letter)`, `managerImageUrl(id)`, `emblemByKey`/`leagueEmblemByKey`; `cardBgUrl`/`cardFrameUrl` unused. Base URL = `NEXT_PUBLIC_R2_PUBLIC_BASE`, falling back to the dev bucket URL in code.
+- **Helper**: `apps/web/lib/r2-images.ts` — `r2Url(key)`, `playerCardDynamicUrl(id)` (used by PlayerCard), `playerCardUrl(id)` (`_transparent`, home thumbnails), `conditionUrl(letter)`. Base URL = `NEXT_PUBLIC_R2_PUBLIC_BASE`, falling back to the dev bucket URL in code.
 - **R2 bucket**: `efootlab`, public dev URL `https://pub-1a19c30950c04ef3964669ac4792f6f0.r2.dev`. Credentials (`R2_ACCOUNT_ID/R2_ACCESS_KEY_ID/R2_SECRET_ACCESS_KEY/R2_BUCKET`) live in the gitignored root `.env`; only `scripts/r2_upload.py` uses them.
 - **Domain swap = two env vars, no DB rewrite**: flags/emblems/manager art are stored as absolute URLs in `Country.flagUrl`, `Team.emblemUrl`, `League.emblemUrl`, `Manager.imageUrl` (SHA256-named objects, not derivable from ids). The API rebases those stored URLs onto `R2_PUBLIC_BASE` on the way out (`rebaseR2Url` in `apps/api/src/env.ts`) and the web builds card/condition URLs from `NEXT_PUBLIC_R2_PUBLIC_BASE` — set both when moving the bucket. `NEXT_PUBLIC_R2_PUBLIC_BASE` also restricts `images.remotePatterns` in `next.config.ts`.
 - **Env loading (web)**: Next reads only `apps/web/.env*`; `apps/web/next.config.ts` additionally loads the **repo-root `.env`** through `@next/env` (`loadEnvConfig`, precedence shell > `apps/web/.env*` > root `.env*`). `NEXT_PUBLIC_*` values are inlined at build time; `apps/web/.env.example` documents them (`NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_R2_PUBLIC_BASE`, `API_INTERNAL_URL`, `NEXT_PUBLIC_GIT_SHA`/`NEXT_PUBLIC_BUILD_UTC`).
@@ -94,16 +106,16 @@ See `docs/eflab-image-pipeline.md` for the (older, dated 2026-10-06) pipeline wr
 - Branding is **eFootLab** (own SVG wordmark `EflabWordmark.tsx`, footer build stamp from `NEXT_PUBLIC_GIT_SHA`/`NEXT_PUBLIC_BUILD_UTC` filled by `next.config.ts` from git). No "eFootBase" string or efootbase build id anywhere in `apps/web`.
 - API env (`apps/api/src/env.ts`): `NODE_ENV` is set by the package scripts (`dev` = development, `start` = production; unset = treated as production → no stack traces, Secure cookies), `WEB_ORIGIN` (comma-separated CORS allow-list, first entry = OAuth redirect target), `API_PORT` (4000), `API_HOST` (0.0.0.0), `API_ORIGIN`, `R2_PUBLIC_BASE`, `GOOGLE_CLIENT_ID/SECRET`, `OAUTH_STATE_SECRET`. tRPC `maxBatchSize` 10 (web `httpBatchLink maxItems: 10`); expected failures are `TRPCError`s; undecodable cookies are ignored.
 - UI/UX work must read `openspec/ui-dna.md` before any visual change. Dated DNA snapshots in `docs/*-ui-dna.md` are historical references, not the current spec.
-- Do not delete dead code (unused routers/tables/components) without the owner's decision — report it instead.
+- Do not delete code, tables or dependencies without the owner's decision — report it instead. (The 2026-10-18 removal in change `remove-dead-surface` was owner-approved and grep-proven; what remains is listed under "Known limitations".)
 
 ## Running (verify before claiming "done")
 
 ```bash
-docker compose up -d                 # postgres 127.0.0.1:5433 · redis 127.0.0.1:6380
+docker compose up -d --remove-orphans  # postgres 127.0.0.1:5433 (--remove-orphans once, to retire the old eflab-redis container)
 cp .env.example .env                 # fill DATABASE_URL etc. (root .env is read by api, db scripts and next.config.ts)
 pnpm install
 pnpm db:generate                     # prisma generate
-pnpm db:migrate                      # prisma migrate deploy — baseline + parity_fixes (extensions pg_trgm/unaccent, GIN index)
+pnpm db:migrate                      # prisma migrate deploy — baseline + parity_fixes (extensions pg_trgm/unaccent, GIN index) + remove_dead_surface (drops 8 user-content tables)
 pnpm db:refresh                      # db:seed (upsert, ~1 min) then db:crossfill (needs dump/efhub/efhub_db.sqlite + SQLITE3_BIN)
 python3 -I scripts/verify-seed.py    # dump ↔ DB integrity (read-only psql)
 pnpm api:dev & pnpm web:dev          # :4000 + :3000
@@ -118,7 +130,7 @@ curl -sS http://localhost:4000/health
 
 ## Progression simulator (player-progression-simulator, 2026-10-18)
 
-The detail page's Progression panel (`components/build-simulator/ProgressionPanel.tsx`, state owned by `PlayerDetailClient.tsx`) runs the pure engine in `packages/shared/src/progression.ts` on the client; `community.simulate` runs the same engine server-side. Rules recovered from the eFHUB `player export` table (44,103 cards joined to the efootbase dump by Konami id, read-only analysis outside the repo):
+The detail page's Progression panel (`components/build-simulator/ProgressionPanel.tsx`, state owned by `PlayerDetailClient.tsx`) runs the pure engine in `packages/shared/src/progression.ts` on the client (the server-side `community.simulate` twin was removed in change `remove-dead-surface`). Rules recovered from the eFHUB `player export` table (44,103 cards joined to the efootbase dump by Konami id, read-only analysis outside the repo):
 
 - **Budget** = `levelCap − 1` training points (Max Level input 1..levelCap). Σ cost = levelCap − 1 on all 32,601 hub cards with cap ≥ 2.
 - **Ten categories** (`TRAINING_CATEGORIES` / `TRAINING_STATS`): Shooting {finishing, placeKicking, curl}, Passing {lowPass, loftedPass}, Dribbling {dribbling, ballControl, tightPossession}, Dexterity {offensiveAwareness, acceleration, balance}, Lower Body {kickingPower, speed, stamina}, Aerial {heading, physicalContact, jump}, Defending {defensiveAwareness, defensiveEngagement, ballWinning, aggression}, GK1 {gkAwareness}, GK2 {gkParrying (hub "GKClearing"), gkReach}, GK3 {gkCatching, gkReflexes}. Each stat point raises every stat of the category by 1; no cap at 99. Hub `MAX<stat> − <stat>` equals the category value for every stat on every card except goalkeeper Jump (card-specific offset) and one outfield card (hub PlayerID 179425, DMF, cap 65: Jump 67 → 76 with Aerial 8, i.e. +1 extra) — the engine ignores that single exception.
@@ -126,7 +138,7 @@ The detail page's Progression panel (`components/build-simulator/ProgressionPane
 - **Boosters**: resolved `booster1`/`booster2` DTO vectors; Booster 1 on by default, Booster 2 only when toggled; unknown ids show "unknown booster", never a guess. A booster with an empty stat vector (Booster 136 "Booster +1" — Booster 2 of 48,338 cards — and id 0) shows "(no stat data)" with no toggle and never counts as a custom build.
 - **Max Level input**: a draft string while typing; committed and clamped to 1..levelCap on blur / Enter (spinner and arrow keys commit at once); an invalid or empty draft reverts; the allocation is reset only when the committed level can no longer afford the points spent, and the live region announces it.
 - **Estimated overall** (`~`): per-position linear weights in `ovrWeights.ts` fitted on the hub's `overall<pos>` of cards with **full proficiency** at that position (held-out R² 0.992–0.999; within ±1 for ≥ 99.9% of cards at 11 outfield positions, 98.6% CB, 93.3% GK). Cross-check: formula(hub max stats + Booster 1) is within ±1 of efootbase `overall_at_max_level` for 94.7% of the 10,073 cards with progression. The hub's own `MAXOverall<pos>` sits about +3.6 above the formula (+4 on 47% of cards, +3 on 44% — hub quirk, not applied).
-- **Proficiency penalty** (`OVR_PROFICIENCY_ADJUST`, 2026-10-18): the ±1 claim only holds at full-proficiency positions — unpenalised, the formula is within ±1 of the hub on 0% of half-proficiency and 5.6% of non-proficient observations (mean +6.3 / +13.8 too high). The hub overall at a half / non-proficient position is `max(40, k·estimate + c)` with per-position `k, c` (half ≈ 0.93·est − 1.6, none ≈ 0.82·est − 5.9; GK at none = flat 40). Held-out within ±1: half 99.9% (21,387 obs; CB 98.5%, CF 98.9%), none 99.7% at outfield positions (111,819 obs; CB 97.3%, CF 99.7%), GK-none 100%. `simulateBuild` takes the card's `positionAptitudes` (0 full / 1 half / 2 none) and reports `BuildResult.proficiency`; the panel labels every position option with its proficiency and swaps the accuracy note. `community.simulate` passes no aptitudes and therefore assumes full proficiency (no web caller).
+- **Proficiency penalty** (`OVR_PROFICIENCY_ADJUST`, 2026-10-18): the ±1 claim only holds at full-proficiency positions — unpenalised, the formula is within ±1 of the hub on 0% of half-proficiency and 5.6% of non-proficient observations (mean +6.3 / +13.8 too high). The hub overall at a half / non-proficient position is `max(40, k·estimate + c)` with per-position `k, c` (half ≈ 0.93·est − 1.6, none ≈ 0.82·est − 5.9; GK at none = flat 40). Held-out within ±1: half 99.9% (21,387 obs; CB 98.5%, CF 98.9%), none 99.7% at outfield positions (111,819 obs; CB 97.3%, CF 99.7%), GK-none 100%. `simulateBuild` takes the card's `positionAptitudes` (0 full / 1 half / 2 none) and reports `BuildResult.proficiency`; the panel labels every position option with its proficiency and swaps the accuracy note.
 - **Max OVR** = exact DP over the categories (budget in half-points, linear objective); Reset zeroes the categories.
 - **Hidden** for `levelCap ≤ 1` cards (38,337 of 48,407) — a note replaces the panel. The "stats at max level" toggle (dump `max_attributes`, a different lift) stays and is disabled while a custom build is active.
 - **Not modelled**: manager effects (no dataset), goalkeeper Jump (card-specific offset — shown as "n/a (card-specific)"), exact overall values.
@@ -134,10 +146,10 @@ The detail page's Progression panel (`components/build-simulator/ProgressionPane
 
 ## Known limitations (reported, not hidden)
 
-- **Progression is an estimate** — the overall formula is fitted (±1 at full-proficiency positions, lower confidence for GK/CB; half / non-proficient positions use a fitted penalty, within ±1 on 99.9% / 99.7% of held-out hub observations), goalkeeper Jump is not projected, no manager control, weights track the hub's game version, and `Build` has no position column so `community.saveBuild` does not persist the selected position.
+- **Progression is an estimate** — the overall formula is fitted (±1 at full-proficiency positions, lower confidence for GK/CB; half / non-proficient positions use a fitted penalty, within ±1 on 99.9% / 99.7% of held-out hub observations), goalkeeper Jump is not projected, no manager control, weights track the hub's game version; builds are not persisted anywhere (the Build table and `community.saveBuild` were removed).
 - **38,337 cards have `levelCap` 1** — that is what the dump carries (35,341 of them also have `maxOvr == ovr`), not a seeder bug.
 - **CJK search** (`japName`/`chineseName ILIKE`) runs only for non-ASCII queries and is not index-backed.
-- **Dead API procedures/tables** remain (community, user, tierList, feed, pages, pack, manager routers; Pack/Post/TierList… tables) — deleting them is the owner's call.
+- **Kept on purpose after `remove-dead-surface` (2026-10-18)** — not dead by accident, each has an owner decision behind it: the `auth` router + Google OAuth + User/Session/Account (no sign-in UI is routed; `auth.tsx` still calls `getSession`/`signOut`); `protectedProcedure` in `router/trpc.ts` (no mounted procedure uses it since the community routers went); the Pack/PackCard (2,046 / 13,683) and Manager (1,475) tables with their seeding and cross-fill (data assets, no API reads them except `player.byId` → Pack name); `better-auth` (only `better-auth/crypto` is imported); `zod` and `superjson` as direct `apps/api` dependencies (the API imports both through `@eflab/shared`). The R2 bucket still holds the `card-backgrounds/`, `frames/`, `managers/` objects nobody renders.
 - **Konami fonts** (`apps/web/public/fonts/eFootballSans-*.ttf`, `eFootballStencil-Regular.ttf`, loaded by `globals.css`) have an unknown licence.
 - **Git history still contains the two previously committed third-party keys** (`docs/apk-db-expansion.md`, `docs/efootbase-ui-dna.md`); redaction covers the working tree only.
 - **No CI** — `pnpm typecheck` and `pnpm test` are run by hand.
