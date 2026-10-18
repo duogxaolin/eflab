@@ -165,7 +165,6 @@ export function PlayerDetailClient({
   const stats = view === "build" ? buildResult.projectedStats : view === "max" ? p.maxStats : p.stats;
   const boosterDeltas = view === "build" ? buildResult.boosterDeltas : undefined;
   const trainingDeltas = view === "build" ? buildResult.trainingDeltas : undefined;
-  const jumpNotProjected = view === "build" && buildResult.jumpNotProjected;
   const estimatedOvr = buildResult.estimatedOvr;
   // The card face prints the live build estimate (efootbase prints its build
   // overall there); the MAX badge stays the dump's max overall and the pill
@@ -382,7 +381,6 @@ export function PlayerDetailClient({
             {view === "build" && (
               <p className="text-[11px] text-[var(--color-text-secondary)]">
                 Projected from the base stats + training + active boosters (engine estimate; cyan chips are booster bumps, the training lift is inside the value — "Max" shows the dump&apos;s own max-level values instead).
-                {jumpNotProjected ? " Goalkeeper Jump is card-specific and not projected." : ""}
                 {highlight ? " Click the highlighted stat or category again to clear the highlight." : " Click a stat or a category to highlight the stats it trains."}
               </p>
             )}
@@ -392,7 +390,6 @@ export function PlayerDetailClient({
               trainingDeltas={trainingDeltas}
               highlight={highlight}
               onHighlight={onHighlight}
-              jumpNotProjected={jumpNotProjected}
             />
 
             {/* Skills — Showtime first (gold), classic after. */}

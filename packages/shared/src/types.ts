@@ -191,8 +191,6 @@ export interface BuildResult {
   /** Proficiency of the card at `config.position` that the estimate assumes
    *  ("full" when no aptitudes were given); half / none apply the fitted penalty. */
   proficiency: PositionProficiency;
-  /** Goalkeeper card with Aerial points: Jump is card-specific, not projected. */
-  jumpNotProjected: boolean;
 }
 
 // ---- Auth session (auth.getSession; consumed by apps/web/lib/auth.tsx) ----

@@ -30,7 +30,16 @@
 //
 // Cross-check against the second source: for the 10,073 cards whose efootbase
 // `max_level` > 1, the formula on (hub max stats + Booster 1) is within ±1 of
-// efootbase's `overall_at_max_level` for 94.7% (exact 59%, −1 32%).
+// efootbase's `overall_at_max_level` for 94.7% (exact 59%, −1 32%). Since
+// change `jump-from-gk1` (2026-10-18, Jump under Aerial Strength AND
+// Goalkeeper 1) the engine's projection (hub base stats + allocation) equals
+// the hub max stats on every card, so that figure is the engine's too when it
+// is fed the hub's base stats (the web uses the dump's base stats, which differ
+// from the hub's on 3,849 of 44,082 joined cards, Jump on 1) — per position:
+// GK 587/716 = 82.0% (was 36.0% while goalkeeper Jump stayed at its base
+// value), 11 outfield 95.9%, CB 96.1%, CF 94.7% (unchanged). The weights were
+// not refitted: they describe the level-1 overall from base stats and that
+// measurement is untouched by the training rule.
 //
 // Proficiency penalty (OVR_PROFICIENCY_ADJUST, fitted 2026-10-18): the weights
 // above describe the overall at FULL proficiency. The hub also lists the
