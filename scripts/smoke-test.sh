@@ -289,6 +289,88 @@ else
   fail "player.leagues / player.teams" "leagues=$LEAGUES teams=$TEAMS code=$CODE"
 fi
 
+# 5f. multi-valued filters (change multi-select-filters): OR inside a list,
+#     AND between lists, the single-value fields merged into the lists, and a
+#     400 (never a 500) for an over-long list or an out-of-range member.
+#     A card has one nationality, one team and one league, so two leagues /
+#     two teams are exactly additive; two positions overlap (a card may play
+#     both), so CF|SS is bracketed by max(CF, SS) and CF + SS.
+trpc_get "player.list" '{"limit":1,"positions":["CF"]}'
+POS_CF="$(result 'd["total"]')"
+trpc_get "player.list" '{"limit":1,"positions":["SS"]}'
+POS_SS="$(result 'd["total"]')"
+trpc_get "player.list" '{"limit":1,"positions":["CF","SS"]}'
+POS_CFSS="$(result 'd["total"]')"
+trpc_get "player.list" '{"limit":1,"position":"CF","positions":["SS"]}'
+POS_MERGED="$(result 'd["total"]')"
+POS_MAX=$(( POS_CF > POS_SS ? POS_CF : POS_SS ))
+if [ -n "$POS_CF" ] && [ -n "$POS_SS" ] && [ -n "$POS_CFSS" ] && [ "$POS_CFSS" -ge "$POS_MAX" ] && [ "$POS_CFSS" -lt $((POS_CF + POS_SS)) ] && [ "$POS_MERGED" = "$POS_CFSS" ]; then
+  pass "player.list positions [CF,SS] → $POS_CFSS cards (CF $POS_CF · SS $POS_SS · OR, single-value position merged)"
+else
+  fail "player.list positions [CF,SS] is an OR of CF and SS" "cf=$POS_CF ss=$POS_SS cfss=$POS_CFSS merged=$POS_MERGED code=$CODE"
+fi
+trpc_get "player.leagues" '{}'
+LG_A="$(result 'd[0]["id"]')"
+LG_B="$(result 'd[1]["id"]')"
+trpc_get "player.list" "{\"limit\":1,\"leagueIds\":[$LG_A]}"
+LG_A_N="$(result 'd["total"]')"
+trpc_get "player.list" "{\"limit\":1,\"leagueIds\":[$LG_B]}"
+LG_B_N="$(result 'd["total"]')"
+trpc_get "player.list" "{\"limit\":1,\"leagueIds\":[$LG_A,$LG_B,$LG_A]}"
+LG_AB_N="$(result 'd["total"]')"
+if [ -n "$LG_A_N" ] && [ -n "$LG_B_N" ] && [ -n "$LG_AB_N" ] && [ "$LG_AB_N" = $((LG_A_N + LG_B_N)) ] && [ "$LG_AB_N" -gt 0 ]; then
+  pass "player.list leagueIds [$LG_A,$LG_B] → $LG_AB_N cards = $LG_A_N + $LG_B_N (OR, duplicate ignored)"
+else
+  fail "player.list leagueIds of two leagues is additive" "a=$LG_A_N b=$LG_B_N ab=$LG_AB_N code=$CODE"
+fi
+trpc_get "player.teams" '{}'
+TM_A="$(result 'd[0]["id"]')"
+TM_B="$(result 'd[1]["id"]')"
+trpc_get "player.list" "{\"limit\":1,\"clubIds\":[$TM_A]}"
+TM_A_N="$(result 'd["total"]')"
+trpc_get "player.list" "{\"limit\":1,\"clubId\":$TM_B}"
+TM_B_N="$(result 'd["total"]')"
+trpc_get "player.list" "{\"limit\":1,\"clubIds\":[$TM_A,$TM_B]}"
+TM_AB_N="$(result 'd["total"]')"
+if [ -n "$TM_A_N" ] && [ -n "$TM_B_N" ] && [ -n "$TM_AB_N" ] && [ "$TM_AB_N" = $((TM_A_N + TM_B_N)) ] && [ "$TM_AB_N" -gt 0 ]; then
+  pass "player.list clubIds [$TM_A,$TM_B] → $TM_AB_N cards = $TM_A_N + $TM_B_N (OR)"
+else
+  fail "player.list clubIds of two teams is additive" "a=$TM_A_N b=$TM_B_N ab=$TM_AB_N code=$CODE"
+fi
+# AND between lists: positions ∧ leagues ∧ nations is a subset of each list alone
+trpc_get "player.list" "{\"limit\":1,\"positions\":[\"CF\",\"SS\"],\"leagueIds\":[$LG_A,$LG_B],\"nationalityIds\":[1,14]}"
+AND_N="$(result 'd["total"]')"
+trpc_get "player.list" '{"limit":1,"nationalityIds":[1,14]}'
+NAT_N="$(result 'd["total"]')"
+if [ "$CODE" = "200" ] && [ -n "$AND_N" ] && [ -n "$NAT_N" ] && [ "$AND_N" -le "$POS_CFSS" ] && [ "$AND_N" -le "$LG_AB_N" ] && [ "$AND_N" -le "$NAT_N" ]; then
+  pass "player.list positions ∧ leagueIds ∧ nationalityIds → $AND_N cards (≤ $POS_CFSS, ≤ $LG_AB_N, ≤ $NAT_N)"
+else
+  fail "player.list lists are AND-ed with each other" "and=$AND_N cfss=$POS_CFSS leagues=$LG_AB_N nations=$NAT_N code=$CODE"
+fi
+# invalid lists → 400
+IDS_51="$(py 'print(",".join(str(i) for i in range(1, 52)))')"
+IDS_50="$(py 'print(",".join(str(i) for i in range(1, 51)))')"
+trpc_get "player.list" '{"limit":1,"positions":["GK","CB","LB","RB","DMF","CMF","LMF","RMF","AMF","LWF","RWF","SS","CF","CF"]}'
+C_POS14="$CODE"
+trpc_get "player.list" "{\"limit\":1,\"clubIds\":[$IDS_51]}"
+C_IDS51="$CODE"
+trpc_get "player.list" "{\"limit\":1,\"clubId\":999,\"clubIds\":[$IDS_50]}"
+C_MERGED51="$CODE"
+trpc_get "player.list" '{"limit":1,"nationalityIds":[2147483648]}'
+C_RANGE="$CODE"
+trpc_get "player.list" '{"limit":1,"leagueIds":[-1]}'
+C_NEG="$CODE"
+trpc_get "player.list" '{"limit":1,"positions":["ST"]}'
+C_UNKNOWN="$CODE"
+# a null member must not be coerced to id 0 (it used to answer 200)
+trpc_get "player.list" '{"limit":1,"nationalityIds":[null]}'
+C_NULL="$CODE"
+if [ "$C_POS14" = "400" ] && [ "$C_IDS51" = "400" ] && [ "$C_MERGED51" = "400" ] && [ "$C_RANGE" = "400" ] && [ "$C_NEG" = "400" ] && [ "$C_UNKNOWN" = "400" ] && [ "$C_NULL" = "400" ]; then
+  pass "player.list 14 positions / 51 ids / 50 ids + another single id / id > int4 / negative id / unknown position / null id → 400"
+else
+  fail "player.list invalid lists → 400" "pos14=$C_POS14 ids51=$C_IDS51 merged51=$C_MERGED51 range=$C_RANGE neg=$C_NEG unknown=$C_UNKNOWN null=$C_NULL"
+fi
+
 # 6. pagination: 10 pages sorted by Speed carry no duplicate id (deterministic tiebreaker)
 IDS_FILE="$(mktemp -t eflab-smoke-ids.XXXXXX)"
 PAGE_FAIL=""

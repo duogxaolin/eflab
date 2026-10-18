@@ -9,6 +9,14 @@
 // `dstyle`, `ovrMin`, `maxOvrMin`, `maxOvrMax`) are still read so old links
 // keep working, but are never written. Ranges use efootbase's `min-max`
 // syntax (`base=90-`, `ovr=-100`, `height=180-190`).
+//
+// Position, Nation, League and Team are multi-valued (change
+// multi-select-filters): the parameter is repeated (`pos=SS&pos=CF`,
+// `nat=3&nat=14`) and written in a canonical order — positions in catalogue
+// order, ids ascending, no duplicates — so equal selections give equal URLs;
+// the older single value (`pos=CF`, `pos=12`, `nat=14`) is read as a one-item
+// list. Nations are our internal `Country.id`s (efootbase uses ISO-like codes,
+// which the data lacks).
 import {
   AI_PLAYING_STYLE_KEYS,
   BASE_STATS,
@@ -17,12 +25,16 @@ import {
   CONDITIONS,
   DEFAULT_SORT_PRESET,
   FILTER_RANGE_BOUNDS,
+  MAX_FILTER_IDS,
   PHYSIQUE_FIELDS,
-  POSITIONS,
   SORT_FIELDS,
   formatRangeParam,
   isSortPreset,
+  parseIntListParams,
+  parsePositionParams,
   parseRangeParam,
+  sortIds,
+  sortPositions,
   type AiPlayingStyleKey,
   type BaseStat,
   type CardType,
@@ -41,15 +53,18 @@ export interface PlayersState {
   q: string;
   /** `null` = all card types (the default); otherwise the selected types (`card`). */
   types: CardType[] | null;
-  pos: Position | "";
+  /** Positions the card plays (`pos`, repeated) — any of them (OR); catalogue order. */
+  pos: Position[];
   /** Playing-style id, matched in either slot (`playingStyle`). */
   style: number | undefined;
   /** AI playing styles — every listed flag must be set (`ai`). */
   ai: AiPlayingStyleKey[];
-  /** Country id (`nat`) — efootbase uses ISO-like codes, which the data lacks. */
-  nat: number | undefined;
-  league: number | undefined;
-  team: number | undefined;
+  /** Country ids (`nat`, repeated, any of them) — internal ids; efootbase uses
+   *  ISO-like codes, which the data lacks. Ascending. */
+  nat: number[];
+  /** League ids / Team ids (`league`, `team`, repeated, any of them). Ascending. */
+  league: number[];
+  team: number[];
   foot: 0 | 1 | undefined;
   /** Base Overall Rating (`base`) and Max Overall Rating (`ovr`) ranges. */
   base: IntRange | null;
@@ -78,12 +93,12 @@ export interface PlayersState {
 export const DEFAULT_PLAYERS_STATE: PlayersState = {
   q: "",
   types: null,
-  pos: "",
+  pos: [],
   style: undefined,
   ai: [],
-  nat: undefined,
-  league: undefined,
-  team: undefined,
+  nat: [],
+  league: [],
+  team: [],
   foot: undefined,
   base: null,
   max: null,
@@ -105,7 +120,6 @@ export const DEFAULT_PLAYERS_STATE: PlayersState = {
 
 const INT4_MAX = 2_147_483_647;
 const isCardType = (s: string): s is CardType => (CARD_TYPES as readonly string[]).includes(s);
-const isPosition = (s: string): s is Position => (POSITIONS as readonly string[]).includes(s);
 const isSortField = (s: string): s is SortField => (SORT_FIELDS as readonly string[]).includes(s);
 const isCondition = (s: string): s is Condition => (CONDITIONS as readonly string[]).includes(s);
 const isAiKey = (s: string): s is AiPlayingStyleKey => (AI_PLAYING_STYLE_KEYS as readonly string[]).includes(s);
@@ -170,14 +184,6 @@ function readTypes(sp: URLSearchParams): CardType[] | null {
   return CARD_TYPES.filter((t) => picked.includes(t));
 }
 
-function readPosition(sp: URLSearchParams): Position | "" {
-  const raw = sp.get("pos") ?? "";
-  if (isPosition(raw)) return raw;
-  // efootbase sends the registered-position index (same ids as POSITIONS).
-  const idx = intParam(raw, 0, POSITIONS.length - 1);
-  return idx === undefined ? "" : POSITIONS[idx]!;
-}
-
 /** Legacy `ovrMin` / `maxOvrMin` / `maxOvrMax` → ranges when the new
  *  parameters are absent. */
 function legacyRange(min: string | null, max: string | null, bounds: readonly [number, number]): IntRange | null {
@@ -199,12 +205,14 @@ export function readPlayersState(sp: URLSearchParams): PlayersState {
   return {
     q: (sp.get("search") ?? sp.get("q") ?? "").trim(),
     types: readTypes(sp),
-    pos: readPosition(sp),
+    // Repeated `pos` — names or efootbase's registered-position index (`pos=12`
+    // = CF); a single legacy value is a one-item list.
+    pos: parsePositionParams(sp.getAll("pos")),
     style: intParam(sp.get("playingStyle"), 1, 99) ?? intParam(sp.get("style"), 1, 99) ?? intParam(sp.get("dstyle"), 1, 99),
     ai: (sp.get("ai") ?? "").split(",").filter(isAiKey),
-    nat: intParam(sp.get("nat"), 1, INT4_MAX),
-    league: intParam(sp.get("league"), 0, INT4_MAX),
-    team: intParam(sp.get("team"), 0, INT4_MAX),
+    nat: parseIntListParams(sp.getAll("nat"), 1, INT4_MAX, MAX_FILTER_IDS),
+    league: parseIntListParams(sp.getAll("league"), 0, INT4_MAX, MAX_FILTER_IDS),
+    team: parseIntListParams(sp.getAll("team"), 0, INT4_MAX, MAX_FILTER_IDS),
     foot: footRaw === "0" ? 0 : footRaw === "1" ? 1 : undefined,
     base: parseRangeParam(sp.get("base"), b.ovr[0], b.ovr[1]) ?? legacyRange(sp.get("ovrMin"), sp.get("ovrMax"), b.ovr),
     max: parseRangeParam(sp.get("ovr"), b.maxOvr[0], b.maxOvr[1]) ?? legacyRange(sp.get("maxOvrMin"), sp.get("maxOvrMax"), b.maxOvr),
@@ -237,12 +245,17 @@ export function writePlayersState(s: PlayersState): string {
     const code = Object.entries(CARD_TYPE_BY_EFOOTBASE_CODE).find(([, v]) => v === t)?.[0];
     if (code !== undefined) sp.append("card", code);
   }
-  if (s.pos) sp.set("pos", s.pos);
+  // Repeated parameters in canonical order (positions by catalogue, ids
+  // ascending, de-duplicated) whatever order the UI handed them in. The
+  // MAX_FILTER_IDS slice is a safety net only: the pickers refuse a selection
+  // beyond the bound with a visible message, so a state built through the UI
+  // never reaches it (a longer list would otherwise lose its largest ids here).
+  for (const p of sortPositions(s.pos)) sp.append("pos", p);
   if (s.style !== undefined) sp.set("playingStyle", String(s.style));
   if (s.ai.length) sp.set("ai", s.ai.join(","));
-  if (s.nat !== undefined) sp.set("nat", String(s.nat));
-  if (s.league !== undefined) sp.set("league", String(s.league));
-  if (s.team !== undefined) sp.set("team", String(s.team));
+  for (const id of sortIds(s.nat).slice(0, MAX_FILTER_IDS)) sp.append("nat", String(id));
+  for (const id of sortIds(s.league).slice(0, MAX_FILTER_IDS)) sp.append("league", String(id));
+  for (const id of sortIds(s.team).slice(0, MAX_FILTER_IDS)) sp.append("team", String(id));
   if (s.foot !== undefined) sp.set("foot", String(s.foot));
   setRange("base", s.base);
   setRange("ovr", s.max);
@@ -266,19 +279,18 @@ export function writePlayersState(s: PlayersState): string {
 }
 
 /** Number of active filters (everything except query, sort and page) — the
- *  badge on the mobile "Filters" button and the Reset affordance. */
+ *  badge on the mobile "Filters" button and the Reset affordance. A
+ *  multi-valued filter (Position, Nation, League, Team, the OR lists) counts
+ *  once however many values it holds; the AND lists (AI styles, skills, stat
+ *  and body ranges) count per value. */
 export function countActiveFilters(s: PlayersState): number {
   let n = 0;
   if (s.types !== null) n++;
-  if (s.pos) n++;
   if (s.style !== undefined) n++;
   n += s.ai.length;
-  if (s.nat !== undefined) n++;
-  if (s.league !== undefined) n++;
-  if (s.team !== undefined) n++;
   if (s.foot !== undefined) n++;
   for (const r of [s.base, s.max, s.height, s.weight, s.age]) if (r) n++;
-  for (const list of [s.condition, s.form, s.wfa, s.wfu]) if (list.length) n++;
+  for (const list of [s.pos, s.nat, s.league, s.team, s.condition, s.form, s.wfa, s.wfu]) if (list.length) n++;
   n += s.skills.length;
   n += Object.keys(s.stats).length;
   n += Object.keys(s.body).length;

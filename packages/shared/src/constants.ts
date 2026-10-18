@@ -306,6 +306,13 @@ export const FILTER_RANGE_BOUNDS = {
   physique: [0, 15],
 } as const satisfies Record<string, readonly [number, number]>;
 
+// Upper bound of the id lists of the multi-valued Nation / League / Team
+// filters (change multi-select-filters): the OR stays an `IN (…)` of at most
+// 50 ids; Position is bounded by the 13-entry catalogue (POSITIONS.length).
+// Shared by the Zod input, the router's merge of list + single-value fields
+// and the URL helper of the web.
+export const MAX_FILTER_IDS = 50;
+
 // Sort presets of the players page (efootbase "Sort by" radio group:
 // Trending · New cards · Top rated · High to low · Low to high). The keys are
 // efootbase's own URL values where they were observed (`sort=top`,

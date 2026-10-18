@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useId, useRef, type ReactNode } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, type ReactNode } from "react";
 import { X } from "lucide-react";
 
 /**
@@ -9,6 +9,13 @@ import { X } from "lucide-react";
  * events, a click on the backdrop closes — with a header, a scrolling body
  * and a "Done" footer. Re-uses the palette's dialog/panel classes from
  * globals.css for the full-viewport box and the blurred backdrop.
+ *
+ * Focus return: the browser restores focus to the opener when the dialog is
+ * *closed*, not when it is removed while open. The on-demand filter dialogs
+ * unmount on Done, so the layout-effect cleanup below closes the element while
+ * it is still attached and, as a fallback, refocuses the element that had
+ * focus when the dialog opened (multi-select-filters: verified with
+ * Playwright — Done and Escape both return focus to the launcher).
  */
 export function Modal({
   open,
@@ -27,14 +34,32 @@ export function Modal({
   panelClassName?: string;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
+  const openerRef = useRef<HTMLElement | null>(null);
   const titleId = useId();
 
   useEffect(() => {
     const dialog = ref.current;
     if (!dialog) return;
-    if (open && !dialog.open) dialog.showModal();
-    else if (!open && dialog.open) dialog.close();
+    if (open && !dialog.open) {
+      openerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      dialog.showModal();
+    } else if (!open && dialog.open) {
+      dialog.close();
+    }
   }, [open]);
+
+  // Unmount while open (Done on an on-demand dialog): close first so the
+  // browser runs its focus return, then make sure the opener has focus.
+  useLayoutEffect(() => {
+    return () => {
+      const dialog = ref.current;
+      if (dialog?.open) dialog.close();
+      const opener = openerRef.current;
+      if (opener && opener.isConnected && (document.activeElement === null || document.activeElement === document.body)) {
+        opener.focus();
+      }
+    };
+  }, []);
 
   return (
     <dialog

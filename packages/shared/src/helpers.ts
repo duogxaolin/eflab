@@ -1,6 +1,8 @@
 // Small pure helpers shared by the API and the web app (eflab-parity-fixes,
-// design decisions 6 and 15). No I/O, no framework imports — tested by
-// helpers.test.ts with the same assert-style runner as progression.test.ts.
+// design decisions 6 and 15; multi-select-filters for the repeated-parameter
+// lists). No I/O, no framework imports — tested by helpers.test.ts with the
+// same assert-style runner as progression.test.ts.
+import { POSITIONS, type Position } from "./constants";
 
 /**
  * Normalise a free-text player search query the same way efootbase derives
@@ -111,4 +113,73 @@ export function parseRangeParam(value: string | null | undefined, lo: number, hi
 export function formatRangeParam(range: IntRange | null | undefined): string | null {
   if (!range || (range.min === undefined && range.max === undefined)) return null;
   return `${range.min ?? ""}-${range.max ?? ""}`;
+}
+
+// ---- Repeated URL parameters of the multi-valued filters (multi-select-filters).
+// efootbase repeats the parameter (`pos=12&pos=11`, `nation=…&nation=…`); the
+// web's URL helper reads the repeated form, a comma list inside one value and
+// the older single value alike, and always writes the repeated form in the
+// canonical order below, so equal selections produce equal URLs and
+// `write(read(url))` is a fixed point.
+
+/** Split repeated parameter values that may themselves be comma lists. */
+function splitParamValues(values: readonly string[]): string[] {
+  return values.flatMap((v) => v.split(",")).map((s) => s.trim()).filter((s) => s.length > 0);
+}
+
+/**
+ * Distinct integers within `[lo, hi]` from repeated parameter values, sorted
+ * ascending (the canonical URL order for id lists). Non-integers and values
+ * outside the bound are dropped; once `limit` distinct values are collected
+ * the rest are dropped too, so a hand-edited URL never sends an over-long list.
+ *
+ *   ["14", "3", "14"]      → [3, 14]
+ *   ["3,14", "x", "-1"]    → [3, 14]
+ */
+export function parseIntListParams(values: readonly string[], lo: number, hi: number, limit: number): number[] {
+  const set = new Set<number>();
+  for (const part of splitParamValues(values)) {
+    if (!/^\d+$/.test(part)) continue;
+    const n = Number(part);
+    if (!Number.isSafeInteger(n) || n < lo || n > hi) continue;
+    set.add(n);
+  }
+  return Array.from(set)
+    .sort((a, b) => a - b)
+    .slice(0, limit);
+}
+
+/**
+ * Positions from repeated `pos` values — a name (`CF`, case-insensitive) or
+ * efootbase's registered-position index (`12`, the index into POSITIONS) —
+ * de-duplicated and returned in catalogue order (POSITIONS), which is the
+ * canonical URL order. Unknown values are dropped.
+ *
+ *   ["12", "11"]        → ["SS", "CF"]
+ *   ["cf", "CF", "GK"]  → ["GK", "CF"]
+ */
+export function parsePositionParams(values: readonly string[]): Position[] {
+  const picked = new Set<Position>();
+  for (const part of splitParamValues(values)) {
+    const upper = part.toUpperCase();
+    if ((POSITIONS as readonly string[]).includes(upper)) {
+      picked.add(upper as Position);
+      continue;
+    }
+    if (/^\d{1,2}$/.test(part)) {
+      const p = POSITIONS[Number(part)];
+      if (p) picked.add(p);
+    }
+  }
+  return POSITIONS.filter((p) => picked.has(p));
+}
+
+/** Canonical order for a position list (catalogue order, duplicates removed). */
+export function sortPositions(positions: readonly Position[]): Position[] {
+  return POSITIONS.filter((p) => positions.includes(p));
+}
+
+/** Canonical order for an id list (ascending, duplicates removed). */
+export function sortIds(ids: readonly number[]): number[] {
+  return Array.from(new Set(ids)).sort((a, b) => a - b);
 }

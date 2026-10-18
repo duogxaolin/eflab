@@ -2,8 +2,10 @@
 // byId (full card), search (normalised substring + trigram) and compare
 // (full cards in the caller's order).
 import { prisma, Prisma } from "@eflab/db";
+import { TRPCError } from "@trpc/server";
 import {
   BASE_STATS,
+  MAX_FILTER_IDS,
   PHYSIQUE_FIELDS,
   POSITIONS,
   escapeLike,
@@ -341,6 +343,20 @@ function rangeWhere(column: string, min: number | undefined, max: number | undef
   return { [column]: bounds } as Prisma.PlayerWhereInput;
 }
 
+// Multi-valued filters (change multi-select-filters): the list field and the
+// older single-value field of the same filter are merged into one
+// de-duplicated set. Zod already bounds each list on its own; the merged set is
+// bounded again here so `clubIds` of 50 plus a different `clubId` is a 400
+// (BAD_REQUEST, the same status Zod produces), never a 51-way IN.
+function mergeFilterValues<T>(list: readonly T[] | undefined, single: T | undefined, limit: number, what: string): T[] {
+  const set = new Set<T>(list ?? []);
+  if (single !== undefined) set.add(single);
+  if (set.size > limit) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: `${what}: at most ${limit} distinct values` });
+  }
+  return Array.from(set);
+}
+
 // Physique columns share the PhysiqueField names (schema.prisma "11 physique").
 const PHYSIQUE_DB: ReadonlySet<string> = new Set([
   "neckLength", "neckSize", "shoulderHeight", "shoulderWidth", "chestMeasurement", "waistSize",
@@ -442,7 +458,12 @@ export const playerRouter = router({
       }
       if (input.cardType) and.push({ cardType: input.cardType });
       if (input.cardTypeIn && input.cardTypeIn.length > 0) and.push({ cardType: { in: input.cardTypeIn } });
-      if (input.position) and.push({ [POS_APTITUDE_DB[input.position]]: { in: [0, 1] } });
+      // Position: a card "plays" a position when its aptitude there is full (0)
+      // or half (1). Several positions are OR-ed (CF or SS); the single `position`
+      // field is merged into the list.
+      const positions = mergeFilterValues(input.positions, input.position, POSITIONS.length, "positions");
+      if (positions.length === 1) and.push({ [POS_APTITUDE_DB[positions[0]!]]: { in: [0, 1] } });
+      else if (positions.length > 1) and.push({ OR: positions.map((p) => ({ [POS_APTITUDE_DB[p]]: { in: [0, 1] } })) });
       // A playing style matches in either slot (efootbase groups and filters by
       // style, not by slot — PLAYING_STYLE_GROUPS in @eflab/shared); the
       // defence-only variant stays for callers that want the defence slot.
@@ -459,10 +480,14 @@ export const playerRouter = router({
       if (maxOvrRange) and.push(maxOvrRange);
       if (input.weakFoot) and.push({ weakFootAccuracy: { gte: Number(input.weakFoot) } });
       if (input.strongerFoot !== undefined) and.push({ strongerFoot: input.strongerFoot });
-      if (input.nationalityId !== undefined) and.push({ nationalityId: input.nationalityId });
-      // clubId → the card's Team; leagueId → the Team's League.
-      if (input.clubId !== undefined) and.push({ teamId: input.clubId });
-      if (input.leagueId !== undefined) and.push({ team: { is: { leagueId: input.leagueId } } });
+      // Nation / Team / League: OR within the list (`IN`), AND with everything
+      // else. clubIds → the card's Team; leagueIds → the Team's League.
+      const nations = mergeFilterValues(input.nationalityIds, input.nationalityId, MAX_FILTER_IDS, "nationalityIds");
+      if (nations.length > 0) and.push({ nationalityId: { in: nations } });
+      const clubs = mergeFilterValues(input.clubIds, input.clubId, MAX_FILTER_IDS, "clubIds");
+      if (clubs.length > 0) and.push({ teamId: { in: clubs } });
+      const leagues = mergeFilterValues(input.leagueIds, input.leagueId, MAX_FILTER_IDS, "leagueIds");
+      if (leagues.length > 0) and.push({ team: { is: { leagueId: { in: leagues } } } });
       if (input.skillId !== undefined) and.push({ skills: { some: { skillId: input.skillId } } });
       // Skills: every selected skill must be present (one EXISTS per skill).
       for (const skillId of new Set(input.skillIds ?? [])) and.push({ skills: { some: { skillId } } });

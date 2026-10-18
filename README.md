@@ -108,7 +108,7 @@ pnpm test        # unit tests (@eflab/shared: progression oracle + helpers) then
 pnpm build       # next build (web) + tsc --noEmit (api / db / shared)
 ```
 
-`scripts/smoke-test.sh` starts the API itself on port **4300** (`SMOKE_API_PORT` to change), waits for `/health`, runs 19 checks against the refreshed database (featured bundle by slug, removed routers answer 404, 84 skills, every card type non-empty, duplicate-free pagination, compare order, accent-insensitive search, 400 on out-of-range ids, malformed-cookie tolerance) and stops the API on exit; the manager tactic cross-fill is asserted by `scripts/verify-seed.py`. Set `API_URL=http://localhost:4000` to run the checks against an API that is already running.
+`scripts/smoke-test.sh` starts the API itself on port **4300** (`SMOKE_API_PORT` to change), waits for `/health`, runs 34 checks against the refreshed database (featured bundle by slug, removed routers answer 404, 84 skills, every card type non-empty, sort presets without duplicates, filters narrow, multi-valued position / league / team lists (OR inside, AND between, 400 for over-long or out-of-range lists), duplicate-free pagination, compare order, accent-insensitive search, 400 on out-of-range ids, malformed-cookie tolerance) and stops the API on exit; the manager tactic cross-fill is asserted by `scripts/verify-seed.py`. Set `API_URL=http://localhost:4000` to run the checks against an API that is already running.
 
 **There is no CI.** Run `pnpm typecheck` and `pnpm test` locally before pushing.
 
@@ -123,7 +123,7 @@ tRPC lives under `/trpc/*` (GET with a superjson-wrapped `input`, batches of at 
 
 | Procedure | Purpose |
 |---|---|
-| `player.list` | filters (card types, position, playing style in either slot / defence slot, AI styles, nation, foot, base/max overall ranges, condition, form, weak-foot accuracy/usage, height/weight/age, skills (all must be present), league/team, stat ranges at base or max, body-model ranges) + `q` accent-insensitive name search + sort presets (`trending`, `new`, `top`, `highest`, `lowest`) or any `SORT_FIELDS` column, deterministic `[sort, id]` pagination |
+| `player.list` | filters (card types, positions (`positions[]`, up to 13, any of them), playing style in either slot / defence slot, AI styles, nations / leagues / teams (`nationalityIds[]`, `leagueIds[]`, `clubIds[]`, up to 50 each, any of them; the single-value `position` / `nationalityId` / `leagueId` / `clubId` still work and are merged in), foot, base/max overall ranges, condition, form, weak-foot accuracy/usage, height/weight/age, skills (all must be present), stat ranges at base or max, body-model ranges — values inside one list are OR-ed, filters are AND-ed) + `q` accent-insensitive name search + sort presets (`trending`, `new`, `top`, `highest`, `lowest`) or any `SORT_FIELDS` column, deterministic `[sort, id]` pagination; over-long lists and out-of-range ids are a 400 |
 | `player.byId` | full card DTO for `baseId`/`cardId` (null when the base does not match) |
 | `player.search` | ranked name search (exact substring above trigram similarity) for the ⌘K palette and the compare picker |
 | `player.compare` | 1–4 cards, returned in the requested order |
@@ -172,6 +172,7 @@ Changing the R2 domain = set `R2_PUBLIC_BASE` (API) and `NEXT_PUBLIC_R2_PUBLIC_B
 - Skill labels and the Showtime / Classic grouping are display-only (`apps/web/lib/skill-labels.ts`); the database keeps the fixture names.
 - **Newer than the dump**: efootbase's Skills filter lists 28 Showtime skills, 5 of which (Beast Drive, Decisive Pass, GK Aerial Claim, GK Rush Out, Sharp Cut) are not in the dump or the `Skill` table — our Showtime group has 23. Four playing styles (Build-up GK, Deep Defender, Press Back, Tough Marker) and the AI style "Long Ranger" are likewise unavailable (listed as such, never given invented ids).
 - Japanese/Chinese name search runs only for non-ASCII queries and is not index-backed.
+- The `/players` Nation filter is shared by internal country id (`nat=14`, repeated for several nations) because the data has no ISO code column; such a link stays valid only while the country ids are unchanged (a re-seed that renumbers them changes its meaning). Position, League and Team links repeat `pos` / `league` / `team` the same way (`/players?pos=SS&pos=CF&league=4&league=12`); old single-value links keep working. Each id list holds at most 50 values: the pickers say so ("At most 50 selections") and disable further options, and a hand-written link with more keeps the 50 smallest ids.
 - Kept on purpose: the `auth` router with Google OAuth (no sign-in UI), the Pack/PackCard and Manager tables (seeded data, no API reads them except the pack name on a card), and `better-auth` (only its crypto helpers are used).
 - The eFootball fonts in `apps/web/public/fonts/` have an unknown licence.
 - Git history still contains two third-party keys that were redacted from `docs/` on 2026-10-17.

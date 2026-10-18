@@ -5,6 +5,7 @@ import {
   CARD_TYPES,
   CONDITIONS,
   FILTER_RANGE_BOUNDS,
+  MAX_FILTER_IDS,
   PHYSIQUE_FIELDS,
   POSITIONS,
   SORT_FIELDS,
@@ -23,9 +24,14 @@ export const bigIntString = z
   .refine((v) => v <= INT8_MAX, { message: "id out of range" });
 
 // Postgres int4 bound for integer filters (ids, style ids, foot) — anything larger
-// is rejected by Zod instead of blowing up inside the query engine.
+// is rejected by Zod instead of blowing up inside the query engine. A number
+// or a decimal-digit string (older callers sent query strings) is accepted;
+// `z.coerce.number()` alone would turn `null`, `true`, `""` or `[]` into 0 and
+// silently filter on id 0 instead of answering 400.
 export const INT4_MAX = 2147483647;
-const int4 = z.coerce.number().int().min(0).max(INT4_MAX);
+const int4 = z
+  .union([z.number(), z.string().regex(/^\d{1,10}$/, "expected an integer")])
+  .pipe(z.coerce.number().int().min(0).max(INT4_MAX));
 
 // Bounded optional integer for a range edge ([lo, hi] from FILTER_RANGE_BOUNDS).
 const edge = ([lo, hi]: readonly [number, number]) => z.coerce.number().int().min(lo).max(hi).optional();
@@ -48,7 +54,17 @@ export const playerListInput = z.object({
   // here; the home "Epic & Big Time" quick filter sends ["EPIC"] (Big Time cards
   // are stored under EPIC — see CARD_TYPE_LABELS).
   cardTypeIn: z.array(z.enum(CARD_TYPES)).max(CARD_TYPES.length).optional(),
+  // Position / Nation / League / Team accept several values (change
+  // multi-select-filters): the values of one list are OR-ed, the lists are
+  // AND-ed with every other filter. The single-value fields below stay for
+  // older callers; the router merges a single value into its list and
+  // de-duplicates, and the merged set must still respect the same bound
+  // (POSITIONS.length positions, MAX_FILTER_IDS ids) or the call is a 400.
   position: z.enum(POSITIONS).optional(),
+  positions: z.array(z.enum(POSITIONS)).max(POSITIONS.length).optional(),
+  nationalityIds: z.array(int4).max(MAX_FILTER_IDS).optional(),
+  clubIds: z.array(int4).max(MAX_FILTER_IDS).optional(),
+  leagueIds: z.array(int4).max(MAX_FILTER_IDS).optional(),
   // Style id in either slot (efootbase semantics, see PLAYING_STYLE_GROUPS);
   // `defensiveStyle` restricts to the defence slot only.
   playingStyle: int4.optional(),
@@ -63,7 +79,8 @@ export const playerListInput = z.object({
   weakFoot: z.enum(["0", "1", "2", "3"]).optional(),
   strongerFoot: int4.optional(),
   nationalityId: int4.optional(),
-  // clubId → Player.teamId; leagueId → Team.leagueId (implemented in the API).
+  // clubId → Player.teamId; leagueId → Team.leagueId (implemented in the API);
+  // the list forms `clubIds` / `leagueIds` / `nationalityIds` are above.
   clubId: int4.optional(),
   leagueId: int4.optional(),
   skillId: int4.optional(),

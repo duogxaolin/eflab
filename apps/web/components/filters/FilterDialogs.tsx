@@ -6,10 +6,12 @@ import type { PlayersState } from "@/lib/filter-url";
 import {
   AI_PLAYING_STYLES,
   FILTER_RANGE_BOUNDS,
+  MAX_FILTER_IDS,
   PHYSIQUE_FIELDS,
   PLAYING_STYLES,
   PLAYING_STYLES_UNAVAILABLE,
   PLAYING_STYLE_GROUPS,
+  sortIds,
   type AiPlayingStyleKey,
   type BaseStat,
   type IntRange,
@@ -17,7 +19,7 @@ import {
 } from "@eflab/shared";
 import { Modal } from "./Modal";
 import { RangeFields } from "./RangeFields";
-import { PickerList } from "./PickerList";
+import { PickerList, type PickerLoad } from "./PickerList";
 import { togglePill } from "./ToggleGroup";
 import { STAT_FILTER_GROUPS, statFilterLabel } from "./stat-filter-labels";
 import type { FilterDialogKind } from "./FiltersPanel";
@@ -25,17 +27,14 @@ import type { FilterDialogKind } from "./FiltersPanel";
 // Body-model layout: two columns as on efootbase (torso / limbs).
 const BODY_COLUMNS: readonly (readonly PhysiqueField[])[] = [PHYSIQUE_FIELDS.slice(0, 6), PHYSIQUE_FIELDS.slice(6)];
 
-function LoadStatus({ q, what }: { q: { isPending: boolean; isError: boolean; refetch: () => unknown }; what: string }) {
-  if (q.isPending) return <p className="py-3 text-center text-xs text-[var(--color-text-dim)]">Loading {what}…</p>;
-  if (q.isError) {
-    return (
-      <button type="button" onClick={() => void q.refetch()} className="w-full py-3 text-center text-xs text-[var(--color-accent)] hover:underline">
-        Could not load {what} — retry
-      </button>
-    );
-  }
-  return null;
-}
+// Query state handed to the picker, which renders the loading / retry row and
+// shows its empty-search message only once the list is loaded.
+const loadOf = (q: { isPending: boolean; isError: boolean; refetch: () => unknown }, what: string): PickerLoad => ({
+  isPending: q.isPending,
+  isError: q.isError,
+  refetch: q.refetch,
+  what,
+});
 
 /**
  * The seven filter dialogs of the players page, loaded on demand (one chunk)
@@ -189,18 +188,26 @@ function SkillsDialog({ state, update, onClose }: DialogProps) {
     .map((s) => ({ value: s.id, label: skillLabel(s), group: SKILL_GROUP_LABELS[skillGroup(s.slug)], hint: `${s.playerCount.toLocaleString("en-US")} cards` }));
   return (
     <Modal open onClose={onClose} title="Skills" panelClassName="max-w-2xl">
-      <PickerList items={items} selected={state.skills} onChange={(skills) => update({ skills })} status={<LoadStatus q={q} what="skills" />} />
+      <PickerList items={items} selected={state.skills} onChange={(skills) => update({ skills })} load={loadOf(q, "skills")} />
       <p className="mt-3 text-[11px] text-[var(--color-text-dim)]">Several skills narrow the list to cards that have all of them.</p>
     </Modal>
   );
 }
+
+// Nation / League / Team are multi-select (multi-select-filters): any of the
+// selected values matches (OR), the URL helper keeps the ids ascending and the
+// picker refuses a selection beyond MAX_FILTER_IDS (the URL / API bound) with a
+// visible message instead of letting the serialiser drop one. The Modal
+// provides the Done button, the focus trap, Escape and the focus return.
+const OR_NOTE = "Several selections widen the list to cards matching any of them.";
 
 function NationDialog({ state, update, onClose }: DialogProps) {
   const q = trpc.player.countries.useQuery(undefined, { staleTime: 60 * 60_000 });
   const items = (q.data ?? []).map((c) => ({ value: c.id, label: c.name }));
   return (
     <Modal open onClose={onClose} title="Nation">
-      <PickerList single items={items} selected={state.nat === undefined ? [] : [state.nat]} onChange={([nat]) => update({ nat })} status={<LoadStatus q={q} what="nations" />} />
+      <PickerList items={items} selected={state.nat} onChange={(nat) => update({ nat: sortIds(nat) })} max={MAX_FILTER_IDS} load={loadOf(q, "nations")} />
+      <p className="mt-3 text-[11px] text-[var(--color-text-dim)]">{OR_NOTE}</p>
     </Modal>
   );
 }
@@ -210,7 +217,8 @@ function LeagueDialog({ state, update, onClose }: DialogProps) {
   const items = (q.data ?? []).map((l) => ({ value: l.id, label: l.name }));
   return (
     <Modal open onClose={onClose} title="League">
-      <PickerList single items={items} selected={state.league === undefined ? [] : [state.league]} onChange={([league]) => update({ league })} status={<LoadStatus q={q} what="leagues" />} />
+      <PickerList items={items} selected={state.league} onChange={(league) => update({ league: sortIds(league) })} max={MAX_FILTER_IDS} load={loadOf(q, "leagues")} />
+      <p className="mt-3 text-[11px] text-[var(--color-text-dim)]">{OR_NOTE}</p>
     </Modal>
   );
 }
@@ -219,8 +227,10 @@ function TeamDialog({ state, update, onClose }: DialogProps) {
   const teams = trpc.player.teams.useQuery(undefined, { staleTime: 60 * 60_000 });
   const leagues = trpc.player.leagues.useQuery(undefined, { staleTime: 60 * 60_000 });
   const leagueName = new Map((leagues.data ?? []).map((l) => [l.id, l.name]));
-  // A chosen league narrows the team list to that league's clubs.
-  const rows = (teams.data ?? []).filter((t) => state.league === undefined || t.leagueId === state.league);
+  const teamName = new Map((teams.data ?? []).map((t) => [t.id, t.name]));
+  // Chosen leagues narrow the team list to their clubs; a team selected before
+  // the narrowing keeps its chip (labelOf) so it can still be removed.
+  const rows = (teams.data ?? []).filter((t) => state.league.length === 0 || (t.leagueId !== null && state.league.includes(t.leagueId)));
   const items = rows.map((t) => ({
     value: t.id,
     label: t.name,
@@ -229,13 +239,15 @@ function TeamDialog({ state, update, onClose }: DialogProps) {
   return (
     <Modal open onClose={onClose} title="Team">
       <PickerList
-        single
         items={items}
-        selected={state.team === undefined ? [] : [state.team]}
-        onChange={([team]) => update({ team })}
-        status={<LoadStatus q={teams} what="teams" />}
-        emptyText={state.league !== undefined ? "No team of the selected league matches." : "No team matches."}
+        selected={state.team}
+        onChange={(team) => update({ team: sortIds(team) })}
+        labelOf={(id) => teamName.get(id) ?? `#${id}`}
+        max={MAX_FILTER_IDS}
+        load={loadOf(teams, "teams")}
+        emptyText={state.league.length > 0 ? `No team of the selected league${state.league.length > 1 ? "s" : ""} matches.` : "No team matches."}
       />
+      <p className="mt-3 text-[11px] text-[var(--color-text-dim)]">{OR_NOTE}</p>
     </Modal>
   );
 }

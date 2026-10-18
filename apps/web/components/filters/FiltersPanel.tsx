@@ -15,6 +15,7 @@ import {
   POSITIONS,
   WEAK_FOOT_ACCURACY_LABELS,
   WEAK_FOOT_USAGE_LABELS,
+  sortPositions,
   type CardType,
   type Condition,
   type Position,
@@ -51,10 +52,13 @@ export function FiltersPanel({
   conditionIcon?: (letter: string) => string;
 }) {
   // Names for the launcher summaries (cached lists; the dialogs share them).
-  const countries = trpc.player.countries.useQuery(undefined, { staleTime: 60 * 60_000, enabled: state.nat !== undefined });
-  const leagues = trpc.player.leagues.useQuery(undefined, { staleTime: 60 * 60_000, enabled: state.league !== undefined });
-  const teams = trpc.player.teams.useQuery(undefined, { staleTime: 60 * 60_000, enabled: state.team !== undefined });
+  const countries = trpc.player.countries.useQuery(undefined, { staleTime: 60 * 60_000, enabled: state.nat.length > 0 });
+  const leagues = trpc.player.leagues.useQuery(undefined, { staleTime: 60 * 60_000, enabled: state.league.length > 0 });
+  const teams = trpc.player.teams.useQuery(undefined, { staleTime: 60 * 60_000, enabled: state.team.length > 0 });
   const skills = trpc.skill.list.useQuery({}, { staleTime: 60 * 60_000, enabled: state.skills.length > 0 });
+  // "Argentina · Brazil" for the multi-valued pickers (ids until the list loads).
+  const namesOf = (ids: readonly number[], rows: ReadonlyArray<{ id: number; name: string }> | undefined) =>
+    ids.map((id) => rows?.find((r) => r.id === id)?.name ?? `#${id}`).join(" · ");
 
   const statCount = Object.keys(state.stats).length;
   const bodyCount = Object.keys(state.body).length;
@@ -71,9 +75,9 @@ export function FiltersPanel({
     { kind: "body", label: "Body Model", summary: bodyCount ? `${bodyCount} range${bodyCount > 1 ? "s" : ""}` : "" },
     { kind: "style", label: "Playing Style", summary: styleSummary.join(" · ") },
     { kind: "skills", label: "Skills", summary: skillNames.join(" · ") },
-    { kind: "nation", label: "Nation", summary: state.nat === undefined ? "" : countries.data?.find((c) => c.id === state.nat)?.name ?? `#${state.nat}` },
-    { kind: "league", label: "League", summary: state.league === undefined ? "" : leagues.data?.find((l) => l.id === state.league)?.name ?? `#${state.league}` },
-    { kind: "team", label: "Team", summary: state.team === undefined ? "" : teams.data?.find((t) => t.id === state.team)?.name ?? `#${state.team}` },
+    { kind: "nation", label: "Nation", summary: namesOf(state.nat, countries.data) },
+    { kind: "league", label: "League", summary: namesOf(state.league, leagues.data) },
+    { kind: "team", label: "Team", summary: namesOf(state.team, teams.data) },
   ];
 
   const b = FILTER_RANGE_BOUNDS;
@@ -98,13 +102,14 @@ export function FiltersPanel({
         ))}
       </ul>
 
+      {/* 13 independent toggles (aria-pressed): a card matches when it plays
+          any selected position (multi-select-filters). */}
       <ToggleGroup<Position>
         label="Position"
-        single
         columns={3}
         options={POSITION_GRID.map((p) => ({ value: p, label: p }))}
-        selected={state.pos ? [state.pos] : []}
-        onChange={([pos]) => update({ pos: pos ?? "" })}
+        selected={state.pos}
+        onChange={(pos) => update({ pos: sortPositions(pos) })}
         buttonClassName="h-9 font-semibold"
       />
 
