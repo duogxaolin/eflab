@@ -88,7 +88,11 @@ The repository SHALL provide one command that seeds and then cross-fills, and th
 - **THEN** the database holds 50,694 players (50,691 plus the 3 eFHUB-only players), at least 1,475 managers with non-zero tactic ratings, and tier badges on 10,745 players.
 
 ### Requirement: Cross-Fill Correctness and Safety
-The cross-fill SHALL write `maxGkClearing` whenever it writes `gkClearing`, SHALL merge managers by exact id before name matching so no manager receives another version's ratings, and SHALL pass values from the eFHUB file to the database only as bound parameters or after strict validation.
+The cross-fill SHALL write `maxGkClearing` whenever it writes `gkClearing`, SHALL merge managers by exact id before name matching so no manager receives another version's ratings, SHALL leave a manager without tactic ratings when its id is not in the eFHUB file and the eFHUB entry of its name is another manager card in the database, and SHALL pass values from the eFHUB file to the database only as bound parameters or after strict validation.
+
+#### Scenario: New card of a known coach
+- **WHEN** a picker manager card whose id is not in the eFHUB file shares its name with another manager card that the eFHUB file contains
+- **THEN** the cross-fill leaves the new card's tactic ratings at zero, logs a warning naming both cards, and does not copy the other card's ratings.
 
 #### Scenario: Hostile input
 - **WHEN** an eFHUB row contains a player id with SQL metacharacters

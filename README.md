@@ -87,7 +87,7 @@ The 2026-10-18/19 re-dump (rewritten `scripts/efootbase_dump.py`) added 2,284 ne
 Seed behaviour:
 
 - `pnpm db:seed` upserts Player/Manager (`INSERT … ON CONFLICT DO UPDATE`) and replaces the catalogue tables inside **one transaction**; it never writes the cross-fill-owned columns and never touches user tables (`--reset-users` opts in; `--prune` deletes players missing from the dump).
-- `pnpm db:crossfill` fills what efootbase cannot expose: manager tactics, stars/reputation/overallPotential/gkClearing, per-position ratings, community tiers and 3 extra players. A manager card that is not in the eFHUB file gets the tactics of the best eFHUB version of the same coach's name — after the next cross-fill that applies to the new Jürgen Klopp and Cristian Chivu picker cards, which then carry the other Klopp / Chivu card's numbers (not verified for these cards).
+- `pnpm db:crossfill` fills what efootbase cannot expose: manager tactics, stars/reputation/overallPotential/gkClearing, per-position ratings, community tiers and 3 extra players. A manager card that is not in the eFHUB file gets the tactics of the best eFHUB version of the same coach's name only when that version is not another manager card in the database; otherwise it stays without tactics and the cross-fill warns. That is the case for the new Jürgen Klopp and Cristian Chivu picker cards (eFHUB's Klopp / Chivu entries are the older Klopp / Chivu cards): they keep no tactics.
 - `pnpm db:refresh` = both, in order. Re-runnable.
 - `pnpm db:push` is for schema experiments only (no `--accept-data-loss`); the database is migration-managed.
 

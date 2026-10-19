@@ -47,13 +47,12 @@ export function skillLabel(skill: { slug: string; name: string }): string {
 }
 
 /**
- * The description to show. Without the snapshot, the 21 fixture blurbs of the
- * former "Premium" category start with an invented tier prefix ("Premium — …");
- * it is dropped for display so no made-up tier label reaches the page.
+ * The description to show — the stored text (efootbase's, or the fixture's for a
+ * database seeded without the snapshot). The fixture carries no tier label, so
+ * nothing is rewritten here.
  */
 export function skillDescription(skill: { description: string }): string {
-  const stripped = skill.description.replace(/^Premium(?: skill)?\s*[—–-]\s*/i, "");
-  return stripped.charAt(0).toUpperCase() + stripped.slice(1);
+  return skill.description;
 }
 
 /** Section of a skill from its stored group. */

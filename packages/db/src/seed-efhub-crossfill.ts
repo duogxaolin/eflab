@@ -10,16 +10,18 @@
 //                THAT version's ratings (no cross-version leakage);
 //             b) name — art rows (efootbase APK fixtures) still without tactics are
 //                matched by name through ALIASES (eFHUB abbreviates / strips
-//                accents) and get the best-MarketValue version of that name. An
-//                art row whose card is newer than the eFHUB file therefore
-//                inherits the tactics of ANOTHER card of the same coach — same
-//                person, not necessarily this card's numbers (eFHUB versions of
-//                one coach can differ a lot). efootbase-static-data: neither new
-//                picker card is an eFHUB id; Jürgen Klopp 17609902885263 gets the
-//                single eFHUB Klopp entry (17605071047055 = the older Klopp art
-//                card) and Cristian Chivu 17610171323785 gets the better of eFHUB's
-//                two Chivu entries (17603460437385 = the other Chivu art card,
-//                MarketValue 58, over 103817, MarketValue 7);
+//                accents) and get the best-MarketValue version of that name —
+//                UNLESS that best version's id is another Manager row (another card
+//                of the same coach, already filled by its own id in a). Such a row
+//                stays at 0 (no tactics) with a warning: efootbase has no tactic data
+//                for managers, and copying another card's numbers would show
+//                ratings that are not this card's (eFHUB versions of one coach can
+//                differ a lot). No fallback to a lower version either.
+//                efootbase-static-data: the picker cards Jürgen Klopp
+//                17609902885263 (eFHUB's only Klopp entry is 17605071047055, the
+//                older Klopp art card) and Cristian Chivu 17610171323785 (eFHUB's
+//                best Chivu entry is 17603460437385, the other Chivu art card) are
+//                not eFHUB ids and therefore stay without tactics;
 //             c) create — every remaining eFHUB coach name (best version) becomes a
 //                no-art manager, unless an art row already carries that name.
 //           Stale no-art duplicates of an art row are deleted.
@@ -116,10 +118,10 @@ const ALIASES: Readonly<Record<string, string>> = {
   // different coach — the old alias suppressed him).
   "roberto martínez": "r. martinez",
   "vincenzo montella": "v. montella",
-  // efootbase-static-data: the 2026-10 Klopp picker card (17609902885263) is not an
-  // eFHUB coach id; eFHUB strips the umlaut. eFHUB has one Klopp entry
-  // (17605071047055, the older Klopp art card, matched by id), so this alias makes
-  // the new card inherit that card's tactics (see phase 1 b).
+  // efootbase-static-data: eFHUB strips the umlaut. Its one Klopp entry is the older
+  // Klopp art card (17605071047055, matched by id), so the 2026-10 picker card
+  // (17609902885263, not an eFHUB id) is NOT filled from it (phase 1 b) — the alias
+  // only names the reason in the log and keys the duplicate check.
   "jürgen klopp": "jurgen klopp",
 };
 const efhubNameKey = (eflabName: string): string => {
@@ -191,21 +193,27 @@ async function main(): Promise<void> {
     byId++;
   }
 
-  // b) name — art rows not matched by id get the best version of their name.
+  // b) name — art rows not matched by id get the best version of their name, unless
+  //    that version is another Manager row's own card (then: no tactics, warned).
+  const existingIds = new Set(existing.map((m) => m.id.toString()));
   let byName = 0;
   const unmatchedArt: string[] = [];
+  const otherCardArt: string[] = [];
   for (const m of existing) {
     if (m.imageUrl == null || filledIds.has(m.id.toString())) continue;
     const c = bestByName.get(efhubNameKey(m.name));
     if (!c) { unmatchedArt.push(m.name); continue; }
+    if (existingIds.has(String(c.Id))) { otherCardArt.push(`${m.name} (${m.id} → ${c.Id})`); continue; }
     await prisma.manager.update({ where: { id: m.id }, data: tacticOf(c) });
     filledIds.add(m.id.toString());
     byName++;
   }
   if (unmatchedArt.length > 0) console.log(`  ⚠ art managers with no efhub coach (tactic stays 0): ${unmatchedArt.join(", ")}`);
+  if (otherCardArt.length > 0) {
+    console.log(`  ⚠ art managers with no efhub coach of their own (tactic stays 0 — the efhub entry of that name belongs to another card in the table, its tactics are not copied): ${otherCardArt.join(", ")}`);
+  }
 
   // c) create no-art managers for every remaining coach name (best version).
-  const existingIds = new Set(existing.map((m) => m.id.toString()));
   let created = 0;
   for (const [key, c] of bestByName) {
     if (artNameKeys.has(key) || existingIds.has(String(c.Id))) continue;
@@ -215,14 +223,15 @@ async function main(): Promise<void> {
     created++;
   }
 
-  // Stale no-art duplicates of an art row (from runs before the name merge). Only
-  // no-art rows are ever deleted; Build.managerId is ON DELETE SET NULL.
+  // Stale no-art duplicates of an art row (from runs before the name merge, or eFHUB
+  // versions of a coach whose own picker card arrived later). Only no-art rows are
+  // ever deleted; no table references Manager (no foreign key points at it).
   const noArt = await prisma.manager.findMany({ where: { imageUrl: null }, select: { id: true, name: true } });
   const dupIds = noArt.filter((m) => artNameKeys.has(m.name.toLowerCase())).map((m) => m.id);
   if (dupIds.length > 0) await prisma.manager.deleteMany({ where: { id: { in: dupIds } } });
   const withTactics = await prisma.manager.count({ where: { possessionGame: { gt: 0 } } });
   const total = await prisma.manager.count();
-  console.log(`  managers: ${byId} filled by id + ${byName} by name + ${created} created (no art) − ${dupIds.length} duplicates = ${total} total, ${withTactics} with tactics`);
+  console.log(`  managers: ${byId} filled by id + ${byName} by name + ${created} created (no art) − ${dupIds.length} duplicates = ${total} total, ${withTactics} with tactics (${otherCardArt.length} left empty: efhub entry is another card)`);
 
   // ── Phase 2: Player stars / reputation / overallPotential / gkClearing / ratings ──
   console.log("\nphase 2: cross-fill Player stars/reputation/overallPotential/gkClearing/ratings…");

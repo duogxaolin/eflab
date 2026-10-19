@@ -27,9 +27,17 @@ alias / name) and deletes such twins, so:
   - a twin of a tactic-less art row that eFHUB cannot fill (id and alias key unknown
     to eFHUB, read read-only from the SQLite file) is a failure too — the cross-fill
     would never remove it (usually a missing alias);
+  - an art row whose own id is not an eFHUB coach id and whose name's best eFHUB
+    version (alias key, MarketValue DESC, Id ASC — the cross-fill's choice) is
+    ANOTHER Manager row's card is left without tactics on purpose (the cross-fill
+    never copies another card's tactics): it is listed as info, must have no
+    tactics, and is neither pending nor a "missing alias" failure. Today: the
+    2026-10 picker cards Jürgen Klopp 17609902885263 and Cristian Chivu
+    17610171323785 (their eFHUB entries are the older Klopp / Chivu art cards);
   - a twin of a tactic-less art row that eFHUB CAN fill is "pending": the seed added
-    that art row after the last cross-fill (efootbase-static-data's 4 picker
-    managers), and the next `pnpm db:crossfill` fills it and deletes the twin. The
+    that art row after the last cross-fill (efootbase-static-data's Makino Tomoaki
+    and R. Rodríguez picker cards, eFHUB ids), and the next `pnpm db:crossfill`
+    fills it and deletes the twin (no-art 104079 / 100528). The
     database alone cannot tell "the cross-fill has not run since that seed" from
     "the cross-fill ran and failed to fill it" (no run marker is stored), so pending
     rows are listed as info by default and are failures under --after-crossfill,
@@ -205,14 +213,22 @@ def database_url(cli: str | None) -> str:
 
 
 # ---------------------------------------------------------------- manager duplicates
-def efhub_coach_names(path: Path) -> dict[str, str] | None:
-    """eFHUB coach id → lower-case coachesName (read-only SQLite); None when the file is missing."""
+def efhub_coaches(path: Path) -> tuple[dict[str, str], dict[str, str]] | None:
+    """eFHUB coach id → lower-case coachesName, and lower-case name → id of its best
+    version (MarketValue DESC, Id ASC — the cross-fill's order), read-only SQLite;
+    None when the file is missing."""
     if not path.exists():
         return None
     con = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
     try:
-        return {str(i): n.lower() for i, n in con.execute("SELECT Id, coachesName FROM coaches WHERE coachesName != 'Manager'")
-                if isinstance(n, str) and n.strip()}
+        names: dict[str, str] = {}
+        best: dict[str, str] = {}
+        for i, n in con.execute("SELECT Id, coachesName FROM coaches WHERE coachesName != 'Manager' "
+                                "ORDER BY MarketValue DESC, Id ASC"):
+            if isinstance(i, int) and i > 0 and isinstance(n, str) and n.strip():
+                names[str(i)] = n.lower()
+                best.setdefault(n.lower(), str(i))
+        return names, best
     finally:
         con.close()
 
@@ -221,12 +237,15 @@ def check_manager_twins(db: "Psql", efhub_path: Path, after_crossfill: bool) -> 
     """No no-art manager may duplicate an art manager (see the header, "Manager duplicates")."""
     rows = db.rows('SELECT id::text, name, lower(unaccent(name)), ("imageUrl" IS NOT NULL)::text, '
                    '("possessionGame" > 0)::text FROM "Manager"')
-    coach = efhub_coach_names(efhub_path)
-    coach_names = set(coach.values()) if coach is not None else set()
+    efhub = efhub_coaches(efhub_path)
+    coach, best_by_name = efhub if efhub is not None else (None, {})
+    manager_ids = {r[0] for r in rows}
     noart = [(r[0], r[1], {r[1].lower(), r[2]}) for r in rows if r[3] == "false"]
     hard: list[str] = []          # duplicates the cross-fill should already have removed, or never will
     pending: list[str] = []       # art rows the next cross-fill fills (seeded after the last cross-fill)
     pending_twins: list[str] = []  # no-art rows the next cross-fill deletes
+    other_card: list[str] = []    # art rows left without tactics on purpose (eFHUB entry = another card)
+    copied: list[str] = []        # such rows that nevertheless carry tactics
     for a_id, a_name, a_unaccent, a_art, a_tactics in rows:
         if a_art != "true":
             continue
@@ -236,8 +255,16 @@ def check_manager_twins(db: "Psql", efhub_path: Path, after_crossfill: bool) -> 
             keys.add(coach[a_id])
         twins = [f"{n_name} ({n_id})" for n_id, n_name, n_keys in noart if n_keys & keys]
         has_tactics = a_tactics == "true"
+        best_id = best_by_name.get(alias_key)
+        if coach is not None and a_id not in coach and best_id is not None and best_id != a_id and best_id in manager_ids:
+            # The cross-fill skips this row (phase 1 b): its name's eFHUB entry is another card.
+            other_card.append(f"{a_name} ({a_id} → {best_id})")
+            if has_tactics:
+                copied.append(f"{a_name} ({a_id})")
+            pending_twins += [f"{t} of {a_name} ({a_id})" for t in twins]
+            continue
         # Without the eFHUB file a tactic-less art row can only be assumed to be pending.
-        fillable = coach is None or a_id in coach or alias_key in coach_names
+        fillable = coach is None or a_id in coach or alias_key in best_by_name
         if not has_tactics and fillable:
             pending.append(f"{a_name} ({a_id})")
             pending_twins += [f"{t} of {a_name} ({a_id})" for t in twins]
@@ -246,6 +273,10 @@ def check_manager_twins(db: "Psql", efhub_path: Path, after_crossfill: bool) -> 
     check(not hard, f"no no-art manager duplicates an art manager ({len(hard)} found{': ' + ', '.join(hard[:5]) if hard else ''})")
     if coach is None:
         print(f"  info {efhub_path} missing — every art manager without tactics is treated as pending")
+    else:
+        check(not copied, f"no art manager carries another card's eFHUB tactics ({', '.join(copied) or 'none'})")
+        if other_card:
+            print(f"  info art managers left without tactics on purpose (their eFHUB entry is another card): {', '.join(other_card)}")
     if after_crossfill:
         check(not pending, f"--after-crossfill: no art manager still waits for its tactics ({', '.join(pending) or 'none'})")
         check(not pending_twins, f"--after-crossfill: no pending no-art twin remains ({', '.join(pending_twins) or 'none'})")
@@ -544,7 +575,10 @@ def main() -> int:
         # 65 art managers + 1,410 eFHUB-only coach names (1,454 distinct names in the
         # 2026-10 eFHUB file, 44 of them already carried by an art row) = 1,475. The
         # spec's "≥1,478" was measured on the old cross-fill, which created no-art
-        # duplicates of alias-merged art rows.
+        # duplicates of alias-merged art rows. With the 69 picker managers a cross-fill
+        # gives 1,477 rows and still 1,475 with tactics: Makino Tomoaki and R. Rodríguez
+        # are filled by id (their no-art twins 104079 / 100528 are deleted), Jürgen
+        # Klopp 17609902885263 and Cristian Chivu 17610171323785 stay empty on purpose.
         tactics = db.count('SELECT count(*) FROM "Manager" WHERE "possessionGame" > 0')
         check(tactics >= 1475, f"managers with non-zero tactics {tactics} >= 1475")
         # The art managers legitimately contain several versions of one coach
