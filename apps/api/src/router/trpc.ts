@@ -1,6 +1,7 @@
 import { initTRPC, TRPCError } from "@trpc/server";
 import { superjson } from "@eflab/shared";
 import { isDev } from "../env.js";
+import { adminCsrfOk } from "../auth/admin.js";
 import type { CreateAppContext } from "./context.js";
 
 const t = initTRPC.context<CreateAppContext>().create({
@@ -49,3 +50,35 @@ export const protectedProcedure = t.procedure.use(({ ctx, next }) => {
   }
   return next({ ctx: { ...ctx, session: ctx.session } });
 });
+
+// ---- Admin procedures (openspec admin-sync-worker, capability admin-access) ----
+// Independent of the visitor session: the admin session comes from the
+// `eflab_admin` cookie (ctx.getAdmin), never from `ctx.session`. Every admin
+// response is `Cache-Control: no-store` (also set by the onSend hook in
+// server.ts, which covers batched calls and errors raised before a procedure).
+
+const adminNoStore = t.middleware(({ ctx, next }) => {
+  ctx.res.header("Cache-Control", "no-store");
+  return next();
+});
+
+// CSRF: a state-changing admin request needs `x-eflab-admin: 1` and an allowed Origin.
+const adminCsrf = t.middleware(({ ctx, type, next }) => {
+  if (type === "mutation" && !adminCsrfOk(ctx.req)) {
+    throw new TRPCError({ code: "FORBIDDEN", message: "Admin request refused: the x-eflab-admin header or an allowed Origin is missing" });
+  }
+  return next();
+});
+
+/** Admin procedures that run without a session — only `admin.signIn`. */
+export const adminPublicProcedure = t.procedure.use(adminNoStore).use(adminCsrf);
+
+/** Every other admin procedure: 401 without a valid admin session, then the CSRF guard. */
+export const adminProcedure = t.procedure
+  .use(adminNoStore)
+  .use(async ({ ctx, next }) => {
+    const admin = await ctx.getAdmin();
+    if (!admin) throw new TRPCError({ code: "UNAUTHORIZED", message: "Admin sign-in required" });
+    return next({ ctx: { ...ctx, admin } });
+  })
+  .use(adminCsrf);

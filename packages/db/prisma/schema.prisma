@@ -540,3 +540,116 @@ model Account {
   @@unique([providerId, accountId])
   @@index([userId])
 }
+
+// ---- Admin area + data sync worker (openspec change admin-sync-worker) ----
+// Admin accounts are separate from the visitor User / Session / Account tables
+// (capability admin-access): created by `pnpm admin:create`, never by the web.
+// Migration 20261019230000_admin_sync_worker also creates, in raw SQL that
+// Prisma does not model (a future `migrate diff` against the database will
+// propose dropping them — keep them):
+//   · "SyncRun_one_running" — partial unique index: at most one RUNNING run;
+//   · CHECK constraints on SyncConfig (single row id 1, schedule ranges) and on
+//     SyncRun.logTail (≤ 64 KB);
+//   · the single SyncConfig row (id 1, defaults).
+
+enum SyncKind {
+  CHECK
+  INCREMENTAL
+  FULL
+}
+
+enum SyncTrigger {
+  SCHEDULE
+  MANUAL
+}
+
+enum SyncStatus {
+  QUEUED
+  RUNNING
+  OK
+  FAILED
+  BLOCKED
+  CANCELLED
+}
+
+model Admin {
+  id                Int       @id @default(autoincrement())
+  // 3–32 characters from a-z 0-9 _ . - (checked by the CLI, ADMIN_USERNAME_RE in @eflab/shared).
+  username          String    @unique
+  // scrypt$N$r$p$salt$hash (packages/db/src/admin-auth.ts) — never the password.
+  passwordHash      String
+  createdAt         DateTime  @default(now())
+  passwordChangedAt DateTime  @default(now())
+  // Set by `pnpm admin:disable`: sign-in refused, every session stops working.
+  disabledAt        DateTime?
+  // Brute-force protection: consecutive failures; 5 → lockedUntil = now + 15 min.
+  failedLogins      Int       @default(0)
+  lockedUntil       DateTime?
+  lastLoginAt       DateTime?
+  sessions          AdminSession[]
+  requestedRuns     SyncRun[]
+  configUpdates     SyncConfig[]
+}
+
+model AdminSession {
+  id          Int      @id @default(autoincrement())
+  adminId     Int
+  // SHA-256 hex of the random cookie token (`eflab_admin`); the token itself is never stored.
+  tokenDigest String   @unique
+  createdAt   DateTime @default(now())
+  // Sliding expiry: 12 h after lastSeenAt (updated at most once a minute).
+  lastSeenAt  DateTime @default(now())
+  // Absolute expiry: createdAt + 7 days.
+  expiresAt   DateTime
+  ipAddress   String?
+  userAgent   String?
+  admin       Admin    @relation(fields: [adminId], references: [id], onDelete: Cascade)
+
+  @@index([adminId])
+  @@index([expiresAt])
+}
+
+// Single row (id 1, inserted by the migration): the sync schedule, the "blocked
+// until" window set when efootbase refuses a request, and the worker heartbeat.
+model SyncConfig {
+  id                     Int       @id @default(1)
+  enabled                Boolean   @default(true)
+  // Incremental sync interval, minutes (15–1440).
+  incrementalIntervalMin Int       @default(360)
+  // Weekly full sync window: weekday 0–6 (0 = Sunday, UTC) and hour 0–23 (UTC).
+  fullWeekday            Int       @default(0)
+  fullHourUtc            Int       @default(3)
+  blockedUntil           DateTime?
+  blockedReason          String?
+  workerHeartbeatAt      DateTime?
+  updatedAt              DateTime  @default(now())
+  updatedById            Int?
+  updatedBy              Admin?    @relation(fields: [updatedById], references: [id], onDelete: SetNull)
+}
+
+model SyncRun {
+  id              Int         @id @default(autoincrement())
+  kind            SyncKind
+  trigger         SyncTrigger
+  status          SyncStatus  @default(QUEUED)
+  // Admin who queued a MANUAL run; null for SCHEDULE runs.
+  requestedById   Int?
+  requestedBy     Admin?      @relation(fields: [requestedById], references: [id], onDelete: SetNull)
+  queuedAt        DateTime    @default(now())
+  startedAt       DateTime?
+  finishedAt      DateTime?
+  // Written by the worker while the run executes (stale RUNNING rows → FAILED "worker restarted").
+  heartbeatAt     DateTime?
+  cancelRequested Boolean     @default(false)
+  error           String?
+  // Redacted log tail, ≤ 64 KB (UTF-8 bytes; CHECK in the migration).
+  logTail         String      @default("")
+  // Run statistics / check results — shape: SyncRunStats in @eflab/shared.
+  stats           Json        @default("{}")
+  watermarkBefore DateTime?
+  watermarkAfter  DateTime?
+
+  @@index([queuedAt(sort: Desc)])
+  @@index([status])
+  @@index([kind, startedAt])
+}

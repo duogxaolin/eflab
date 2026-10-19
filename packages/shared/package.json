@@ -12,13 +12,14 @@
     "./constants": "./src/constants.ts",
     "./superjson": "./src/superjson.ts",
     "./types": "./src/types.ts",
-    "./helpers": "./src/helpers.ts"
+    "./helpers": "./src/helpers.ts",
+    "./sync": "./src/sync.ts"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json --noEmit",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "tsc -p tsconfig.json --noEmit",
-    "test": "tsx src/progression.test.ts && tsx src/helpers.test.ts",
+    "test": "tsx src/progression.test.ts && tsx src/helpers.test.ts && tsx src/sync.test.ts",
     "clean": "rm -rf dist .turbo"
   },
   "dependencies": {
