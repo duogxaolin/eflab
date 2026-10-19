@@ -137,7 +137,7 @@ export function proficiencyNote(level: number): string {
 /** Limits of the model (spec "Honest Limits"); the population figures are
  *  the read-only check of change efootbase-exact-model-managers. */
 export const LIMITS_NOTE =
-  "Stats, height and weak-foot accuracy come from the database dump. Cards other than the five measured ones were checked in bulk only: the formula equals the dump's overall on 99.9 % of the 40,516 cards without progression; fed the eFHUB max-level stats, it equals efootbase's max-level overall on 95.1 % of 9,843 cards (within 1 on 98.4 %). One deliberate difference: efootbase's own sheet limits base + training + bonus to 99 before the boosters, while eFootLab keeps a stat trained past 99, because the game's own max-level overall agrees better with keeping it (94 against 65 of the 99 cards where it matters). On a build that trains a stat past 99 that stat reads higher than on efootbase's sheet, and the overall up to 1 higher on the opening Max OVR build (108 of 10,175 cards; more is possible on hand-made builds). Not modelled: Position Training, In-Match Roles and manager tactics.";
+  "Stats, height and weak-foot accuracy come from the database dump. Cards other than the five measured ones were checked in bulk only: the formula equals the dump's overall on 99.9 % of the 40,516 cards without progression; fed the eFHUB max-level stats, it equals efootbase's max-level overall on 95.1 % of 9,843 cards (within 1 on 98.4 %). As on efootbase's sheet, base + training + bonus stops at 99 before the boosters: stat points bought past 99 are not counted (a stat's tooltip shows the part cut). Not modelled: Position Training, In-Match Roles and manager tactics.";
 
 export function ProgressionPanel({
   player,
@@ -595,7 +595,7 @@ export function ProgressionPanel({
           Reset
         </button>
         <span className="text-[10px] text-[var(--color-text-dim)]">
-          Max OVR picks the allocation with the highest weighted stat sum of the formula at {state.position} for the {pts(budget)}-point budget, before the Manager Proficiency bonus, so it is the same build at every proficiency and with any manager (as on efootbase); with the bonus a hand-made build can read up to 1 higher. Reset zeroes every category and keeps the proficiency and the manager. Jumping rises with Aerial Strength and with Goalkeeper 1 alike.
+          Max OVR picks the allocation with the highest weighted stat sum of the formula at {state.position} for the {pts(budget)}-point budget, before the Manager Proficiency bonus and the cut at 99, so it is the same build at every proficiency and with any manager (as on efootbase); a hand-made build can read up to 1 higher, or up to 2 when the preset trains a stat past 99 (those points are not counted). Reset zeroes every category and keeps the proficiency and the manager. Jumping rises with Aerial Strength and with Goalkeeper 1 alike.
         </span>
       </div>
     </section>

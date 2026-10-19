@@ -59,7 +59,7 @@
   /* ---- Stat tier colours — the SINGLE source for every tier colour.
      Consumers: statTierClass/statTierBg (lib/card-display.ts) and the
      `.text-stat-tier-*` / `.bg-stat-tier-*` aliases below. ---- */
-  --color-tier-max: #ff2fb4;     /* 100+ (trained past 99 — efootbase magenta) */
+  --color-tier-max: #ff2fb4;     /* 100+ (past 99 through boosters / a manager's +1 — efootbase magenta) */
   --color-tier-elite: #00ffb4;   /* 90–99 */
   --color-tier-high: #96ff00;    /* 80–89 */
   --color-tier-mid: #ffbe00;     /* 70–79 */

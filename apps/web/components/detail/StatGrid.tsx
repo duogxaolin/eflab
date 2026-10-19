@@ -19,9 +19,11 @@ import {
 
 // Three-column stat grid of the player detail page (efootbase layout):
 // Attacking / Defending / Strength, one row per stat with the tier colour of
-// the value (five tiers, ≥ 100 magenta), a cyan "+N" chip for a booster bump,
-// a lime "+1" chip for the selected manager, a tooltip that splits the value
-// into base, training, Manager Proficiency, booster and manager parts, and
+// the value (five tiers, ≥ 100 magenta — reached only through boosters or the
+// manager, training stops at 99), a cyan "+N" chip for a booster bump, a lime
+// "+1" chip for the selected manager, a tooltip that splits the value into
+// base, training, the cut at 99, Manager Proficiency, booster and manager
+// parts, and
 // click-to-highlight — a stat row or a category chip selects the training
 // category it belongs to and dims every other row.
 
@@ -69,6 +71,8 @@ interface SectionProps {
   boosterDeltas?: Record<BaseStat, number>;
   /** Training lift per stat (tooltip only — it is already inside the value). */
   trainingDeltas?: Record<BaseStat, number>;
+  /** Cut to 99 per stat, 0 or negative (tooltip only — inside the value). */
+  capDeltas?: Record<BaseStat, number>;
   /** Manager Proficiency bonus per stat (tooltip only — inside the value too). */
   proficiencyDeltas?: Record<BaseStat, number>;
   /** +1 of the selected manager per stat (shown as the lime "+1" chip). */
@@ -77,7 +81,7 @@ interface SectionProps {
   onHighlight: (next: StatHighlight) => void;
 }
 
-function StatSection({ title, statKeys, values, boosterDeltas, trainingDeltas, proficiencyDeltas, managerDeltas, highlight, onHighlight }: SectionProps) {
+function StatSection({ title, statKeys, values, boosterDeltas, trainingDeltas, capDeltas, proficiencyDeltas, managerDeltas, highlight, onHighlight }: SectionProps) {
   return (
     <div className="space-y-2 min-w-0">
       <h3 className="text-xs font-bold uppercase tracking-wider text-white border-b border-[var(--color-line)] pb-1.5">{title}</h3>
@@ -89,16 +93,18 @@ function StatSection({ title, statKeys, values, boosterDeltas, trainingDeltas, p
           const hit = highlight !== null && cats.includes(highlight);
           const dim = highlight !== null && !hit;
           const lift = trainingDeltas?.[st] ?? 0;
+          const cut = capDeltas?.[st] ?? 0;
           const bonus = proficiencyDeltas?.[st] ?? 0;
           const boost = boosterDeltas?.[st] ?? 0;
           const mgr = managerDeltas?.[st] ?? 0;
           const tipParts = [
             lift ? `+${lift} from ${catLabels} training` : null,
+            cut ? `−${-cut} cut at 99 (training above 99 is not counted)` : null,
             bonus ? `+${bonus} Manager Proficiency` : null,
             boost ? `+${boost} booster` : null,
             mgr ? `+${mgr} manager` : null,
           ].filter(Boolean);
-          const tip = tipParts.length > 0 ? `${statLabel(st)} ${val}: base ${val - lift - bonus - boost - mgr}, ${tipParts.join(", ")}` : undefined;
+          const tip = tipParts.length > 0 ? `${statLabel(st)} ${val}: base ${val - lift - cut - bonus - boost - mgr}, ${tipParts.join(", ")}` : undefined;
           return (
             <button
               key={st}

@@ -12,14 +12,12 @@
 //   · the nth stat point in a category costs ceil(n / 4) half-points, i.e.
 //     0.5 for points 1–4, 1 for 5–8, 1.5 for 9–12 … (Σ cost = levelCap − 1 on
 //     all 32,601 hub cards with a cap ≥ 2);
-//   · stat pipeline, for s₀ = base + training:
-//       s₁ = s₀                         if s₀ ≥ 99 (no bonus, not cut back)
-//          = min(99, s₀ + band(level, s₀)) otherwise   (PROFICIENCY_BANDS)
+//   · stat pipeline, for s₀ = base + training (efootbase's client):
+//       s₁ = min(99, s₀ + band(level, s₀))   (PROFICIENCY_BANDS; band = 0 at 99+)
 //       final = s₁ + active boosters + (1 on each pill stat of a selected manager)
-//     boosters and the manager's +1 come after the cap and may exceed 99;
-//     efootbase's client cuts s₀ above 99 back to 99, this engine does not —
-//     no measured reading covers that case and the game's own max-level
-//     overall agrees with not cutting it (docs/efootbase-exact-model.md);
+//     a stat trained to 99 or above therefore reads 99 before the boosters
+//     (98 + 4 training → 99); only the boosters and the manager's +1 come
+//     after the cap and may take a stat above 99;
 //   · overall at a position = the exact integer-weight formula (`exactOvr`):
 //     every stat scaled by 1 / 0.97 / 0.85 (full / half / no proficiency),
 //     rounded half up and limited to 0..255; each stat and the weak-foot term
@@ -136,6 +134,15 @@ export function applyManagerProficiency(
 ): StatVector {
   const deltas = zeroStats();
   for (const s of BASE_STATS) deltas[s] = managerProficiencyBonus(level, trained[s], bands);
+  return deltas;
+}
+
+/** Per-stat cut (0 or negative) that brings a trained stat above 99 back to
+ *  99 before the boosters, as efootbase's client does (min(99, base +
+ *  training + bonus); the bonus is 0 there). 98 + 4 training → −3. */
+export function cutTrainedStats(trained: Readonly<StatVector>): StatVector {
+  const deltas = zeroStats();
+  for (const s of BASE_STATS) deltas[s] = Math.min(0, PROFICIENCY_STAT_CAP - trained[s]);
   return deltas;
 }
 
@@ -342,11 +349,11 @@ export function categoryGain(position: Position, cat: TrainingCategory, model: O
  * grows with the tier, so a dynamic programme over the ten categories with the
  * budget in half-points is exact. Ties prefer fewer stat points (a category
  * with zero gain stays at 0) and, between equal values, the cheaper total.
- * The proficiency bonus, the 99 cap, the scaling and the rounding are left
- * out of the objective on purpose: the preset is then the same at every
- * proficiency level and for every manager, as efootbase's own Max OVR build
- * was on every measured card. The bound against an exact bonus-aware search
- * is in progression.test.ts.
+ * The proficiency bonus, the 99 cap (also the cut of a stat trained past 99),
+ * the scaling and the rounding are left out of the objective on purpose: the
+ * preset is then the same at every proficiency level and for every manager,
+ * as efootbase's own Max OVR build was on every measured card. The bound
+ * against an exact bonus- and cap-aware search is in progression.test.ts.
  */
 export function bestAllocation(position: Position, budget: number, model: OvrModel = OVR_MODEL): TrainingAllocation {
   const B = Math.floor(Math.max(0, budget) * 2 + 1e-9);
@@ -409,9 +416,9 @@ export interface SimulateInput {
   manager?: ManagerEffect | null;
 }
 
-/** Full simulation: training → Manager Proficiency bonus (band table, cap 99)
- *  → active boosters → manager +1 → final stats, budget accounting, the exact
- *  overall at the configured position and all 13 position tiles. */
+/** Full simulation: training → Manager Proficiency bonus (band table) and the
+ *  cut to 99 → active boosters → manager +1 → final stats, budget accounting,
+ *  the exact overall at the configured position and all 13 position tiles. */
 export function simulateBuild(input: SimulateInput): BuildResult {
   const { base, levelCap, config, boosters, positionAptitudes, manager, height, weakFootAccuracy } = input;
   const proficiency: PositionProficiency = positionAptitudes ? proficiencyFromAptitude(positionAptitudes[config.position]) : "full";
@@ -423,11 +430,15 @@ export function simulateBuild(input: SimulateInput): BuildResult {
   const remainingPoints = pointsAvailable - pointsUsed;
 
   const trainingDeltas = applyTraining(config.trainingPoints);
-  // The bonus is read off the trained value, before any booster.
-  const proficiencyDeltas = applyManagerProficiency(managerProficiency, addStats(base, trainingDeltas));
+  // The bonus is read off the trained value, before any booster; then
+  // base + training + bonus is limited to 99 (the bonus stops at 99 by
+  // itself, so only a stat trained past 99 is cut).
+  const trained = addStats(base, trainingDeltas);
+  const proficiencyDeltas = applyManagerProficiency(managerProficiency, trained);
+  const capDeltas = cutTrainedStats(trained);
   const boosterDeltas = applyBoosters(boosters, config.boosters);
   const managerDeltas = applyManager(manager);
-  const projectedStats = addStats(base, trainingDeltas, proficiencyDeltas, boosterDeltas, managerDeltas);
+  const projectedStats = addStats(base, trainingDeltas, capDeltas, proficiencyDeltas, boosterDeltas, managerDeltas);
   const body = { height, weakFootAccuracy };
   const aptitudes: PositionAptitudes = positionAptitudes ?? (Object.fromEntries(POSITIONS.map((p) => [p, 0])) as Record<Position, number>);
   const tiles = positionTiles(projectedStats, body, aptitudes);
@@ -436,6 +447,7 @@ export function simulateBuild(input: SimulateInput): BuildResult {
     config: { ...config, maxLevel, managerProficiency },
     base,
     trainingDeltas,
+    capDeltas,
     proficiencyDeltas,
     boosterDeltas,
     managerDeltas,

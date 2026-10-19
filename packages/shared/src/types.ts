@@ -211,15 +211,20 @@ export interface BuildResult {
    *  managerProficiency clamped to 70..90 / defaulted). */
   config: BuildConfig & { managerProficiency: number };
   base: Record<BaseStat, number>;
+  /** Stat points bought, per stat (the raw lift of the categories). */
   trainingDeltas: Record<BaseStat, number>;
+  /** Cut to 99 per stat (0 or negative): what base + training exceeds 99 by,
+   *  removed before the boosters as efootbase does (98 + 4 training → −3). */
+  capDeltas: Record<BaseStat, number>;
   /** Manager Proficiency bonus per stat (band table, read off base +
    *  training; never lifts a stat above 99, 0 for a stat already at 99+). */
   proficiencyDeltas: Record<BaseStat, number>;
   boosterDeltas: Record<BaseStat, number>;
   /** +1 on each pill stat of the selected manager (zeros without one). */
   managerDeltas: Record<BaseStat, number>;
-  /** base + training + proficiency bonus + active boosters + manager; the
-   *  boosters and the manager's +1 may take a stat above 99. */
+  /** min(99, base + training + proficiency bonus) + active boosters +
+   *  manager (= base + every delta above); only the boosters and the
+   *  manager's +1 may take a stat above 99. */
   projectedStats: Record<BaseStat, number>;
   /** Training points at the selected max level (`maxLevel − 1`). */
   pointsAvailable: number;

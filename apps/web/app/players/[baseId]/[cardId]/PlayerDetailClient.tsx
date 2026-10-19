@@ -168,6 +168,7 @@ export function PlayerDetailClient({
   const stats = view === "build" ? buildResult.projectedStats : view === "max" ? p.maxStats : p.stats;
   const boosterDeltas = view === "build" ? buildResult.boosterDeltas : undefined;
   const trainingDeltas = view === "build" ? buildResult.trainingDeltas : undefined;
+  const capDeltas = view === "build" ? buildResult.capDeltas : undefined;
   const proficiencyDeltas = view === "build" ? buildResult.proficiencyDeltas : undefined;
   const managerDeltas = view === "build" ? buildResult.managerDeltas : undefined;
   const buildOvr = buildResult.overall;
@@ -399,7 +400,7 @@ export function PlayerDetailClient({
             </div>
             {view === "build" && (
               <p className="text-[11px] text-[var(--color-text-secondary)]">
-                Base stats + training + the Manager Proficiency bonus + active boosters + the manager&apos;s +1 (cyan chips are booster bumps, lime chips the manager; the training lift and the bonus are inside the value, a stat&apos;s tooltip splits it — &quot;Max&quot; shows the dump&apos;s own max-level values, without the bonus, instead).
+                Base stats + training + the Manager Proficiency bonus, limited to 99, then active boosters + the manager&apos;s +1 (cyan chips are booster bumps, lime chips the manager; the training lift and the bonus are inside the value, a stat&apos;s tooltip splits it — &quot;Max&quot; shows the dump&apos;s own max-level values, without the bonus, instead).
                 {highlight ? " Click the highlighted stat or category again to clear the highlight." : " Click a stat or a category to highlight the stats it trains."}
               </p>
             )}
@@ -407,6 +408,7 @@ export function PlayerDetailClient({
               values={stats}
               boosterDeltas={boosterDeltas}
               trainingDeltas={trainingDeltas}
+              capDeltas={capDeltas}
               proficiencyDeltas={proficiencyDeltas}
               managerDeltas={managerDeltas}
               highlight={highlight}

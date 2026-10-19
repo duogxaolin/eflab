@@ -49,6 +49,7 @@ import {
   categoryCostHalf,
   categoryGain,
   clampManagerProficiency,
+  cutTrainedStats,
   emptyAllocation,
   exactOvr,
   linearOvrValue,
@@ -304,10 +305,40 @@ assert(POSITIONS.every((p) => cards.some((c) => posOf(c) === p)), "fixture cover
   const r3 = sim({ boosters: [false, false] }, { boosters: [b1, b2] });
   assert(BASE_STATS.every((s) => r3.boosterDeltas[s] === 0), "both boosters off → no booster delta");
 
-  // Training is not cut back at 99 (see progression.ts); the bonus never applies there.
-  const hi = { ...base, finishing: 98 };
-  const r4 = simulateBuild({ base: hi, levelCap: 31, ...body, config: config({ trainingPoints: { ...emptyAllocation(), Shooting: 4 }, managerProficiency: 90 }), boosters: [null, null] });
-  assert(r4.projectedStats.finishing === 102 && r4.proficiencyDeltas.finishing === 0, "98 + 4 training = 102 at proficiency 90 (no bonus at 99+, not cut back to 99)");
+  // A stat trained past 99 is cut to 99 before the boosters (efootbase's
+  // client: min(99, base + training + bonus), then boosters, then the
+  // manager's +1); the bonus never applies there. No measured reading trains
+  // a stat past 99 (the highest is exactly 99), so these synthetic cases pin
+  // the rule: keeping the trained value above 99 must fail them.
+  {
+    const hi = { ...base, finishing: 98, curl: 97, placeKicking: 95 };
+    const shooting4 = { ...emptyAllocation(), Shooting: 4 };
+    const r4 = simulateBuild({ base: hi, levelCap: 31, ...body, config: config({ trainingPoints: shooting4, managerProficiency: 90 }), boosters: [null, null] });
+    assert(r4.projectedStats.finishing === 99 && r4.trainingDeltas.finishing === 4 && r4.capDeltas.finishing === -3 && r4.proficiencyDeltas.finishing === 0,
+      "98 + 4 training at proficiency 90 → 99 (cut −3, no bonus at 99+); trainingDeltas keep the 4 points bought");
+    assert(r4.projectedStats.curl === 99 && r4.capDeltas.curl === -2 && r4.projectedStats.placeKicking === 99 && r4.capDeltas.placeKicking === 0,
+      "97 + 4 → 99 (cut −2); 95 + 4 = 99 exactly → 99, nothing cut");
+    const fBoost = { stats: { finishing: 2, curl: 1 } as BoosterVector };
+    const r5 = simulateBuild({
+      base: hi, levelCap: 31, ...body, config: config({ trainingPoints: shooting4, managerProficiency: 90, boosters: [true, false] }), boosters: [fBoost, null],
+      manager: { stats: ["finishing"] },
+    });
+    assert(r5.projectedStats.finishing === 102 && r5.projectedStats.curl === 100,
+      "98 + 4 training + Booster +2 + manager +1 → 99 + 2 + 1 = 102 (only boosters and the manager pass 99); 97 + 4 + Booster +1 → 100");
+    const sumOk = BASE_STATS.every((s) => r5.projectedStats[s] === hi[s] + r5.trainingDeltas[s] + r5.capDeltas[s] + r5.proficiencyDeltas[s] + r5.boosterDeltas[s] + r5.managerDeltas[s]);
+    assert(sumOk && BASE_STATS.every((s) => r5.capDeltas[s] <= 0), "projected = base + training + cut + bonus + boosters + manager on every stat; the cut is never positive");
+    // What the stat-grid tooltip derives as "base" (value minus every part) is the real base.
+    assert(r5.projectedStats.finishing - r5.trainingDeltas.finishing - r5.capDeltas.finishing - r5.proficiencyDeltas.finishing - r5.boosterDeltas.finishing - r5.managerDeltas.finishing === 98,
+      "tooltip arithmetic: 102 − 4 training + 3 cut − 0 bonus − 2 booster − 1 manager = base 98");
+    // Below 99 nothing changes: base 80 + 4 at 90 → 84 + band 3 = 87, no cut.
+    const lo = simulateBuild({ base: { ...base, finishing: 80 }, levelCap: 31, ...body, config: config({ trainingPoints: shooting4, managerProficiency: 90 }), boosters: [null, null] });
+    assert(lo.projectedStats.finishing === 87 && lo.capDeltas.finishing === 0, "80 + 4 training at proficiency 90 → 84 + 3 = 87, nothing cut");
+    // Inverse tamper: keeping the trained value above 99 (the engine before
+    // this rule) must disagree with the pinned cases.
+    const keep = (s: BaseStat) => hi[s] + r4.trainingDeltas[s] + managerProficiencyBonus(90, hi[s] + r4.trainingDeltas[s]);
+    assert(keep("finishing") !== r4.projectedStats.finishing && keep("curl") !== r4.projectedStats.curl,
+      `tamper "trained stat kept above 99" is detected (finishing ${keep("finishing")} vs 99, curl ${keep("curl")} vs 99)`);
+  }
 
   // Jump from two categories (Aerial + GK1), goalkeepers and outfield cards alike.
   const gkBase = toStats(cards.find((c) => posOf(c) === "GK")!.base);
@@ -546,14 +577,15 @@ const simExact = (c: ExactCard, alloc: number[] | TrainingAllocation, level: num
 }
 
 // ---------------------------------------------------------------- 11. bound against the bonus-aware optimum
-// The preset ignores the bonus (and the 99 cap). Reference: an exact grouped
-// knapsack over the weighted sum WITH the bonus at the registered position
-// (full proficiency, scaling 1, so the sum is Σ w · final + constants) — every
-// category is a group of value Σ w · (F(base + g) − F(base)), F(s) = s ≥ 99 ? s :
-// min(99, s + bonus(s)); Aerial Strength and Goalkeeper 1 share Jump and form
-// one joint group over every pair. Boosters are constants of the build.
+// The preset ignores the bonus and the 99 cap. Reference: an exact grouped
+// knapsack over the weighted sum WITH the bonus and the cap at the registered
+// position (full proficiency, scaling 1, so the sum is Σ w · final + constants)
+// — every category is a group of value Σ w · (F(base + g) − F(base)),
+// F(s) = min(99, s + bonus(s)) (a stat trained past 99 reads 99); Aerial
+// Strength and Goalkeeper 1 share Jump and form one joint group over every
+// pair. Boosters are constants of the build.
 {
-  const F = (level: number, s: number) => (s >= 99 ? s : Math.min(99, s + managerProficiencyBonus(level, s)));
+  const F = (level: number, s: number) => Math.min(99, s + managerProficiencyBonus(level, s));
   const bonusAwareBest = (p: Position, budget: number, base: StatVector, level: number): TrainingAllocation => {
     const B = Math.round(budget * 2);
     const w = (s: BaseStat) => OVR_WEIGHTS[p][s];
@@ -607,6 +639,14 @@ const simExact = (c: ExactCard, alloc: number[] | TrainingAllocation, level: num
   };
   let n = 0, below = 0, dispOver1 = 0, refWorse = 0, noBonusDiff = 0, overBudget = 0;
   const dispGap = new Map<number, number>();
+  // The ≤ 1 bound holds for presets that stay at or below 99; a preset that
+  // trains a stat past 99 wastes those points (up to 2 on dump cards, see
+  // docs/efootbase-exact-model.md). The fixture has no such card.
+  const past99 = Object.values(ex).filter((c) => {
+    const t = addStats(toStats(c.base), applyTraining(bestAllocation(POSITIONS[c.pos]!, trainingPointsAvailable(c.levelCap))));
+    return BASE_STATS.some((s) => t[s] > 99);
+  }).length;
+  assert(past99 === 0, `no fixture card's Max OVR preset trains a stat past 99 (${past99})`);
   for (const c of Object.values(ex)) {
     const p = POSITIONS[c.pos]!;
     const budget = trainingPointsAvailable(c.levelCap);
@@ -641,7 +681,9 @@ const simExact = (c: ExactCard, alloc: number[] | TrainingAllocation, level: num
     let pre = trained;
     if (o.managerBeforeBonus) pre = addStats(pre, mgr);
     if (o.boosterBeforeBonus) pre = addStats(pre, boost);
-    let out = addStats(pre, applyManagerProficiency(level, pre, o.bands));
+    // min(99, pre + bonus): the bonus stops at 99 by itself, cutTrainedStats
+    // brings a value already past 99 back to it (as simulateBuild does).
+    let out = addStats(pre, applyManagerProficiency(level, pre, o.bands), cutTrainedStats(pre));
     if (!o.boosterBeforeBonus) out = addStats(out, boost);
     if (!o.managerBeforeBonus) out = addStats(out, mgr);
     return out;

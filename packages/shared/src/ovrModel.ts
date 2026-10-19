@@ -145,8 +145,10 @@ export const PROFICIENCY_BANDS: Readonly<Record<number, readonly ProficiencyBand
   90: [{ min: 40, max: 55, bonus: 1 }, { min: 56, max: 82, bonus: 2 }, { min: 83, max: 98, bonus: 3 }],
 };
 
-/** The proficiency bonus never lifts a stat past this value, and a stat that
- *  is already there gains nothing. */
+/** Limit of a stat before the boosters: base + training + proficiency bonus is
+ *  cut to this value (efootbase's client: min(99, …)), so the bonus never
+ *  lifts a stat past it, a stat already there gains nothing, and a stat
+ *  trained above it reads 99. Only the boosters and a manager's +1 go higher. */
 export const PROFICIENCY_STAT_CAP = 99;
 
 /** What a selected manager adds to each of its pill stats, after the boosters. */
