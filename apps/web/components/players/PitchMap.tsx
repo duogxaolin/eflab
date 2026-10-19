@@ -2,12 +2,13 @@
 import type { Position } from "@eflab/shared";
 import { statTierClass } from "@/lib/card-display";
 
-// Per-position ratings are cross-fill-owned and nullable (design decision 5):
-// a player absent from eFHUB has `null` everywhere and the cell shows "n/a"
-// instead of an invented number.
+// Pitch Map of the player detail page. The 13 values are computed by the
+// caller with the exact overall formula (`positionTiles` in @eflab/shared,
+// change efootbase-exact-model-managers) from the stats on display, so every
+// card has a value at every position — the stored eFHUB ratings are not shown.
 export interface PitchMapProps {
   positionAptitudes: Record<string, number>;
-  positionRatings: Record<string, number | null | undefined>;
+  tiles: Record<Position, number>;
   registeredPosition: Position | string;
   className?: string;
 }
@@ -18,13 +19,6 @@ function cellBg(aptitude: number | undefined): string {
   return "bg-[#262626CC] text-white/40";
 }
 
-// Rating text uses the shared `--color-tier-*` tokens (via statTierClass) on
-// the black/85 pill, so the cell keeps the same contrast as the stat rows.
-function cellRatingColor(rating: number | null): string {
-  if (rating === null) return "text-white/50";
-  return statTierClass(rating);
-}
-
 function aptitudeLabel(apt: number | undefined): string {
   return apt === 0 ? "Full" : apt === 1 ? "Half" : "None";
 }
@@ -32,7 +26,7 @@ function aptitudeLabel(apt: number | undefined): string {
 interface PitchCellProps {
   pos: Position;
   aptitudes: Record<string, number>;
-  ratings: Record<string, number | null | undefined>;
+  tiles: Record<Position, number>;
   registeredPosition: string;
   layout?: "stack" | "row";
 }
@@ -40,16 +34,14 @@ interface PitchCellProps {
 function PitchCell({
   pos,
   aptitudes,
-  ratings,
+  tiles,
   registeredPosition,
   layout = "row",
 }: PitchCellProps) {
   const apt = aptitudes[pos];
-  const raw = ratings[pos];
-  const rating: number | null = typeof raw === "number" ? raw : null;
+  const rating = tiles[pos];
   const isReg = pos === registeredPosition;
   const isFull = apt === 0;
-  const ratingText = rating === null ? "n/a" : String(rating);
 
   return (
     <div
@@ -58,7 +50,8 @@ function PitchCell({
       )} ${isReg ? "ring-2 ring-[var(--color-accent)] ring-offset-1 ring-offset-[#18181b]" : ""} ${
         layout === "stack" ? "flex-col gap-1.5 p-1.5" : "flex-row gap-2 px-2.5 py-1"
       } w-full h-full`}
-      title={`${pos}: ${rating === null ? "rating not available" : `${rating} OVR`} (${aptitudeLabel(apt)})`}
+      title={`${pos}: ${rating} OVR (${aptitudeLabel(apt)} proficiency)`}
+      data-testid={`pitch-${pos}`}
     >
       <span
         className={`text-[11px] font-black uppercase tracking-wider leading-none ${
@@ -67,13 +60,12 @@ function PitchCell({
       >
         {pos}
       </span>
+      {/* Rating text uses the shared `--color-tier-*` tokens (statTierClass)
+          on the black/85 pill, the same contrast as the stat rows. */}
       <span
-        className={`inline-block px-1.5 py-0.5 rounded-[4px] bg-black/85 font-mono text-[11px] font-bold leading-none tabular-nums shadow-sm ${cellRatingColor(
-          rating
-        )}`}
-        aria-label={rating === null ? `${pos} rating not available` : undefined}
+        className={`inline-block px-1.5 py-0.5 rounded-[4px] bg-black/85 font-mono text-[11px] font-bold leading-none tabular-nums shadow-sm ${statTierClass(rating)}`}
       >
-        {ratingText}
+        {rating}
       </span>
     </div>
   );
@@ -81,7 +73,7 @@ function PitchCell({
 
 export function PitchMap({
   positionAptitudes,
-  positionRatings,
+  tiles,
   registeredPosition,
   className = "",
 }: PitchMapProps) {
@@ -89,7 +81,7 @@ export function PitchMap({
     <PitchCell
       pos={pos}
       aptitudes={positionAptitudes}
-      ratings={positionRatings}
+      tiles={tiles}
       registeredPosition={registeredPosition}
       layout={layout}
     />

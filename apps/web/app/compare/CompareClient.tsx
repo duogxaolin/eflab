@@ -7,7 +7,7 @@ import { trpc } from "@/lib/trpc";
 import { PlayerCard } from "@/components/cards/PlayerCard";
 import { QueryErrorState } from "@/lib/query-state";
 import { useDebouncedValue, SEARCH_MIN_LENGTH } from "@/lib/use-debounced-value";
-import { CARD_TYPE_LABELS, INT8_MAX, type PlayerCardDTO, type BaseStat, type Position } from "@eflab/shared";
+import { CARD_TYPE_LABELS, INT8_MAX, positionTiles, type PlayerCardDTO, type BaseStat, type Position } from "@eflab/shared";
 import { ATTACKING_STATS, DEFENDING_STATS, STRENGTH_STATS, POSITION_BY_INDEX, statLabel } from "@/lib/card-display";
 import { Plus, ArrowLeftRight, Link as LinkIcon, Search, X, Check, Sparkles } from "lucide-react";
 
@@ -135,6 +135,8 @@ export function CompareClient() {
   const left = slots[0];
   const right = slots[1];
   const loadedSlots = slots.filter((p): p is PlayerCardDTO => p !== undefined);
+  // Position tiles of each loaded card (exact formula on its level-1 stats).
+  const tilesBySlot = loadedSlots.map((p) => positionTiles(p.stats, { height: p.height, weakFootAccuracy: p.weakFootAccuracy }, p.positionAptitudes));
 
   const swapPlayers = () => {
     if (selected.length === 2) setSelected([selected[1]!, selected[0]!]);
@@ -462,9 +464,11 @@ export function CompareClient() {
                   <div className="grid grid-cols-3 gap-y-3 gap-x-2">
                     {PITCH_SLOTS.map((pos) => {
                       const v = p.positionAptitudes[pos];
-                      const r = p.positionRatings[pos];
+                      // Same exact formula as the detail page's Pitch Map, on the
+                      // level-1 stats this page compares.
+                      const r = tilesBySlot[i]![pos];
                       return (
-                        <div key={pos} className="flex flex-col items-center gap-1" title={`${pos}: ${typeof r === "number" ? `${r} OVR` : "rating n/a"}`}>
+                        <div key={pos} className="flex flex-col items-center gap-1" title={`${pos}: ${r} OVR at level 1`} data-testid={`compare-tile-${pos}`}>
                           <span className={`inline-block h-3 w-3 rounded-full ${aptitudeDot(v)} ring-1 ring-black/30`} />
                           <span className="text-[9px] font-mono text-[var(--color-text-secondary)]">{pos}</span>
                         </div>

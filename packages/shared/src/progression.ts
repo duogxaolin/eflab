@@ -1,32 +1,31 @@
-// Progression engine — the rules recovered from the eFHUB data (change
-// `player-progression-simulator`, 2026-10-18). Everything here is pure and
-// deterministic; the oracle tests in progression.test.ts check each rule
-// against cards sampled from the hub (`__fixtures__/progression-oracle.json`).
+// Progression engine — pure and deterministic. Training rules recovered from
+// the eFHUB data (change `player-progression-simulator`, 2026-10-18); the
+// Manager Proficiency bands, the manager effect and the overall formula are
+// efootbase's own (change `efootbase-exact-model-managers`, 2026-10-19,
+// constants in ovrModel.ts, provenance in docs/efootbase-exact-model.md).
 //
-// Rules (verified on 44,103 cards, see design.md of the change):
+// Rules:
 //   · training points available = levelCap − 1 (one per level above 1);
 //   · ten categories, each raising every stat it contains by the number of
 //     stat points bought in it (TRAINING_STATS); a stat in two categories
-//     (Jump: Aerial Strength and Goalkeeper 1) gets the sum — with that, the
-//     table reproduces the hub max stats of all 44,103 cards, goalkeepers
-//     included (change `jump-from-gk1`); no cap at 99;
+//     (Jump: Aerial Strength and Goalkeeper 1) gets the sum;
 //   · the nth stat point in a category costs ceil(n / 4) half-points, i.e.
 //     0.5 for points 1–4, 1 for 5–8, 1.5 for 9–12 … (Σ cost = levelCap − 1 on
-//     all 32,601 cards with a cap ≥ 2);
-//   · the overall at a position is estimated by a fitted linear formula
-//     (ovrWeights.ts) — accurate to about ±1 at full-proficiency positions,
-//     lower confidence for GK/CB; at half / non-proficient positions a fitted
-//     affine penalty with a floor of 40 is applied (OVR_PROFICIENCY_ADJUST,
-//     held-out within ±1: 99.9 % half, 99.7 % none at outfield positions);
-//   · Manager Proficiency (change `manager-proficiency-slider`, measured on
-//     efootbase's Progression sheet): with s = base + training, every stat
-//     gains min(99 − s, floor(s · r(level))) (0 once s ≥ 99) and the boosters
-//     are added after that bonus (they may exceed 99); r(70–76) = 0 and level
-//     86 is an unconfirmed exception, floor((s + 6) / 32);
-//   · at the card's registered position the estimate is anchored: it adds the
-//     card's displayed overall minus the formula on its base stats (no
-//     boosters); other positions keep the unanchored estimate (+ penalty).
-// Per-manager effects are not modelled: no dataset ties a manager to a stat.
+//     all 32,601 hub cards with a cap ≥ 2);
+//   · stat pipeline, for s₀ = base + training:
+//       s₁ = s₀                         if s₀ ≥ 99 (no bonus, not cut back)
+//          = min(99, s₀ + band(level, s₀)) otherwise   (PROFICIENCY_BANDS)
+//       final = s₁ + active boosters + (1 on each pill stat of a selected manager)
+//     boosters and the manager's +1 come after the cap and may exceed 99;
+//     efootbase's client cuts s₀ above 99 back to 99, this engine does not —
+//     no measured reading covers that case and the game's own max-level
+//     overall agrees with not cutting it (docs/efootbase-exact-model.md);
+//   · overall at a position = the exact integer-weight formula (`exactOvr`):
+//     every stat scaled by 1 / 0.97 / 0.85 (full / half / no proficiency),
+//     rounded half up and limited to 0..255; each stat and the weak-foot term
+//     enter as max(0, v − 25), height as max(0, h − 111 − 25), weak-foot
+//     accuracy as 59 × a / 3 + 40; overall = floor((Σ w·term + 499) / 1000)
+//     limited to 40..127. No per-card anchor, no fitted penalty.
 //
 // Costs are handled as integers in half-points to avoid float drift.
 import {
@@ -40,7 +39,15 @@ import {
   type PositionProficiency,
   type TrainingCategory,
 } from "./constants";
-import { OVR_PROFICIENCY_ADJUST, OVR_PROFICIENCY_FLOOR, OVR_WEIGHTS } from "./ovrWeights";
+import {
+  MANAGER_PILL_BONUS,
+  OVR_MODEL,
+  OVR_TERMS,
+  PROFICIENCY_BANDS,
+  PROFICIENCY_STAT_CAP,
+  type OvrModel,
+  type ProficiencyBand,
+} from "./ovrModel";
 import type { BuildConfig, BuildResult } from "./types";
 
 export type StatVector = Record<BaseStat, number>;
@@ -51,6 +58,16 @@ export type BoosterVector = Partial<Record<BaseStat, number>>;
 export interface BoosterLike {
   stats: BoosterVector;
 }
+/** A selected manager as the engine sees it: its one or two pill stats
+ *  (efootbase lists 24 of its 69 picker managers with a single pill). The
+ *  rating is not an engine input — choosing a manager sets the proficiency
+ *  level to the rating in the UI state. */
+export interface ManagerEffect {
+  stats: readonly BaseStat[];
+}
+/** Position aptitude codes as stored (PlayerCardDTO.positionAptitudes:
+ *  0 full, 1 half, 2 none). */
+export type PositionAptitudes = Readonly<Partial<Record<Position, number>>>;
 
 /** Stat points per cost tier: points 1–4 cost 0.5, 5–8 cost 1, … */
 export const COST_TIER_SIZE = 4;
@@ -80,56 +97,14 @@ export const PROGRESSION_CATEGORY_LABELS: Readonly<Record<TrainingCategory, stri
   GK3: "Goalkeeper 3",
 };
 
-/** Manager Proficiency — efootbase's Progression sheet applies it to every
- *  stat even when no manager is selected (slider 70–90, default 90). Rule
- *  recovered from six measured cards: with s = base + training,
- *      bonus = 0                                   if s ≥ 99
- *            = min(99 − s, floor(s · r(level)))    otherwise,
- *  and the boosters are added after the bonus (they may exceed 99).
- *  Evidence (scripts outside the repo, see design.md of the change):
- *   · held-out — rates read off one outfield card (Messi SS, at 70/75/80/85/90)
- *     and one goalkeeper (Neuer, at 70/90) only, then frozen: the other four
- *     cards at 70/75/80/85/90 gave 178 builds with 4,628/4,628 stat cells exact;
- *   · prospective — rates from four cards, the last two (DMF, CF) predicted at
- *     all 21 levels: 4,257/4,264 stat cells at the interval midpoints (misses
- *     at 79/81/82/83, levels whose shipped rates those two cards then narrowed);
- *   · the 15 levels between the held-out ones (71–74, 76–79, 81–84, 87–89) were
- *     measured on four cards only and have no two-card held-out run; level 86
- *     was fitted on all six;
- *   · the shipped rates were pooled over all six cards: each is one point
- *     inside its measured interval (widths 0.00022–0.00092), so another rate
- *     inside the same interval (e.g. r(90) = 0.0362) fits the evidence equally
- *     well and no test can tell them apart.
- *  The rate depends on the level only; levels 70–76 give no bonus, so at 70
- *  every stat equals the engine without the control (the overall at the
- *  registered position still differs by the anchor, see `ovrAnchor`). */
+/** Manager Proficiency — efootbase applies it to every stat even when no
+ *  manager is selected (slider 70–90, default 90); a selected manager sets it
+ *  to the manager's rating. The bonus of a trained stat comes from the band
+ *  table of the level (PROFICIENCY_BANDS); levels 70–76 give none. */
 export const MANAGER_PROFICIENCY_MIN = 70;
 export const MANAGER_PROFICIENCY_MAX = 90;
 /** efootbase's default (and this engine's when a config omits the level). */
 export const MANAGER_PROFICIENCY_DEFAULT = 90;
-/** Level 86 fits no single rate (the 86 interval of the measurements is
- *  empty); its bonus is floor((s + 6) / 32), which reproduces every measured
- *  86 cell (207/207, fitted on all six cards — no held-out check) but is an
- *  UNCONFIRMED exception — the UI says so. It is not monotone in the level:
- *  s = 26–29 and s = 58 gain 1 more at 86 than at 87. */
-export const MANAGER_PROFICIENCY_UNCONFIRMED_LEVEL = 86;
-/** r(level) for every level except 86 (inside the feasible interval of the
- *  measurements; the interval bounds are re-derived from the fixture by the
- *  tests). Cells left ambiguous by those intervals — s = 66 at 83, s = 88 at
- *  87 — are not in the fixture. */
-export const MANAGER_PROFICIENCY_RATES: Readonly<Record<number, number>> = {
-  70: 0, 71: 0, 72: 0, 73: 0, 74: 0, 75: 0, 76: 0,
-  77: 0.02116,
-  78: 0.02286,
-  79: 0.02614, 80: 0.02614,
-  81: 0.02878, 82: 0.02878,
-  83: 0.03031,
-  84: 0.03243, 85: 0.03243,
-  87: 0.03419,
-  88: 0.0355,
-  89: 0.03593,
-  90: 0.03625,
-};
 
 /** Integer level within 70..90 (non-finite input → the default). */
 export function clampManagerProficiency(level: number | null | undefined): number {
@@ -137,39 +112,40 @@ export function clampManagerProficiency(level: number | null | undefined): numbe
   return Math.min(MANAGER_PROFICIENCY_MAX, Math.max(MANAGER_PROFICIENCY_MIN, Math.round(level)));
 }
 
-export const isUnconfirmedProficiencyLevel = (level: number): boolean =>
-  clampManagerProficiency(level) === MANAGER_PROFICIENCY_UNCONFIRMED_LEVEL;
-
-/** Bonus of one stat whose value after training is `s` at `level`. */
-export function managerProficiencyBonus(level: number, s: number): number {
-  if (s >= 99) return 0;
-  const p = clampManagerProficiency(level);
-  const raw = p === MANAGER_PROFICIENCY_UNCONFIRMED_LEVEL ? Math.floor((s + 6) / 32) : Math.floor(s * MANAGER_PROFICIENCY_RATES[p]!);
-  return Math.max(0, Math.min(99 - s, raw));
+/** Bonus of one stat whose value after training is `s` at `level`: the band
+ *  containing `s`, 0 below the first band or at 99 and above, and never more
+ *  than what takes the stat to 99. */
+export function managerProficiencyBonus(
+  level: number,
+  s: number,
+  bands: Readonly<Record<number, readonly ProficiencyBand[]>> = PROFICIENCY_BANDS,
+): number {
+  if (s >= PROFICIENCY_STAT_CAP) return 0;
+  const table = bands[clampManagerProficiency(level)] ?? [];
+  for (const band of table) {
+    if (s >= band.min && s <= band.max) return Math.min(band.bonus, PROFICIENCY_STAT_CAP - s);
+  }
+  return 0;
 }
 
 /** Per-stat bonus for the stats after training (`trained` = base + training). */
-export function applyManagerProficiency(level: number, trained: Readonly<StatVector>): StatVector {
+export function applyManagerProficiency(
+  level: number,
+  trained: Readonly<StatVector>,
+  bands: Readonly<Record<number, readonly ProficiencyBand[]>> = PROFICIENCY_BANDS,
+): StatVector {
   const deltas = zeroStats();
-  for (const s of BASE_STATS) deltas[s] = managerProficiencyBonus(level, trained[s]);
+  for (const s of BASE_STATS) deltas[s] = managerProficiencyBonus(level, trained[s], bands);
   return deltas;
 }
 
-/** Per-card anchor of the estimate at the registered position: the card's
- *  displayed overall minus the formula on its base stats (no training, no
- *  bonus, no boosters). It absorbs the formula's per-card residual.
- *  It was chosen post hoc, after the unanchored goalkeeper builds of the
- *  held-out run had failed (Čech GK 14/50 within ±1; anchored 50/50); the
- *  other held-out cards pass with or without it, so the held-out builds do
- *  not discriminate it. The independent support is the population check
- *  (no proficiency bonus involved): formula on the hub max stats + Booster 1
- *  vs efootbase's overall at max level, within ±1 — 9,839 cards with a
- *  level cap > 1 in both sources: 97.0 % → 98.3 %, GK 83.6 % → 97.4 %
- *  (702); all 10,073 cards with dump max level > 1: 94.7 % → 96.1 %, GK
- *  82.0 % → 95.5 % (716). On Messi it matches the measured overall exactly
- *  less often than the unanchored form (4/8 vs 6/8, all within ±1). */
-export function ovrAnchor(registeredPosition: Position, base: Readonly<StatVector>, cardOvr: number): number {
-  return cardOvr - projectOvr(registeredPosition, base);
+/** +1 (MANAGER_PILL_BONUS) on each pill stat of the selected manager, nothing
+ *  without one. Added after the boosters, with no cap at 99. */
+export function applyManager(manager: ManagerEffect | null | undefined): StatVector {
+  const deltas = zeroStats();
+  if (!manager) return deltas;
+  for (const s of manager.stats) if (s in deltas) deltas[s] += MANAGER_PILL_BONUS;
+  return deltas;
 }
 
 export const zeroStats = (): StatVector =>
@@ -279,60 +255,100 @@ export function addStats(base: StatVector, ...deltas: ReadonlyArray<Partial<Stat
   return out;
 }
 
-/** Estimated overall (unrounded) at `position` for a stat vector, at full
- *  proficiency unless `proficiency` says otherwise (half / none apply the
- *  fitted affine penalty floored at 40 — a monotone map of the full estimate,
- *  so the allocation that maximises one maximises the other). */
-export function projectOvr(position: Position, stats: Readonly<StatVector>, proficiency: PositionProficiency = "full"): number {
-  const { intercept, w } = OVR_WEIGHTS[position];
-  let v = intercept;
-  for (let i = 0; i < BASE_STATS.length; i++) v += (w[i] ?? 0) * stats[BASE_STATS[i]!];
-  return applyProficiency(v, position, proficiency);
+/** What the overall needs besides the stats: height (cm) and weak-foot
+ *  accuracy (0–3, as stored). */
+export interface OvrBody {
+  height: number;
+  weakFootAccuracy: number;
 }
 
-/** Fitted penalty of a full-proficiency estimate at a half / non-proficient
- *  position: max(40, k · estimate + c). Identity at full proficiency. */
-export function applyProficiency(fullEstimate: number, position: Position, proficiency: PositionProficiency): number {
-  if (proficiency === "full") return fullEstimate;
-  const { k, c } = OVR_PROFICIENCY_ADJUST[proficiency][position];
-  return Math.max(OVR_PROFICIENCY_FLOOR, k * fullEstimate + c);
+const termValue = (v: number, offset: number): number => (v > offset ? v - offset : 0);
+
+/**
+ * The exact overall at `position` for final (displayed) stats, efootbase's
+ * formula: every stat is scaled by the proficiency factor at that position,
+ * rounded half up and limited to 0..255; the weighted sum of the 28 terms is
+ * accumulated in OVR_TERMS order and the result is
+ * floor((sum + 499) / 1000) limited to 40..127. `model` exists for the
+ * tamper tests; callers use the default.
+ */
+export function exactOvr(
+  position: Position,
+  stats: Readonly<StatVector>,
+  body: OvrBody,
+  proficiency: PositionProficiency = "full",
+  model: OvrModel = OVR_MODEL,
+): number {
+  const w = model.weights[position];
+  const f = model.scale[proficiency];
+  const scaled = (v: number) => Math.max(0, Math.min(model.scaleMax, Math.floor(v * f + model.scaleRoundBias)));
+  let sum = 0;
+  for (const term of OVR_TERMS) {
+    let v: number;
+    if (term === "height") v = termValue(body.height - model.heightOffset, model.termOffset);
+    else if (term === "weakFootAccuracy") v = termValue((model.wfSlope * body.weakFootAccuracy) / model.wfDivisor + model.wfBase, model.termOffset);
+    else v = termValue(scaled(stats[term] ?? 0), model.termOffset);
+    sum += w[term] * v;
+  }
+  const raw = (sum + model.sumBias) / model.sumDivisor;
+  return Math.max(model.min, Math.min(model.max, Math.floor(raw)));
 }
 
-/** Display rounding of an estimate (half away from zero, like the hub). */
-export const roundOvr = (v: number): number => Math.round(v);
+/** The 13 position tiles for final stats and the card's aptitudes (codes 0
+ *  full, 1 half, 2 none; a missing code counts as none), in POSITIONS order. */
+export function positionTiles(
+  stats: Readonly<StatVector>,
+  body: OvrBody,
+  positionAptitudes: PositionAptitudes,
+  model: OvrModel = OVR_MODEL,
+): Record<Position, number> {
+  const out = {} as Record<Position, number>;
+  for (const p of POSITIONS) out[p] = exactOvr(p, stats, body, proficiencyFromAptitude(positionAptitudes[p]), model);
+  return out;
+}
 
-/** OVR gain of one stat point in `cat` at `position`: the sum of the weights
- *  of every stat the category raises (Jump's weight counts in both Aerial
- *  Strength and Goalkeeper 1, as each of them lifts it). */
-export function categoryGain(position: Position, cat: TrainingCategory): number {
-  const { w } = OVR_WEIGHTS[position];
+/** Position with the highest tile; the registered position wins ties, then
+ *  POSITIONS order. */
+export function bestFitPosition(tiles: Readonly<Record<Position, number>>, registered: Position): Position {
+  let best = registered;
+  for (const p of POSITIONS) if (tiles[p] > tiles[best]) best = p;
+  return best;
+}
+
+/** Linear part of the overall at `position` (Σ weight × stat over the 26
+ *  stats, no offsets, no scaling, no rounding) — the Max OVR objective. */
+export function linearOvrValue(position: Position, stats: Readonly<StatVector>, model: OvrModel = OVR_MODEL): number {
+  const w = model.weights[position];
+  let v = 0;
+  for (const s of BASE_STATS) v += w[s] * stats[s];
+  return v;
+}
+
+/** Gain of the linear objective per stat point in `cat` at `position`: the
+ *  sum of the weights of every stat the category raises (Jump's weight counts
+ *  in both Aerial Strength and Goalkeeper 1, as each of them lifts it). */
+export function categoryGain(position: Position, cat: TrainingCategory, model: OvrModel = OVR_MODEL): number {
+  const w = model.weights[position];
   let g = 0;
-  for (const stat of TRAINING_STATS[cat]) g += w[BASE_STATS.indexOf(stat)] ?? 0;
+  for (const stat of TRAINING_STATS[cat]) g += w[stat];
   return g;
 }
 
 /**
- * Allocation that maximises the estimated overall at `position` within
- * `budget` training points. The objective is linear in the stats, so the
- * value of an allocation is Σ_cat gain(cat) · points(cat) even when a stat
- * belongs to two categories (its two lifts add, and so do their weighted
- * gains), and the cost per stat point only grows with the tier, so a dynamic
- * programme over the ten categories with the budget in half-points is exact.
- * Ties prefer fewer stat points (a category with zero gain stays at 0) and,
- * between equal values, the cheaper total.
- * The Manager Proficiency bonus (a floored, capped fraction of each stat) is
- * deliberately left out of the objective, so the preset does not depend on
- * the proficiency level — like the reference sheet's own Max OVR build, which
- * is the same allocation at every level on all 5 measured cards with one.
- * With the bonus it is therefore not always the best build: on the 261
- * hub-oracle cards × 21 levels an exact bonus-aware search scores higher on
- * 1,694 of 5,481 pairs, by at most 0.668 unrounded and 1 displayed point
- * (202 pairs), never at 70–76 (test section 8). With the bonus and the anchor
- * its build lands within ±1 of the sheet's own Max OVR reading on 89/89
- * readings (5 cards: SS at 5 levels, four cards at 21 levels); the allocation
- * equals the sheet's on the SS card only.
+ * Allocation that maximises the linear part of the exact overall at
+ * `position` within `budget` training points. The objective is linear in the
+ * stats, so the value of an allocation is Σ_cat gain(cat) · points(cat) even
+ * when a stat belongs to two categories, and the cost per stat point only
+ * grows with the tier, so a dynamic programme over the ten categories with the
+ * budget in half-points is exact. Ties prefer fewer stat points (a category
+ * with zero gain stays at 0) and, between equal values, the cheaper total.
+ * The proficiency bonus, the 99 cap, the scaling and the rounding are left
+ * out of the objective on purpose: the preset is then the same at every
+ * proficiency level and for every manager, as efootbase's own Max OVR build
+ * was on every measured card. The bound against an exact bonus-aware search
+ * is in progression.test.ts.
  */
-export function bestAllocation(position: Position, budget: number): TrainingAllocation {
+export function bestAllocation(position: Position, budget: number, model: OvrModel = OVR_MODEL): TrainingAllocation {
   const B = Math.floor(Math.max(0, budget) * 2 + 1e-9);
   const EPS = 1e-9;
   const NEG = Number.NEGATIVE_INFINITY;
@@ -341,7 +357,7 @@ export function bestAllocation(position: Position, budget: number): TrainingAllo
   const choices: Array<Array<{ prev: number; g: number }>> = [];
 
   for (const cat of TRAINING_CATEGORIES) {
-    const gain = categoryGain(position, cat);
+    const gain = categoryGain(position, cat, model);
     const next: number[] = new Array<number>(B + 1).fill(NEG);
     const choice: Array<{ prev: number; g: number }> = new Array(B + 1);
     for (let used = 0; used <= B; used++) {
@@ -379,31 +395,26 @@ export interface SimulateInput {
   base: StatVector;
   /** Real level cap of the card (upper bound for `config.maxLevel`). */
   levelCap: number;
-  /** Registered position of the card: the only position where the estimate
-   *  is anchored (see `cardOvr`). */
-  registeredPosition: Position;
-  /** The card's displayed overall at its registered position (level 1, no
-   *  boosters — PlayerCardDTO.ovr). When given, the estimate at the
-   *  registered position adds `ovrAnchor`; without it nothing is anchored. */
-  cardOvr?: number;
+  /** Height and weak-foot accuracy of the card (terms of the overall). */
+  height: number;
+  weakFootAccuracy: number;
   config: BuildConfig;
   /** Resolved Booster 1 / Booster 2 (null when the slot is empty or unknown). */
   boosters: readonly [BoosterLike | null, BoosterLike | null];
-  /** Position aptitude codes of the card (PlayerCardDTO.positionAptitudes:
-   *  0 full, 1 half, 2 none). Without them the estimate assumes full
-   *  proficiency at `config.position` (reported in `BuildResult.proficiency`). */
-  positionAptitudes?: Readonly<Partial<Record<Position, number>>>;
+  /** Position aptitude codes of the card (0 full, 1 half, 2 none). Without
+   *  them every position counts as full proficiency. */
+  positionAptitudes?: PositionAptitudes;
+  /** The selected manager's pill stats, or null / undefined for none. The
+   *  proficiency level is `config.managerProficiency` either way. */
+  manager?: ManagerEffect | null;
 }
 
-/** Full simulation: training → Manager Proficiency bonus → active boosters
- *  → projected stats, budget accounting and the estimated overall at the
- *  configured position (anchored at the registered position when `cardOvr`
- *  is given). */
+/** Full simulation: training → Manager Proficiency bonus (band table, cap 99)
+ *  → active boosters → manager +1 → final stats, budget accounting, the exact
+ *  overall at the configured position and all 13 position tiles. */
 export function simulateBuild(input: SimulateInput): BuildResult {
-  const { base, levelCap, config, boosters, positionAptitudes, registeredPosition, cardOvr } = input;
-  const proficiency: PositionProficiency = positionAptitudes
-    ? proficiencyFromAptitude(positionAptitudes[config.position])
-    : "full";
+  const { base, levelCap, config, boosters, positionAptitudes, manager, height, weakFootAccuracy } = input;
+  const proficiency: PositionProficiency = positionAptitudes ? proficiencyFromAptitude(positionAptitudes[config.position]) : "full";
   const maxLevel = Math.min(Math.max(1, Math.floor(config.maxLevel)), Math.max(1, Math.floor(levelCap)));
   const managerProficiency = clampManagerProficiency(config.managerProficiency);
   const pointsAvailable = trainingPointsAvailable(maxLevel);
@@ -415,10 +426,11 @@ export function simulateBuild(input: SimulateInput): BuildResult {
   // The bonus is read off the trained value, before any booster.
   const proficiencyDeltas = applyManagerProficiency(managerProficiency, addStats(base, trainingDeltas));
   const boosterDeltas = applyBoosters(boosters, config.boosters);
-  const projectedStats = addStats(base, trainingDeltas, proficiencyDeltas, boosterDeltas);
-  const anchored = typeof cardOvr === "number" && Number.isFinite(cardOvr) && config.position === registeredPosition;
-  const anchor = anchored ? ovrAnchor(registeredPosition, base, cardOvr) : null;
-  const estimatedOvrExact = projectOvr(config.position, projectedStats, proficiency) + (anchor ?? 0);
+  const managerDeltas = applyManager(manager);
+  const projectedStats = addStats(base, trainingDeltas, proficiencyDeltas, boosterDeltas, managerDeltas);
+  const body = { height, weakFootAccuracy };
+  const aptitudes: PositionAptitudes = positionAptitudes ?? (Object.fromEntries(POSITIONS.map((p) => [p, 0])) as Record<Position, number>);
+  const tiles = positionTiles(projectedStats, body, aptitudes);
 
   return {
     config: { ...config, maxLevel, managerProficiency },
@@ -426,16 +438,15 @@ export function simulateBuild(input: SimulateInput): BuildResult {
     trainingDeltas,
     proficiencyDeltas,
     boosterDeltas,
+    managerDeltas,
     projectedStats,
     pointsAvailable,
     pointsUsed,
     remainingPoints,
     withinBudget: remainingPoints >= 0,
-    estimatedOvr: roundOvr(estimatedOvrExact),
-    estimatedOvrExact,
+    overall: tiles[config.position],
     proficiency,
-    ovrAnchor: anchor,
-    managerProficiencyUnconfirmed: managerProficiency === MANAGER_PROFICIENCY_UNCONFIRMED_LEVEL,
+    tiles,
   };
 }
 
