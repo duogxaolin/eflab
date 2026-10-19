@@ -51,7 +51,8 @@ export interface PlayerCardDTO extends CardPreview {
   // 13 position aptitudes (0/1/2 = registered/secondary/none)
   positionAptitudes: Record<Position, number>;
   // 13 per-position OVR ratings from the eFHUB cross-fill; null when the player
-  // is absent from eFHUB (the Pitch Map shows "n/a", never an invented 40).
+  // is absent from eFHUB. Reference only since efootbase-exact-model-managers:
+  // the web computes every displayed position value with `positionTiles`.
   positionRatings: Record<Position, number | null>;
   // AI playstyle flags
   playstyles: {
@@ -184,21 +185,23 @@ export interface PlayerListResult {
   totalPages: number;
 }
 
-// Build simulator types (player-progression-simulator). No manager field: no
-// dataset ties a manager to a stat or overall change.
+// Build simulator types (player-progression-simulator, exact model since
+// efootbase-exact-model-managers). The selected manager is not part of the
+// config: the engine takes its pill stats (`SimulateInput.manager`) and the
+// level is `managerProficiency` (the UI sets it to the manager's rating).
 export interface BuildConfig {
   playerId: string;
   /** Selected max level, 1..levelCap — the budget is `maxLevel − 1` points. */
   maxLevel: number;
-  /** Position the overall is estimated for (defaults to the registered one). */
+  /** Position the overall is computed for (defaults to the registered one). */
   position: Position;
   /** Stat points bought per training category (ten categories). */
   trainingPoints: Record<TrainingCategory, number>;
   /** [Booster 1 active, Booster 2 active]. */
   boosters: [boolean, boolean];
-  /** Manager Proficiency level 70–90 (efootbase's slider). Omitted → the
-   *  engine default MANAGER_PROFICIENCY_DEFAULT (90, efootbase's default);
-   *  70 gives no bonus. */
+  /** Manager Proficiency level 70–90 (efootbase's slider, or the selected
+   *  manager's rating). Omitted → the engine default
+   *  MANAGER_PROFICIENCY_DEFAULT (90, efootbase's default); 70–76 give no bonus. */
   managerProficiency?: number;
 }
 
@@ -208,13 +211,20 @@ export interface BuildResult {
    *  managerProficiency clamped to 70..90 / defaulted). */
   config: BuildConfig & { managerProficiency: number };
   base: Record<BaseStat, number>;
+  /** Stat points bought, per stat (the raw lift of the categories). */
   trainingDeltas: Record<BaseStat, number>;
-  /** Manager Proficiency bonus per stat (read off base + training, capped
-   *  so that it never lifts a stat above 99). */
+  /** Cut to 99 per stat (0 or negative): what base + training exceeds 99 by,
+   *  removed before the boosters as efootbase does (98 + 4 training → −3). */
+  capDeltas: Record<BaseStat, number>;
+  /** Manager Proficiency bonus per stat (band table, read off base +
+   *  training; never lifts a stat above 99, 0 for a stat already at 99+). */
   proficiencyDeltas: Record<BaseStat, number>;
   boosterDeltas: Record<BaseStat, number>;
-  /** base + training + proficiency bonus + active boosters; the boosters may
-   *  take a stat above 99. */
+  /** +1 on each pill stat of the selected manager (zeros without one). */
+  managerDeltas: Record<BaseStat, number>;
+  /** min(99, base + training + proficiency bonus) + active boosters +
+   *  manager (= base + every delta above); only the boosters and the
+   *  manager's +1 may take a stat above 99. */
   projectedStats: Record<BaseStat, number>;
   /** Training points at the selected max level (`maxLevel − 1`). */
   pointsAvailable: number;
@@ -222,19 +232,26 @@ export interface BuildResult {
   pointsUsed: number;
   remainingPoints: number;
   withinBudget: boolean;
-  /** Estimated overall at `config.position` (rounded) and its raw value
-   *  (including the anchor when there is one). */
-  estimatedOvr: number;
-  estimatedOvrExact: number;
-  /** Proficiency of the card at `config.position` that the estimate assumes
-   *  ("full" when no aptitudes were given); half / none apply the fitted penalty. */
+  /** Overall at `config.position` by the exact formula (= tiles[position]). */
+  overall: number;
+  /** Proficiency of the card at `config.position` ("full" when no aptitudes
+   *  were given); it scales the stats inside the formula. */
   proficiency: PositionProficiency;
-  /** Anchor added to the estimate (card overall − formula on its base stats);
-   *  null when the estimate is not anchored (another position than the
-   *  registered one, or no card overall given). */
-  ovrAnchor: number | null;
-  /** True at Manager Proficiency 86, whose bonus rule is an unconfirmed exception. */
-  managerProficiencyUnconfirmed: boolean;
+  /** The exact overall at all 13 positions for the projected stats. */
+  tiles: Record<Position, number>;
+}
+
+/** One manager of efootbase's picker (manager.picker). `pills` are the one
+ *  or two stats the manager raises by +1 (eFootLab stat names); 24 of the 69
+ *  picker managers have a single pill on efootbase. */
+export interface PickerManagerDTO {
+  id: string;
+  name: string;
+  /** Manager rating 83–90; choosing the manager sets Manager Proficiency to it. */
+  rating: number;
+  /** Manager art on R2 (rebased onto R2_PUBLIC_BASE), or null. */
+  imageUrl: string | null;
+  pills: BaseStat[];
 }
 
 // ---- Auth session (auth.getSession; consumed by apps/web/lib/auth.tsx) ----

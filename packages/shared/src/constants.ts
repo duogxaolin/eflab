@@ -97,9 +97,8 @@ export type Position = (typeof POSITIONS)[number];
 
 // Position proficiency of a card at a position, derived from its aptitude code
 // (`PlayerCardDTO.positionAptitudes`: 0 = full / registered, 1 = half /
-// secondary, 2 = none). The progression engine's overall estimate is fitted at
-// full proficiency and applies a fitted penalty for the other two levels
-// (ovrWeights.ts `OVR_PROFICIENCY_ADJUST`).
+// secondary, 2 = none). The exact overall formula scales every stat by 1 /
+// 0.97 / 0.85 for the three levels (ovrModel.ts `OVR_MODEL.scale`).
 export const POSITION_PROFICIENCIES = ["full", "half", "none"] as const;
 export type PositionProficiency = (typeof POSITION_PROFICIENCIES)[number];
 export const proficiencyFromAptitude = (aptitude: number | null | undefined): PositionProficiency =>

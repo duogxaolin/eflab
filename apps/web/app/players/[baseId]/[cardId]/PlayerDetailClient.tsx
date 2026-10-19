@@ -10,8 +10,9 @@ import {
   CARD_TYPE_LABELS,
   PLAYING_STYLE_DESCRIPTIONS,
   POSITIONS,
+  bestFitPosition,
   formatFeetInches,
-  positionFromIndex,
+  positionTiles,
   simulateBuild,
   type BaseStat,
   type CardPreview,
@@ -40,13 +41,17 @@ import { POSITION_LABEL, positionOf, playingStyleLabel } from "@/lib/card-displa
 //   left     card (face shows the live build estimate, MAX badge = dump max),
 //            Progression, Card Info, Other Versions;
 //   main     overview text + specs line, ten-category readout, stat grid
-//            (five tier colours, "+N" booster chips, click-to-highlight),
-//            skills (Showtime first), Body Model, Position & Playstyle
-//            (Best Fit / At POS / "N Full · N Half", pitch, style cards,
-//            WF / Form / Injury Resistance stars).
-// The Progression state lives here because the stat grid and the card face
-// render the engine's projection; it opens on the Max-OVR build with every
-// usable booster on (defaultProgressionState).
+//            (five tier colours, "+N" booster / "+1" manager chips,
+//            click-to-highlight), skills (Showtime first), Body Model,
+//            Position & Playstyle (Best Fit / At POS / "N Full · N Half",
+//            pitch, style cards, WF / Form / Injury Resistance stars).
+// The Progression state lives here because the stat grid, the card face and
+// the Pitch Map render the engine's projection; it opens on the Max-OVR build
+// with every usable booster on and no manager (defaultProgressionState).
+// Best Fit, "At POS" and the 13 Pitch Map values come from the exact overall
+// formula (`positionTiles`) on the stats shown — the build's when the card has
+// a Progression panel, otherwise the stat grid's — never from the stored
+// eFHUB ratings (change efootbase-exact-model-managers).
 
 // Key stats shown on the attack / defence playing-style cards.
 const ATTACK_KEY_STATS: readonly BaseStat[] = ["offensiveAwareness", "finishing", "dribbling", "lowPass"];
@@ -90,19 +95,26 @@ export function PlayerDetailClient({
   const p = q.data ?? initialData;
 
   const buildDefaults = useMemo(() => (p ? defaultProgressionState(p) : null), [p]);
-  // Pure, client-side engine (packages/shared/src/progression.ts). `cardOvr`
-  // anchors the estimate at the registered position.
+  // Pure, client-side engine (packages/shared/src/progression.ts).
   const buildResult = useMemo(
     () =>
       p
         ? simulateBuild({
             base: p.stats,
             levelCap: p.levelCap,
-            registeredPosition: positionFromIndex(p.registeredPosition),
-            cardOvr: p.ovr,
-            config: { playerId: p.id, ...build },
+            height: p.height,
+            weakFootAccuracy: p.weakFootAccuracy,
+            config: {
+              playerId: p.id,
+              maxLevel: build.maxLevel,
+              position: build.position,
+              trainingPoints: build.trainingPoints,
+              boosters: build.boosters,
+              managerProficiency: build.managerProficiency,
+            },
             boosters: [p.booster1, p.booster2],
             positionAptitudes: p.positionAptitudes,
+            manager: build.manager ? { stats: build.manager.pills } : null,
           })
         : null,
     [p, build],
@@ -144,21 +156,7 @@ export function PlayerDetailClient({
   const skillLabels = orderedSkills.map((slug) => skillDisplayName(slug, skillBySlug.get(slug)));
   const showtimeCount = orderedSkills.filter((slug) => isShowtimeSkill(skillBySlug.get(slug))).length;
 
-  // Best Fit: highest *known* rating over every position (null ratings are
-  // skipped, never treated as 0); falls back to the registered position when
-  // the eFHUB cross-fill has no ratings for this card.
   const regPos: Position = POSITIONS[p.registeredPosition] ?? "GK";
-  const atRegRating = p.positionRatings[regPos];
-  let bestPos: Position = regPos;
-  let bestRating: number | null = typeof atRegRating === "number" ? atRegRating : null;
-  for (const k of POSITIONS) {
-    const v = p.positionRatings[k];
-    if (typeof v !== "number") continue;
-    if (bestRating === null || v > bestRating) {
-      bestRating = v;
-      bestPos = k;
-    }
-  }
   const fullPositions = POSITIONS.filter((k) => p.positionAptitudes[k] === 0);
   const halfPositions = POSITIONS.filter((k) => p.positionAptitudes[k] === 1);
   const proficiencyText = `${fullPositions.length} Full${halfPositions.length > 0 ? ` · ${halfPositions.length} Half` : ""}`;
@@ -170,12 +168,21 @@ export function PlayerDetailClient({
   const stats = view === "build" ? buildResult.projectedStats : view === "max" ? p.maxStats : p.stats;
   const boosterDeltas = view === "build" ? buildResult.boosterDeltas : undefined;
   const trainingDeltas = view === "build" ? buildResult.trainingDeltas : undefined;
+  const capDeltas = view === "build" ? buildResult.capDeltas : undefined;
   const proficiencyDeltas = view === "build" ? buildResult.proficiencyDeltas : undefined;
-  const estimatedOvr = buildResult.estimatedOvr;
-  // The card face prints the live build estimate (efootbase prints its build
+  const managerDeltas = view === "build" ? buildResult.managerDeltas : undefined;
+  const buildOvr = buildResult.overall;
+  // Position tiles (exact formula): the build's when the panel exists (the
+  // tile at the panel's position is the panel's overall), else the stats in
+  // the grid. Best Fit = the highest tile (registered position on a tie).
+  const tiles = hasProgression ? buildResult.tiles : positionTiles(stats, { height: p.height, weakFootAccuracy: p.weakFootAccuracy }, p.positionAptitudes);
+  const bestPos = bestFitPosition(tiles, regPos);
+  // Without a panel the card's level cap is 1: "Max" = base + Booster 1 (dump).
+  const tilesSource = hasProgression ? "current build" : view === "max" ? "max-level stats (Booster 1 on)" : "level-1 stats";
+  // The card face prints the build's overall (efootbase prints its build
   // overall there); the MAX badge stays the dump's max overall and the pill
   // in the header is the same number, so the two are never confused.
-  const cardPlayer = hasProgression ? { ...p, ovr: estimatedOvr } : p;
+  const cardPlayer = hasProgression ? { ...p, ovr: buildOvr } : p;
   const atkDesc = PLAYING_STYLE_DESCRIPTIONS[playstyleAtk];
   const defDesc = PLAYING_STYLE_DESCRIPTIONS[playstyleDef];
   const onHighlight = (next: TrainingCategory | null) => setHighlight(next);
@@ -195,14 +202,16 @@ export function PlayerDetailClient({
 
   const statsHeading =
     view === "build"
-      ? `Stats · ${customBuild ? "custom build" : "Max-OVR build"} · level ${build.maxLevel} · proficiency ${buildResult.config.managerProficiency} · ~${estimatedOvr} at ${build.position}`
+      ? `Stats · ${customBuild ? "custom build" : "Max-OVR build"} · level ${build.maxLevel} · ${
+          build.manager ? `${build.manager.name} (${buildResult.config.managerProficiency})` : `proficiency ${buildResult.config.managerProficiency}`
+        } · ${buildOvr} at ${build.position}`
       : view === "max"
         ? `Stats at max level ${p.levelCap} (dump)`
         : "Stats at level 1";
 
   const viewOptions: Array<[StatView, string]> = hasProgression
     ? [
-        ["build", `Build (~${estimatedOvr})`],
+        ["build", `Build (${buildOvr})`],
         ["max", `Max (${p.maxOvr})`],
         ["base", `Base (${p.ovr})`],
       ]
@@ -277,14 +286,13 @@ export function PlayerDetailClient({
             <PlayerCard player={cardPlayer} size="full" showDetails priority />
             {hasProgression && (
               <div
-                data-testid="card-estimate"
+                data-testid="card-build-overall"
                 className="pointer-events-none absolute right-1.5 top-1.5 z-10 rounded-md border border-[var(--color-accent)]/40 bg-black/75 px-1.5 py-0.5 font-mono text-[10px] font-bold text-[var(--color-accent)]"
-                title="The card face shows the estimated overall of the current build"
+                title="The card face shows the overall of the current build"
               >
-                <span aria-hidden>~</span>
-                <span className="sr-only">Estimated overall about </span>
-                {estimatedOvr} <span className="sr-only">at {build.position}</span>
-                <span aria-hidden className="text-[8px] font-semibold text-[var(--color-text-dim)]"> EST</span>
+                <span className="sr-only">Overall of the current build: </span>
+                {buildOvr} <span className="sr-only">at</span> {build.position}
+                <span aria-hidden className="text-[8px] font-semibold text-[var(--color-text-dim)]"> BUILD</span>
               </div>
             )}
           </div>
@@ -325,7 +333,7 @@ export function PlayerDetailClient({
               data-testid="progression-none"
               className="rounded-xl border border-[var(--color-line)] bg-[var(--color-panel)] px-5 py-3 text-xs text-[var(--color-text-secondary)] shadow-sm"
             >
-              Progression and manager data are not available for this card: its max level is 1, so it has no training points and no build.
+              No Progression panel for this card: its max level is 1, so it has no training points to spend (and no build to choose a manager for).
             </p>
           )}
         </div>
@@ -392,7 +400,7 @@ export function PlayerDetailClient({
             </div>
             {view === "build" && (
               <p className="text-[11px] text-[var(--color-text-secondary)]">
-                Projected from the base stats + training + the Manager Proficiency bonus + active boosters (engine estimate; cyan chips are booster bumps, the training lift and the bonus are inside the value — "Max" shows the dump&apos;s own max-level values, without the bonus, instead).
+                Base stats + training + the Manager Proficiency bonus, limited to 99, then active boosters + the manager&apos;s +1 (cyan chips are booster bumps, lime chips the manager; the training lift and the bonus are inside the value, a stat&apos;s tooltip splits it — &quot;Max&quot; shows the dump&apos;s own max-level values, without the bonus, instead).
                 {highlight ? " Click the highlighted stat or category again to clear the highlight." : " Click a stat or a category to highlight the stats it trains."}
               </p>
             )}
@@ -400,7 +408,9 @@ export function PlayerDetailClient({
               values={stats}
               boosterDeltas={boosterDeltas}
               trainingDeltas={trainingDeltas}
+              capDeltas={capDeltas}
               proficiencyDeltas={proficiencyDeltas}
+              managerDeltas={managerDeltas}
               highlight={highlight}
               onHighlight={onHighlight}
             />
@@ -443,16 +453,14 @@ export function PlayerDetailClient({
                 <div className="text-[11px] text-[var(--color-text-dim)] uppercase font-semibold">Best Fit</div>
                 <div className="flex items-baseline gap-2 mt-1">
                   <span className="text-2xl font-bold text-white">{POSITION_LABEL[bestPos]}</span>
-                  <span className="text-sm font-mono font-bold text-stat-tier-cyan">{bestRating ?? "n/a"}</span>
+                  <span className="text-sm font-mono font-bold text-stat-tier-cyan" data-testid="best-fit-value">{tiles[bestPos]}</span>
                 </div>
               </div>
               <div className="p-3.5 rounded-xl bg-[var(--color-canvas)] border border-[var(--color-line)]">
                 <div className="text-[11px] text-[var(--color-text-dim)] uppercase font-semibold">At {posLabel}</div>
                 <div className="flex items-baseline gap-2 mt-1">
-                  <span className="text-2xl font-bold text-white">{typeof atRegRating === "number" ? atRegRating : "n/a"}</span>
-                  <span className="text-[11px] text-[var(--color-text-dim)]">
-                    {typeof atRegRating === "number" ? "eFHUB rating" : "no position rating for this card"}
-                  </span>
+                  <span className="text-2xl font-bold text-white" data-testid="at-position-value">{tiles[regPos]}</span>
+                  <span className="text-[11px] text-[var(--color-text-dim)]">{tilesSource}</span>
                 </div>
               </div>
               <div className="p-3.5 rounded-xl bg-[var(--color-canvas)] border border-[var(--color-line)]">
@@ -464,8 +472,12 @@ export function PlayerDetailClient({
             </div>
 
             <div className="grid gap-6 lg:grid-cols-[350px_minmax(0,1fr)] items-start pt-1">
-              <div className="flex justify-center w-full mx-auto lg:mx-0">
-                <PitchMap positionAptitudes={p.positionAptitudes} positionRatings={p.positionRatings} registeredPosition={regPos} />
+              <div className="flex w-full flex-col items-center gap-2 mx-auto lg:mx-0">
+                <PitchMap positionAptitudes={p.positionAptitudes} tiles={tiles} registeredPosition={regPos} />
+                <p className="max-w-[350px] text-[11px] leading-relaxed text-[var(--color-text-dim)]" data-testid="pitch-note">
+                  Overall at each position, computed with efootbase&apos;s formula from the {tilesSource}.
+                  {hasProgression ? "" : " Matched efootbase's own tiles on the five measured cards; other cards are not checked tile by tile."}
+                </p>
               </div>
 
               <div className="space-y-4">

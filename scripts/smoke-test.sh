@@ -197,8 +197,10 @@ else
 fi
 
 # 3. removed procedures answer 404 (community / feed / tierList / user / pages /
-#    pack / manager routers were deleted in change remove-dead-surface; the
-#    manager tactic cross-fill is asserted by scripts/verify-seed.py instead)
+#    pack routers and the old manager router were deleted in change
+#    remove-dead-surface; the manager tactic cross-fill is asserted by
+#    scripts/verify-seed.py instead). The new `manager` router has `picker`
+#    only (check 4c), so manager.list still answers 404.
 trpc_get "manager.list" '{}'
 MANAGER_CODE="$CODE"
 trpc_get "pack.list" '{}'
@@ -248,6 +250,34 @@ if [ "$ICON_CODE" = "200 image/webp" ]; then
 else
   fail "skill icon on R2 → 200 image/webp" "url=$ICON_URL got=$ICON_CODE"
 fi
+# 4c. manager.picker (change efootbase-exact-model-managers): the 69 picker
+#     managers, rating DESC then id ASC, each with 1–2 eFootLab stat pills (24
+#     have one pill on efootbase) and an image URL on the configured R2 host
+#     (the host the skill icon above came from); one image answers 200 webp.
+#     A malformed input is a 4xx, never a 5xx.
+BASE_STATS_PY='["offensiveAwareness","ballControl","dribbling","tightPossession","lowPass","loftedPass","finishing","heading","placeKicking","curl","speed","acceleration","kickingPower","jump","physicalContact","balance","stamina","defensiveAwareness","ballWinning","defensiveEngagement","aggression","gkAwareness","gkCatching","gkParrying","gkReflexes","gkReach"]'
+ICON_HOST="$(py 'import sys,urllib.parse; print(urllib.parse.urlsplit(sys.argv[1]).netloc)' "$ICON_URL")"
+trpc_get "manager.picker" '{}'
+MP="$(result "'%d|%s|%s|%d|%d|%d|%s' % (len(d), [ (-m['rating'], int(m['id'])) for m in d ] == sorted((-m['rating'], int(m['id'])) for m in d), all(1 <= len(m['pills']) <= 2 and len(set(m['pills'])) == len(m['pills']) and all(p in $BASE_STATS_PY for p in m['pills']) for m in d), sum(len(m['pills']) == 2 for m in d), len({m['id'] for m in d}), sum(83 <= m['rating'] <= 90 and bool(m['name']) for m in d), all(m['imageUrl'] and m['imageUrl'].split('/')[2] == '$ICON_HOST' for m in d))")"
+MGR_IMG="$(result 'd[0]["imageUrl"]')"
+if [ "$CODE" = "200" ] && [ "$MP" = "69|True|True|45|69|69|True" ]; then
+  pass "manager.picker → 69 managers, rating desc then id asc, 1–2 valid pills each (45 with two), ratings 83–90, images on $ICON_HOST"
+else
+  fail "manager.picker (expected '69|True|True|45|69|69|True')" "code=$CODE got='$MP' body=${BODY:0:200}"
+fi
+MGR_IMG_CODE="$(curl -sS -m 10 -o /dev/null -I -w '%{http_code} %{content_type}' "$MGR_IMG" 2>/dev/null || echo 000)"
+if [ "$MGR_IMG_CODE" = "200 image/webp" ]; then
+  pass "picker manager image on R2 → 200 image/webp"
+else
+  fail "picker manager image on R2 → 200 image/webp" "url=$MGR_IMG got=$MGR_IMG_CODE"
+fi
+BAD_CODE="$(curl -sS -m 10 -o /dev/null -w '%{http_code}' "$API/trpc/manager.picker?input=%7Bnot-json" 2>/dev/null || echo 000)"
+if [ "${BAD_CODE:0:1}" = "4" ] || [ "$BAD_CODE" = "200" ]; then
+  pass "manager.picker with a malformed input → $BAD_CODE (no 5xx)"
+else
+  fail "manager.picker with a malformed input → no 5xx" "code=$BAD_CODE"
+fi
+
 trpc_get "skill.byId" '{"slug":"sharp-cut"}'
 if [ "$CODE" = "200" ] && [ "$(result 'd is None')" = "True" ]; then
   pass "skill.byId of an unreleased skill (sharp-cut) → null (hidden)"
