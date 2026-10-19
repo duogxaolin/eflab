@@ -116,6 +116,28 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
 
+  apps/worker:
+    dependencies:
+      '@eflab/config':
+        specifier: workspace:*
+        version: link:../../packages/config
+      '@eflab/db':
+        specifier: workspace:*
+        version: link:../../packages/db
+      '@eflab/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.2
+        version: 22.20.4
+      tsx:
+        specifier: ^4.19.2
+        version: 4.23.15
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+
   packages/config: {}
 
   packages/db:

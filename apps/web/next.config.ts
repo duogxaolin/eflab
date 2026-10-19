@@ -85,6 +85,11 @@ const SECURITY_HEADERS = [
   { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=()" },
 ];
 
+const ADMIN_HEADERS = [
+  { key: "Cache-Control", value: "no-store" },
+  { key: "X-Robots-Tag", value: "noindex, nofollow" },
+];
+
 const config: NextConfig = {
   reactStrictMode: false,
   typedRoutes: true,
@@ -101,7 +106,14 @@ const config: NextConfig = {
     ...(BUILD_UTC ? { NEXT_PUBLIC_BUILD_UTC: BUILD_UTC } : {}),
   },
   async headers() {
-    return [{ source: "/:path*", headers: SECURITY_HEADERS }];
+    return [
+      { source: "/:path*", headers: SECURITY_HEADERS },
+      // Private admin area (openspec change admin-sync-worker): never cached,
+      // never indexed. `/admin/:path*` also matches `/admin` itself. The pages
+      // are rendered per request (app/admin/layout.tsx), so Next does not
+      // replace this Cache-Control with a prerender cache header.
+      { source: "/admin/:path*", headers: ADMIN_HEADERS },
+    ];
   },
   typescript: { ignoreBuildErrors: false },
 };
