@@ -7,15 +7,17 @@ import { Pagination } from "@/components/players/Pagination";
 import { QueryErrorState, CardGridSkeleton } from "@/lib/query-state";
 import type { SkillDTO } from "@eflab/shared";
 import { SKILL_GROUP_LABELS, skillDescription, skillGroup, skillLabel } from "@/lib/skill-labels";
+import { SkillIcon } from "@/components/skills/SkillIcon";
+import { SkillEffects } from "@/components/skills/SkillEffects";
 
 const PAGE_SIZE = 24;
 
 export function SkillDetailClient({ slug, initialData }: { slug: string; initialData: SkillDTO }) {
   const detail = trpc.skill.byId.useQuery({ slug }, { initialData });
   const skill = detail.data ?? initialData;
-  // Display label + Showtime/Classic group from the web-only table (lib/skill-labels.ts).
+  // Label, group, artwork, boosts and activation are the stored efootbase data.
   const label = skillLabel(skill);
-  const group = skillGroup(skill.slug);
+  const group = skillGroup(skill);
   const [page, setPage] = useState(1);
   const holders = trpc.skill.players.useQuery({ slug, page, limit: PAGE_SIZE }, { placeholderData: (prev) => prev });
   const catalogue = trpc.player.list.useQuery({ page: 1, limit: 1 }, { staleTime: 60 * 60_000 });
@@ -45,13 +47,28 @@ export function SkillDetailClient({ slug, initialData }: { slug: string; initial
         <li className="breadcrumbs__item text-white text-xs font-medium">{label}</li>
       </ol>
 
-      <div className="space-y-3">
-        <h1 className="text-3xl sm:text-4xl font-extrabold text-[var(--color-text-primary)] tracking-tight">{label}</h1>
-        <p className="text-sm text-[var(--color-text-secondary)] max-w-3xl leading-relaxed">{skillDescription(skill)}</p>
-        <div className="flex items-center gap-2 pt-1">
-          <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full bg-[var(--color-panel)] border border-[var(--color-line)] text-xs font-semibold text-[var(--color-text-primary)]">
-            {SKILL_GROUP_LABELS[group]}
-          </span>
+      <div className="flex flex-col gap-5 sm:flex-row sm:items-start">
+        {skill.iconUrl && (
+          <div className="w-full max-w-sm shrink-0 sm:w-72">
+            <SkillIcon src={skill.iconUrl} width="fluid" className="rounded-2xl border border-[var(--color-line)]" />
+          </div>
+        )}
+        <div className="min-w-0 space-y-3">
+          <h1 className="text-3xl sm:text-4xl font-extrabold text-[var(--color-text-primary)] tracking-tight">{label}</h1>
+          <p className="text-sm text-[var(--color-text-secondary)] max-w-3xl leading-relaxed">{skillDescription(skill)}</p>
+          <div className="flex items-center gap-2 pt-1">
+            <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full bg-[var(--color-panel)] border border-[var(--color-line)] text-xs font-semibold text-[var(--color-text-primary)]">
+              {SKILL_GROUP_LABELS[group]}
+            </span>
+          </div>
+          {(skill.effects.length > 0 || skill.activation) && (
+            <section aria-labelledby="skill-effects" className="space-y-2 pt-1" data-testid="skill-effects">
+              <h2 id="skill-effects" className="text-xs font-bold text-white uppercase tracking-wider">
+                Stat boost
+              </h2>
+              <SkillEffects effects={skill.effects} activation={skill.activation} />
+            </section>
+          )}
         </div>
       </div>
 

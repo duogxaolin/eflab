@@ -114,12 +114,40 @@ export interface PlayerCardDTO extends CardPreview {
   };
 }
 
+/** efootbase's two skill groups. Catalogue entries efootbase does not treat as
+ *  skills have no group (`null`) and are listed under "Other". */
+export type SkillGroup = "showtime" | "classic";
+
+/** One stat boost of a skill, with the eFootLab stat name (efootbase `tackling`
+ *  → `ballWinning`, `jumping` → `jump`, `setPieceTaking` → `placeKicking`). */
+export interface SkillEffect {
+  stat: BaseStat;
+  value: number;
+}
+
+/** A public skill (skill.list / skill.byId). Name, description, group, icon,
+ *  effects and activation come from the static efootbase snapshot when the seed
+ *  had it (openspec efootbase-static-data); otherwise they are the fixture text
+ *  and null / []. Unreleased skills are never returned. */
 export interface SkillDTO {
   id: number;
   slug: string;
   name: string;
   description: string;
   category: string;
+  /** null = not an efootbase skill (the "Other" entries) or no snapshot. */
+  group: SkillGroup | null;
+  /** efootbase's wiki order (0-based); null for the "Other" entries. */
+  sortOrder: number | null;
+  /** Skill icon on R2 (rebased onto R2_PUBLIC_BASE), or null. */
+  iconUrl: string | null;
+  /** Stat boosts observed on efootbase; [] when none (most skills, and every
+   *  skill whose boost was never seen on a loaded card). */
+  effects: SkillEffect[];
+  /** When the boost applies (efootbase text), or null. */
+  activation: string | null;
+  /** Always true in API responses (hidden skills are filtered out). */
+  released: boolean;
   /** Number of cards that have this skill (grouped count of PlayerSkill). 0 for
    *  catalogue skills no dump card carries. */
   playerCount: number;

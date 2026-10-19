@@ -26,6 +26,18 @@ export const API_ORIGIN = process.env.API_ORIGIN ?? `http://localhost:${API_PORT
 // so changing the R2 domain is an env change, not a database rewrite.
 export const R2_PUBLIC_BASE = (process.env.R2_PUBLIC_BASE ?? "").trim().replace(/\/+$/, "") || null;
 
+// Public dev URL of the `efootlab` bucket — the same fallback the seeder and the
+// web (lib/r2-images.ts) use when no base is configured.
+const R2_DEFAULT_BASE = "https://pub-1a19c30950c04ef3964669ac4792f6f0.r2.dev";
+
+/** Public URL of an R2 object stored as a key (e.g. Skill.iconKey
+ *  "skills/Skill_OneTouchPass.webp"): built on the fallback base and rebased
+ *  onto R2_PUBLIC_BASE like every stored URL. null stays null. */
+export function r2ObjectUrl(key: string | null | undefined): string | null {
+  if (!key) return null;
+  return rebaseR2Url(`${R2_DEFAULT_BASE}/${key.replace(/^\/+/, "")}`);
+}
+
 /** Rebase a stored R2 object URL onto R2_PUBLIC_BASE (keeps the object path).
  *  Returns the input unchanged when the env var is unset or the value is not an
  *  absolute URL; null stays null. */

@@ -9,7 +9,7 @@
   },
   {
     "id": "17603460437385",
-    "name": "Christian Chivu",
+    "name": "Cristian Chivu",
     "rating": 89,
     "booster_1": "speed",
     "booster_2": "stamina",
@@ -518,5 +518,37 @@
     "booster_1": "finishing",
     "booster_2": "aggression",
     "image": "17608560707469.webp"
+  },
+  {
+    "id": "17609902885263",
+    "name": "Jürgen Klopp",
+    "rating": 90,
+    "booster_1": "defensive_awareness",
+    "booster_2": "stamina",
+    "image": "17609902885263.webp"
+  },
+  {
+    "id": "17610171323785",
+    "name": "Cristian Chivu",
+    "rating": 90,
+    "booster_1": "low_pass",
+    "booster_2": "lofted_pass",
+    "image": "17610171323785.webp"
+  },
+  {
+    "id": "17613392545968",
+    "name": "R. Rodríguez",
+    "rating": 88,
+    "booster_1": "tight_possession",
+    "booster_2": "balance",
+    "image": "17613392545968.webp"
+  },
+  {
+    "id": "17613660984975",
+    "name": "Makino Tomoaki",
+    "rating": 88,
+    "booster_1": "tackling",
+    "booster_2": "offensive_awareness",
+    "image": "17613660984975.webp"
   }
 ]

@@ -185,7 +185,7 @@ function SkillsDialog({ state, update, onClose }: DialogProps) {
   const items = [...(q.data ?? [])]
     .filter((s) => s.playerCount > 0)
     .sort(compareSkills)
-    .map((s) => ({ value: s.id, label: skillLabel(s), group: SKILL_GROUP_LABELS[skillGroup(s.slug)], hint: `${s.playerCount.toLocaleString("en-US")} cards` }));
+    .map((s) => ({ value: s.id, label: skillLabel(s), group: SKILL_GROUP_LABELS[skillGroup(s)], hint: `${s.playerCount.toLocaleString("en-US")} cards` }));
   return (
     <Modal open onClose={onClose} title="Skills" panelClassName="max-w-2xl">
       <PickerList items={items} selected={state.skills} onChange={(skills) => update({ skills })} load={loadOf(q, "skills")} />

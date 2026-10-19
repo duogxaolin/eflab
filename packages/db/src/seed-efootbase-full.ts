@@ -29,15 +29,26 @@
 //     `injury_resistance`, `player_value`, `leg_length_height`, `name_normalized`;
 //   · unmatched `s_*` skill keys, card-type codes that disagree with
 //     players_meta.json / pack names, and unknown booster stat keys abort the seed.
+//   · static efootbase snapshot (openspec efootbase-static-data, optional, git-ignored
+//     dump/efootbase/static/ — docs/efootbase-static-snapshot.md): skills.json adds
+//     name, description, group, order, icon key, stat effects and activation to the
+//     fixture skills (the fixture slug stays the join key); managers.json marks the
+//     picker managers. Both are parsed and validated BEFORE the transaction opens —
+//     an unknown effect / pill stat, an unmapped skill key or a manager that
+//     disagrees with fixtures/managers.json aborts with the database unchanged. A
+//     missing file is a warning, not an error.
 
 import { createReadStream, readFileSync, existsSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import {
+  BASE_STATS,
   CARD_TYPE_BY_EFOOTBASE_CODE,
   CARD_TYPE_LABELS,
+  EFOOTBASE_STAT_MAP,
   POSITIONS,
+  type BaseStat,
   type CardType,
 } from "@eflab/shared";
 import { prisma, Prisma } from "./client.js";
@@ -47,6 +58,10 @@ const DUMP_DIR = resolve(__dirname, "../../../dump/efootbase");
 const JSONL_PATH = process.env.EFOOTBASE_DUMP_PATH ?? resolve(DUMP_DIR, "players.jsonl");
 const META_PATH = process.env.EFOOTBASE_META_PATH ?? resolve(DUMP_DIR, "players_meta.json");
 const PACKS_PATH = process.env.EFOOTBASE_PACKS_PATH ?? resolve(DUMP_DIR, "packs.json");
+const STATIC_DIR = process.env.EFOOTBASE_STATIC_DIR ?? resolve(DUMP_DIR, "static");
+const STATIC_SKILLS_PATH = resolve(STATIC_DIR, "skills.json");
+const STATIC_MANAGERS_PATH = resolve(STATIC_DIR, "managers.json");
+const STATIC_SKILL_ICONS_DIR = resolve(STATIC_DIR, "skill-icons");
 const FIXTURES_DIR = resolve(__dirname, "../fixtures");
 
 const R2_BASE = process.env.R2_PUBLIC_BASE
@@ -143,6 +158,16 @@ const STAT_MAP: Readonly<Record<string, string>> = {
 };
 const maxColumn = (base: string): string => `max${base.charAt(0).toUpperCase()}${base.slice(1)}`;
 
+// The static snapshot's stat names (skill effects: camelCase, manager pills:
+// snake_case) go through EFOOTBASE_STAT_MAP from @eflab/shared — one explicit
+// table, unknown keys abort. Guard: it agrees with STAT_MAP, every target is a stat.
+for (const [key, col] of Object.entries(STAT_MAP)) {
+  if (EFOOTBASE_STAT_MAP[key] !== col) throw new Error(`EFOOTBASE_STAT_MAP.${key} disagrees with STAT_MAP (${col})`);
+}
+for (const v of Object.values(EFOOTBASE_STAT_MAP)) {
+  if (!(BASE_STATS as readonly string[]).includes(v)) throw new Error(`EFOOTBASE_STAT_MAP target ${v} is not in BASE_STATS`);
+}
+
 // Booster `stats` keys: the 26 stat keys above plus weak_foot_accuracy.
 const BOOSTER_STAT_MAP: Readonly<Record<string, string>> = {
   ...STAT_MAP,
@@ -233,6 +258,142 @@ export const MANAGER_CROSSFILL_COLUMNS: ReadonlySet<string> = new Set([
   "age", "country", "adaptability", "affinity", "marketValue",
   "possessionGame", "quickCounter", "longBallCounter", "outWide", "longBall", "overload",
 ]);
+// Written only from the static snapshot (a dedicated UPDATE), never by the fixture
+// upsert — so a seed without dump/efootbase/static/managers.json leaves it as is.
+const MANAGER_STATIC_COLUMNS: ReadonlySet<string> = new Set(["inPicker"]);
+
+// ---- Static efootbase snapshot (dump/efootbase/static/) ----
+
+interface FixtureSkill { id: number; slug: string; name: string; description: string; category: string; released?: boolean }
+interface FixtureManager { id: string; name: string; rating?: number; booster_1?: string | null; booster_2?: string | null; image?: string }
+
+/** Snapshot skills.json entry (only the keys the seed reads; see docs/efootbase-static-snapshot.md). */
+interface StaticSkill {
+  key: string;
+  order: number;
+  name: string;
+  group: string;
+  on_wiki_list: boolean;
+  description: string;
+  icon_file: string | null;
+  boost: { effects?: Array<{ kind: string; attributeKey: string; value: number }>; activation?: string | null } | null;
+}
+interface StaticManager { id: string; name: string; rating: number; booster_1: string | null; booster_2: string | null }
+
+export interface SkillEffect { stat: BaseStat; value: number }
+interface SkillMeta {
+  efbKey: string;
+  name: string;
+  description: string;
+  group: "SHOWTIME" | "CLASSIC";
+  sortOrder: number;
+  iconKey: string | null;
+  effects: SkillEffect[];
+  activation: string | null;
+}
+
+/** efootbase stat name (either spelling) → eFootLab stat; unknown → throws. */
+function mapEfootbaseStat(key: string, where: string): BaseStat {
+  const stat = EFOOTBASE_STAT_MAP[key];
+  if (!stat) throw new Error(`${where}: unknown efootbase stat "${key}" — add it to EFOOTBASE_STAT_MAP (never guessed)`);
+  return stat;
+}
+
+/**
+ * Parse + validate dump/efootbase/static/skills.json against the fixture. Returns
+ * slug → metadata, or null (with a warning) when the file is missing. Any
+ * inconsistency throws — this runs before the transaction, so nothing is written.
+ */
+function loadStaticSkills(fixtureBySlug: ReadonlyMap<string, FixtureSkill>): Map<string, SkillMeta> | null {
+  if (!existsSync(STATIC_SKILLS_PATH)) {
+    console.log(`  ⚠ ${STATIC_SKILLS_PATH} missing — skills keep their fixture name/description, no group, icon, effects or activation (docs/efootbase-static-snapshot.md)`);
+    return null;
+  }
+  const raw = JSON.parse(readFileSync(STATIC_SKILLS_PATH, "utf-8")) as unknown;
+  if (!Array.isArray(raw)) throw new Error(`${STATIC_SKILLS_PATH}: expected an array of skills`);
+  const out = new Map<string, SkillMeta>();
+  const seenKeys = new Set<string>();
+  const missingIcons: string[] = [];
+  for (const s of raw as StaticSkill[]) {
+    const where = `${STATIC_SKILLS_PATH} ${JSON.stringify(s?.key)}`;
+    if (typeof s?.key !== "string" || !/^s_[a-z0-9_]+$/.test(s.key)) throw new Error(`${where}: bad skill key`);
+    if (seenKeys.has(s.key)) throw new Error(`${where}: duplicate skill key`);
+    seenKeys.add(s.key);
+    const slug = skillKeyToSlug(s.key);
+    const fx = fixtureBySlug.get(slug);
+    if (!fx) throw new Error(`${where}: maps to slug "${slug}", which is not in fixtures/skills.json (add a fact-only row or an alias)`);
+    if (typeof s.name !== "string" || s.name.trim() === "") throw new Error(`${where}: empty name`);
+    if (typeof s.order !== "number" || !Number.isInteger(s.order)) throw new Error(`${where}: order is not an integer`);
+    const group = s.group === "showtime" ? "SHOWTIME" : s.group === "classic" ? "CLASSIC" : null;
+    if (!group) throw new Error(`${where}: unknown group ${JSON.stringify(s.group)}`);
+    const released = fx.released ?? true;
+    if (released !== (s.on_wiki_list === true)) {
+      throw new Error(`${where}: fixture released=${released} but efootbase on_wiki_list=${String(s.on_wiki_list)} — update fixtures/skills.json`);
+    }
+    // Icon: the R2 key is skills/<icon_file>; set only when the snapshot carries
+    // the file (the 5 unreleased skills name a file efootbase does not serve).
+    let iconKey: string | null = null;
+    if (s.icon_file && /^Skill_[A-Za-z0-9]+\.webp$/.test(s.icon_file) && existsSync(resolve(STATIC_SKILL_ICONS_DIR, s.icon_file))) {
+      iconKey = `skills/${s.icon_file}`;
+    } else if (released) {
+      missingIcons.push(s.key);
+    }
+    const effects: SkillEffect[] = [];
+    for (const e of s.boost?.effects ?? []) {
+      if (e?.kind !== "flat") throw new Error(`${where}: effect kind ${JSON.stringify(e?.kind)} is not "flat"`);
+      const stat = mapEfootbaseStat(e.attributeKey, where);
+      if (typeof e.value !== "number" || !Number.isInteger(e.value)) throw new Error(`${where}: effect ${e.attributeKey} value ${String(e.value)} is not an integer`);
+      if (effects.some((x) => x.stat === stat)) throw new Error(`${where}: stat ${stat} appears twice in the effects`);
+      effects.push({ stat, value: e.value });
+    }
+    const activation = typeof s.boost?.activation === "string" && s.boost.activation.trim() !== "" ? s.boost.activation.trim() : null;
+    out.set(slug, {
+      efbKey: s.key,
+      name: s.name.trim(),
+      description: typeof s.description === "string" ? s.description.trim() : "",
+      group,
+      sortOrder: s.order,
+      iconKey,
+      effects,
+      activation,
+    });
+  }
+  if (missingIcons.length > 0) console.log(`  ⚠ released skills without an icon file in ${STATIC_SKILL_ICONS_DIR}: ${missingIcons.join(", ")}`);
+  return out;
+}
+
+/**
+ * Parse + validate dump/efootbase/static/managers.json: every picker manager must be
+ * a fixture manager with the same name, rating and pills (fixtures/managers.json is
+ * the committed, fact-only source). Returns the picker ids, or null when missing.
+ */
+function loadStaticManagers(fixture: readonly FixtureManager[]): bigint[] | null {
+  if (!existsSync(STATIC_MANAGERS_PATH)) {
+    console.log(`  ⚠ ${STATIC_MANAGERS_PATH} missing — Manager.inPicker left unchanged (docs/efootbase-static-snapshot.md)`);
+    return null;
+  }
+  const raw = JSON.parse(readFileSync(STATIC_MANAGERS_PATH, "utf-8")) as unknown;
+  if (!Array.isArray(raw)) throw new Error(`${STATIC_MANAGERS_PATH}: expected an array of managers`);
+  const byId = new Map(fixture.map((m) => [m.id, m]));
+  const ids = new Set<string>();
+  const problems: string[] = [];
+  for (const m of raw as StaticManager[]) {
+    const where = `manager ${JSON.stringify(m?.id)}`;
+    if (typeof m?.id !== "string" || !/^\d{1,16}$/.test(m.id)) throw new Error(`${STATIC_MANAGERS_PATH} ${where}: bad id`);
+    if (ids.has(m.id)) throw new Error(`${STATIC_MANAGERS_PATH} ${where}: duplicate id`);
+    ids.add(m.id);
+    for (const pill of [m.booster_1, m.booster_2]) if (pill != null) mapEfootbaseStat(pill, `${STATIC_MANAGERS_PATH} ${where}`);
+    const fx = byId.get(m.id);
+    if (!fx) { problems.push(`${where} (${m.name}) is not in fixtures/managers.json`); continue; }
+    if (fx.name !== m.name) problems.push(`${where}: name ${JSON.stringify(fx.name)} in fixtures, ${JSON.stringify(m.name)} in the snapshot`);
+    if ((fx.rating ?? 0) !== m.rating) problems.push(`${where}: rating ${fx.rating} in fixtures, ${m.rating} in the snapshot`);
+    if ((fx.booster_1 ?? null) !== (m.booster_1 ?? null) || (fx.booster_2 ?? null) !== (m.booster_2 ?? null)) {
+      problems.push(`${where}: pills ${fx.booster_1}/${fx.booster_2} in fixtures, ${m.booster_1}/${m.booster_2} in the snapshot`);
+    }
+  }
+  if (problems.length > 0) throw new Error(`${STATIC_MANAGERS_PATH} disagrees with fixtures/managers.json:\n  ${problems.join("\n  ")}`);
+  return [...ids].sort().map((id) => BigInt(id));
+}
 
 // ---- Generic upsert over a model-derived column list ----
 
@@ -302,7 +463,7 @@ function makeUpserter(model: string, table: string, excludedColumns: ReadonlySet
         for (const k of Object.keys(row)) {
           if (!known.has(k)) {
             throw new Error(excludedColumns.has(k)
-              ? `${model}.${k} is cross-fill-owned; the seeder must not write it`
+              ? `${model}.${k} is excluded from this upsert (cross-fill-owned or written separately)`
               : `${model}.${k} is not a scalar column of the model`);
           }
         }
@@ -436,15 +597,33 @@ async function main(): Promise<void> {
 
   // ── Fixtures ───────────────────────────────────────────────────────────
   const skillsFixture = JSON.parse(readFileSync(resolve(FIXTURES_DIR, "skills.json"), "utf-8")) as {
-    skills: Array<{ id: number; slug: string; name: string; description: string; category: string }>;
+    skills: FixtureSkill[];
   };
   const slugToSkillId = new Map(skillsFixture.skills.map((s) => [s.slug, s.id]));
+  const skillReleasedById = new Map(skillsFixture.skills.map((s) => [s.id, s.released ?? true]));
   const leaguesFixture = JSON.parse(readFileSync(resolve(FIXTURES_DIR, "leagues.json"), "utf-8")) as {
     leagues: Record<string, { name: string; region: string }>;
   };
-  const managersFixture = JSON.parse(readFileSync(resolve(FIXTURES_DIR, "managers.json"), "utf-8")) as Array<{
-    id: string; name: string; rating?: number; booster_1?: string; booster_2?: string; image?: string;
-  }>;
+  const managersFixture = JSON.parse(readFileSync(resolve(FIXTURES_DIR, "managers.json"), "utf-8")) as FixtureManager[];
+  // Manager pills → eFootLab stat names (same table as the skill effects); unknown aborts.
+  const managerRows = managersFixture.map((m) => ({
+    id: BigInt(m.id),
+    name: m.name,
+    rating: m.rating ?? 0,
+    booster1Stat: m.booster_1 ? mapEfootbaseStat(m.booster_1, `fixtures/managers.json ${m.id}`) : null,
+    booster2Stat: m.booster_2 ? mapEfootbaseStat(m.booster_2, `fixtures/managers.json ${m.id}`) : null,
+    imageUrl: m.image ? `${R2_BASE}/managers/${m.image}` : null,
+  }));
+
+  // ── Static efootbase snapshot — validated before anything is written ────
+  console.log(`static snapshot: ${STATIC_DIR}`);
+  const skillMeta = loadStaticSkills(new Map(skillsFixture.skills.map((s) => [s.slug, s])));
+  const pickerIds = loadStaticManagers(managersFixture);
+  if (skillMeta) {
+    const metas = [...skillMeta.values()];
+    console.log(`  skills: ${skillMeta.size} attached (${metas.filter((m) => m.group === "SHOWTIME").length} Showtime, ${metas.filter((m) => m.group === "CLASSIC").length} Classic, ${metas.filter((m) => m.iconKey).length} with icon, ${metas.filter((m) => m.effects.length > 0).length} with effects)`);
+  }
+  if (pickerIds) console.log(`  picker managers: ${pickerIds.length}`);
   const boostersFixture = JSON.parse(readFileSync(resolve(FIXTURES_DIR, "boosters.json"), "utf-8")) as {
     standard: Array<{ id: number; nameEn: string; nameJa?: string; bonus: number[] }>;
     basic: Array<{ id: number; nameEn: string; nameJa?: string; bonus: number[] }>;
@@ -458,6 +637,7 @@ async function main(): Promise<void> {
   const featuredPack = new Map<string, { time: number; type: string }>();
   const boosterDump = new Map<number, BoosterObj>();
   const skillKeys = new Set<string>();
+  const skillHolders = new Map<string, number>(); // s_* key → cards with the flag set
   const dumpIds = new Set<number>();
   const cardTypeCount = new Map<number, number>();
   const packFamilyDisagreements = new Map<string, number>();
@@ -469,7 +649,11 @@ async function main(): Promise<void> {
     rowCount++;
     dumpIds.add(r.id);
     bundleIdSet.add(String(r.id));
-    for (const k of Object.keys(r)) if (k.startsWith("s_")) skillKeys.add(k);
+    for (const k of Object.keys(r)) {
+      if (!k.startsWith("s_")) continue;
+      skillKeys.add(k);
+      if (r[k]) skillHolders.set(k, (skillHolders.get(k) ?? 0) + 1);
+    }
 
     if (r.nationality && !nationalityName.has(r.nationality)) {
       nationalityName.set(r.nationality, { hash: basename(r.emblem_images?.nationality ?? null) });
@@ -523,6 +707,12 @@ async function main(): Promise<void> {
   }
   if (unmatchedSkillKeys.length > 0) {
     throw new Error(`${unmatchedSkillKeys.length} s_* keys match no slug in fixtures/skills.json: ${unmatchedSkillKeys.join(", ")}`);
+  }
+  // A hidden (released: false) skill that cards carry would hide real data.
+  const heldButHidden = [...skillKeyToId].filter(([k, id]) => skillReleasedById.get(id) === false && (skillHolders.get(k) ?? 0) > 0);
+  if (heldButHidden.length > 0) {
+    throw new Error(`skills marked released:false in fixtures/skills.json are carried by cards: ${
+      heldButHidden.map(([k]) => `${k} (${skillHolders.get(k)})`).join(", ")} — set released to true`);
   }
   console.log(`  skills matched: ${skillKeyToId.size}/${skillKeys.size} (fixture has ${skillsFixture.skills.length})`);
 
@@ -588,7 +778,7 @@ async function main(): Promise<void> {
 
   // ── Upserters (column lists derived from the Prisma model) ──────────────
   const playerUpsert = makeUpserter("Player", "Player", PLAYER_CROSSFILL_COLUMNS);
-  const managerUpsert = makeUpserter("Manager", "Manager", MANAGER_CROSSFILL_COLUMNS);
+  const managerUpsert = makeUpserter("Manager", "Manager", new Set([...MANAGER_CROSSFILL_COLUMNS, ...MANAGER_STATIC_COLUMNS]));
   const boosterUpsert = makeUpserter("Booster", "Booster", new Set());
   console.log(`  Player upsert columns: ${playerUpsert.columns.length} (cross-fill-owned excluded: ${PLAYER_CROSSFILL_COLUMNS.size})`);
 
@@ -613,8 +803,28 @@ async function main(): Promise<void> {
     await tx.league.deleteMany({});
     await tx.country.deleteMany({});
 
+    // Fixture rows (id, slug = join key, released) + the efootbase snapshot's
+    // name / description / group / order / icon / effects / activation where the
+    // skill is in it. The 17 non-skill fixture entries keep their fixture text
+    // and no group ("Other").
     await tx.skill.createMany({
-      data: skillsFixture.skills.map((s) => ({ id: s.id, slug: s.slug, name: s.name, description: s.description, category: s.category })),
+      data: skillsFixture.skills.map((s) => {
+        const meta = skillMeta?.get(s.slug);
+        return {
+          id: s.id,
+          slug: s.slug,
+          name: meta?.name ?? s.name,
+          description: meta?.description || s.description,
+          category: s.category,
+          released: s.released ?? true,
+          efbKey: meta?.efbKey ?? null,
+          group: meta?.group ?? null,
+          sortOrder: meta?.sortOrder ?? null,
+          iconKey: meta?.iconKey ?? null,
+          effects: (meta?.effects ?? []) as unknown as Prisma.InputJsonValue,
+          activation: meta?.activation ?? null,
+        };
+      }),
     });
     await tx.league.createMany({
       data: Object.entries(leaguesFixture.leagues).map(([oid, info]) => {
@@ -651,18 +861,20 @@ async function main(): Promise<void> {
     });
     console.log(`  skills ${skillsFixture.skills.length} | leagues ${Object.keys(leaguesFixture.leagues).length} | countries ${countryNameToId.size} | teams ${teamNameToId.size} | packs ${packNameToId.size}`);
 
-    // Manager (65 efootbase APK fixtures) — upsert; tactic columns stay cross-fill-owned.
-    await managerUpsert.run(tx, managersFixture.map((m) => ({
-      id: BigInt(m.id),
-      name: m.name,
-      rating: m.rating ?? 0,
-      booster1Stat: m.booster_1 ?? null,
-      booster2Stat: m.booster_2 ?? null,
-      imageUrl: m.image ? `${R2_BASE}/managers/${m.image}` : null,
-    })));
+    // Manager (69 fact-only fixtures: id, name, rating, pills as eFootLab stat
+    // names, R2 art) — upsert; tactic columns stay cross-fill-owned.
+    await managerUpsert.run(tx, managerRows);
+    // Picker flag: exactly the snapshot ids (only rows whose flag changes are written).
+    if (pickerIds) {
+      const flipped = await tx.$executeRaw`UPDATE "Manager" SET "inPicker" = ("id" = ANY(${pickerIds}::int8[]))
+        WHERE "inPicker" IS DISTINCT FROM ("id" = ANY(${pickerIds}::int8[]))`;
+      const inPicker = await tx.manager.count({ where: { inPicker: true } });
+      if (inPicker !== pickerIds.length) throw new Error(`inPicker: ${inPicker} rows flagged, expected ${pickerIds.length}`);
+      console.log(`  picker managers flagged: ${inPicker} (${flipped} rows changed)`);
+    }
     // Booster — upsert by id, dump wins.
     await boosterUpsert.run(tx, [...boosterRows.values()]);
-    console.log(`  managers upserted ${managersFixture.length} | boosters upserted ${boosterRows.size} (dump ${boosterDump.size})`);
+    console.log(`  managers upserted ${managerRows.length} | boosters upserted ${boosterRows.size} (dump ${boosterDump.size})`);
 
     // ── Pass 2: stream players → upsert + PlayerSkill + PackCard ──────────
     console.log(`phase 2: upserting ${rowCount} players in batches of ${BATCH_SIZE}…`);
@@ -847,6 +1059,6 @@ function buildPlayerRow(
 }
 
 main().catch((e) => {
-  console.error("seed-efootbase-full: FAILED (transaction rolled back)", e);
+  console.error("seed-efootbase-full: FAILED (nothing committed — validation runs before the transaction, which rolls back on error)", e);
   prisma.$disconnect().finally(() => process.exit(1));
 });

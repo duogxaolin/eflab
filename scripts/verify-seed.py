@@ -13,6 +13,44 @@ Usage (from the repo root, stdlib only):
   python3 -I scripts/verify-seed.py --seed-only          # skip cross-fill checks
   python3 -I scripts/verify-seed.py --users 8,12,8       # also assert User/Session/Account counts
   python3 -I scripts/verify-seed.py --database-url postgresql://…   # default: DATABASE_URL env, then .env
+  python3 -I scripts/verify-seed.py --static-dir DIR      # efootbase static snapshot (default dump/efootbase/static)
+  python3 -I scripts/verify-seed.py --efhub-db FILE       # eFHUB SQLite (default EFHUB_DB_PATH, then dump/efhub/efhub_db.sqlite)
+  python3 -I scripts/verify-seed.py --after-crossfill     # right after `pnpm db:refresh` / `db:crossfill`: nothing may be pending
+
+Manager duplicates (cross-fill checks). A no-art manager (created by the cross-fill
+from an eFHUB coach) duplicates an art manager when its name equals the art row's
+name ignoring case and accents (Postgres `unaccent`), the art name's cross-fill alias
+(CROSSFILL_ALIASES, mirrors ALIASES in seed-efhub-crossfill.ts) or the eFHUB name of
+the art row's own id. The cross-fill merges every art row it can (exact id, then
+alias / name) and deletes such twins, so:
+  - a twin of an art row that HAS tactics is always a failure;
+  - a twin of a tactic-less art row that eFHUB cannot fill (id and alias key unknown
+    to eFHUB, read read-only from the SQLite file) is a failure too — the cross-fill
+    would never remove it (usually a missing alias);
+  - an art row whose own id is not an eFHUB coach id and whose name's best eFHUB
+    version (alias key, MarketValue DESC, Id ASC — the cross-fill's choice) is
+    ANOTHER Manager row's card is left without tactics on purpose (the cross-fill
+    never copies another card's tactics): it is listed as info, must have no
+    tactics, and is neither pending nor a "missing alias" failure. Today: the
+    2026-10 picker cards Jürgen Klopp 17609902885263 and Cristian Chivu
+    17610171323785 (their eFHUB entries are the older Klopp / Chivu art cards);
+  - a twin of a tactic-less art row that eFHUB CAN fill is "pending": the seed added
+    that art row after the last cross-fill (efootbase-static-data's Makino Tomoaki
+    and R. Rodríguez picker cards, eFHUB ids), and the next `pnpm db:crossfill`
+    fills it and deletes the twin (no-art 104079 / 100528). The
+    database alone cannot tell "the cross-fill has not run since that seed" from
+    "the cross-fill ran and failed to fill it" (no run marker is stored), so pending
+    rows are listed as info by default and are failures under --after-crossfill,
+    which asserts that a cross-fill ran after the last seed (use it after every
+    `pnpm db:refresh`). Without the eFHUB file every tactic-less art row counts as
+    pending.
+
+Static snapshot checks (openspec efootbase-static-data, skipped when the files are
+missing): released efootbase skills carry a description and an icon key, 23 Showtime
++ 44 Classic, the non-skill entries have no group, effects / activation / efbKey equal
+the snapshot mapped to eFootLab stat names, hidden skills match the fixture and have
+no holders, per-skill holder counts equal the dump, and exactly the snapshot's
+managers are flagged inPicker with matching name, rating (83–90) and pills.
 
 psql is taken from PSQL (env), then `psql` on PATH, then
 `docker exec -i eflab-postgres psql -U eflab -d <db>` as a last resort.
@@ -25,6 +63,7 @@ import json
 import os
 import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
@@ -58,6 +97,32 @@ BOOSTER_STAT_MAP = dict(STAT_MAP, weak_foot_accuracy="weakFootAccuracy")
 BOOSTER_LABEL = {"jumping": "Jump", "set_piece_taking": "SetPiece"}
 SKILL_KEY_ALIASES = {"s_heading": "s-heading", "s_phenomenal_pass": "phenomenal-passing",
                      "s_acrobatic_clearance": "acrobatic-clear", "s_rising_shot": "rising-shots"}
+BASE_STATS = set(STAT_MAP.values())
+# efootbase stat name (snake_case manager pills + camelCase skill effects) → eFootLab
+# stat; mirrors EFOOTBASE_STAT_MAP in packages/shared/src/constants.ts (used by the seed).
+EFOOTBASE_STAT_MAP = dict(STAT_MAP, **{
+    "offensiveAwareness": "offensiveAwareness", "ballControl": "ballControl",
+    "tightPossession": "tightPossession", "lowPass": "lowPass", "loftedPass": "loftedPass",
+    "setPieceTaking": "placeKicking", "kickingPower": "kickingPower",
+    "physicalContact": "physicalContact", "defensiveAwareness": "defensiveAwareness",
+    "defensiveEngagement": "defensiveEngagement", "gkAwareness": "gkAwareness",
+    "gkCatching": "gkCatching", "gkParrying": "gkParrying", "gkReflexes": "gkReflexes", "gkReach": "gkReach",
+})
+FIXTURES_DIR = ROOT / "packages" / "db" / "fixtures"
+EFHUB_DB_DEFAULT = ROOT / "dump" / "efhub" / "efhub_db.sqlite"
+# efootbase manager name (lower case) → eFHUB coachesName (lower case). Mirrors ALIASES in
+# packages/db/src/seed-efhub-crossfill.ts: the cross-fill's name merge and its
+# duplicate key. Keep the two in sync.
+CROSSFILL_ALIASES = {
+    "josé mourinho": "jose mourinho", "rúben amorim": "ruben amorim", "ståle solbakken": "stale solbakken",
+    "niko kovač": "niko kovac", "didier deschamps": "d. deschamps", "patrick kluivert": "p. kluivert",
+    "franz beckenbauer": "f. beckenbauer", "julian nagelsmann": "j. nagelsmann",
+    "roberto martínez": "r. martinez", "vincenzo montella": "v. montella", "jürgen klopp": "jurgen klopp",
+}
+
+
+def skill_slug(key: str) -> str:
+    return SKILL_KEY_ALIASES.get(key, key[2:].replace("_", "-"))
 
 failures: list[str] = []
 passes = 0
@@ -147,6 +212,81 @@ def database_url(cli: str | None) -> str:
     sys.exit(2)
 
 
+# ---------------------------------------------------------------- manager duplicates
+def efhub_coaches(path: Path) -> tuple[dict[str, str], dict[str, str]] | None:
+    """eFHUB coach id → lower-case coachesName, and lower-case name → id of its best
+    version (MarketValue DESC, Id ASC — the cross-fill's order), read-only SQLite;
+    None when the file is missing."""
+    if not path.exists():
+        return None
+    con = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
+    try:
+        names: dict[str, str] = {}
+        best: dict[str, str] = {}
+        for i, n in con.execute("SELECT Id, coachesName FROM coaches WHERE coachesName != 'Manager' "
+                                "ORDER BY MarketValue DESC, Id ASC"):
+            if isinstance(i, int) and i > 0 and isinstance(n, str) and n.strip():
+                names[str(i)] = n.lower()
+                best.setdefault(n.lower(), str(i))
+        return names, best
+    finally:
+        con.close()
+
+
+def check_manager_twins(db: "Psql", efhub_path: Path, after_crossfill: bool) -> None:
+    """No no-art manager may duplicate an art manager (see the header, "Manager duplicates")."""
+    rows = db.rows('SELECT id::text, name, lower(unaccent(name)), ("imageUrl" IS NOT NULL)::text, '
+                   '("possessionGame" > 0)::text FROM "Manager"')
+    efhub = efhub_coaches(efhub_path)
+    coach, best_by_name = efhub if efhub is not None else (None, {})
+    manager_ids = {r[0] for r in rows}
+    noart = [(r[0], r[1], {r[1].lower(), r[2]}) for r in rows if r[3] == "false"]
+    hard: list[str] = []          # duplicates the cross-fill should already have removed, or never will
+    pending: list[str] = []       # art rows the next cross-fill fills (seeded after the last cross-fill)
+    pending_twins: list[str] = []  # no-art rows the next cross-fill deletes
+    other_card: list[str] = []    # art rows left without tactics on purpose (eFHUB entry = another card)
+    copied: list[str] = []        # such rows that nevertheless carry tactics
+    for a_id, a_name, a_unaccent, a_art, a_tactics in rows:
+        if a_art != "true":
+            continue
+        alias_key = CROSSFILL_ALIASES.get(a_name.lower(), a_name.lower())
+        keys = {a_unaccent, alias_key}
+        if coach is not None and a_id in coach:
+            keys.add(coach[a_id])
+        twins = [f"{n_name} ({n_id})" for n_id, n_name, n_keys in noart if n_keys & keys]
+        has_tactics = a_tactics == "true"
+        best_id = best_by_name.get(alias_key)
+        if coach is not None and a_id not in coach and best_id is not None and best_id != a_id and best_id in manager_ids:
+            # The cross-fill skips this row (phase 1 b): its name's eFHUB entry is another card.
+            other_card.append(f"{a_name} ({a_id} → {best_id})")
+            if has_tactics:
+                copied.append(f"{a_name} ({a_id})")
+            pending_twins += [f"{t} of {a_name} ({a_id})" for t in twins]
+            continue
+        # Without the eFHUB file a tactic-less art row can only be assumed to be pending.
+        fillable = coach is None or a_id in coach or alias_key in best_by_name
+        if not has_tactics and fillable:
+            pending.append(f"{a_name} ({a_id})")
+            pending_twins += [f"{t} of {a_name} ({a_id})" for t in twins]
+        else:
+            hard += [f"{t} of {a_name} ({a_id}{'' if has_tactics else ', no eFHUB coach: missing alias?'})" for t in twins]
+    check(not hard, f"no no-art manager duplicates an art manager ({len(hard)} found{': ' + ', '.join(hard[:5]) if hard else ''})")
+    if coach is None:
+        print(f"  info {efhub_path} missing — every art manager without tactics is treated as pending")
+    else:
+        check(not copied, f"no art manager carries another card's eFHUB tactics ({', '.join(copied) or 'none'})")
+        if other_card:
+            print(f"  info art managers left without tactics on purpose (their eFHUB entry is another card): {', '.join(other_card)}")
+    if after_crossfill:
+        check(not pending, f"--after-crossfill: no art manager still waits for its tactics ({', '.join(pending) or 'none'})")
+        check(not pending_twins, f"--after-crossfill: no pending no-art twin remains ({', '.join(pending_twins) or 'none'})")
+    else:
+        if pending:
+            print(f"  info art managers seeded after the last cross-fill (`pnpm db:crossfill` fills them): {', '.join(pending)}")
+        if pending_twins:
+            print(f"  info no-art twins the next cross-fill deletes: {', '.join(pending_twins)}")
+
+
 # ---------------------------------------------------------------- main
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -155,6 +295,13 @@ def main() -> int:
     ap.add_argument("--database-url")
     ap.add_argument("--jsonl", default=str(DUMP_DIR / "players.jsonl"))
     ap.add_argument("--meta", default=str(DUMP_DIR / "players_meta.json"))
+    ap.add_argument("--static-dir", default=str(DUMP_DIR / "static"),
+                    help="efootbase static snapshot (skills.json / managers.json); checks are skipped when missing")
+    ap.add_argument("--efhub-db", default=os.environ.get("EFHUB_DB_PATH") or str(EFHUB_DB_DEFAULT),
+                    help="eFHUB SQLite (read-only) used to tell pending cross-fill work from real manager duplicates")
+    ap.add_argument("--after-crossfill", action="store_true",
+                    help="assert that `pnpm db:crossfill` ran after the last seed: no art manager may still be "
+                         "waiting for its tactics and no no-art twin may remain")
     args = ap.parse_args()
 
     db = Psql(database_url(args.database_url))
@@ -181,6 +328,7 @@ def main() -> int:
     cond_dist = collections.Counter()
     code_dist = collections.Counter()
     true_flags = 0
+    skill_true = collections.Counter()   # s_* key → cards with the flag set
     skill_keys: set[str] = set()
     boosters: dict[int, dict] = {}
     pack_disagree = collections.Counter()
@@ -211,6 +359,7 @@ def main() -> int:
                     skill_keys.add(k)
                     if v:
                         true_flags += 1
+                        skill_true[k] += 1
             for bid, b in ((r.get("booster_id"), r.get("booster")), (r.get("booster2_id"), r.get("booster2"))):
                 if bid is not None and b and bid not in boosters:
                     boosters[bid] = b
@@ -302,10 +451,71 @@ def main() -> int:
     # ---- skills --------------------------------------------------------------
     print("Skill / PlayerSkill")
     slugs = {r[0] for r in db.rows('SELECT slug FROM "Skill"')}
-    unmatched = sorted(k for k in skill_keys if SKILL_KEY_ALIASES.get(k, k[2:].replace("_", "-")) not in slugs)
+    unmatched = sorted(k for k in skill_keys if skill_slug(k) not in slugs)
     check(not unmatched, f"every dump s_* key has a Skill slug ({len(unmatched)} unmatched: {unmatched[:5]})")
     ps = db.count('SELECT count(*) FROM "PlayerSkill"')
     check(ps == true_flags, f"PlayerSkill rows {ps} == true s_* flags in dump {true_flags}")
+    holders = {r[0]: int(r[1]) for r in db.rows('SELECT s.slug, count(ps."playerId") FROM "Skill" s '
+                                                 'LEFT JOIN "PlayerSkill" ps ON ps."skillId" = s.id GROUP BY s.slug')}
+    bad_holders = [f"{k}: db {holders.get(skill_slug(k))} dump {skill_true[k]}" for k in sorted(skill_keys)
+                   if holders.get(skill_slug(k)) != skill_true[k]]
+    check(not bad_holders, f"per-skill holder counts equal the dump's true flags for all {len(skill_keys)} keys ({bad_holders[:3]})")
+    fixture_skills = json.loads((FIXTURES_DIR / "skills.json").read_text())["skills"]
+    check(len(slugs) == len(fixture_skills), f"Skill rows {len(slugs)} == fixture entries {len(fixture_skills)}")
+    hidden_fx = {s["slug"] for s in fixture_skills if s.get("released") is False}
+    hidden_db = {r[0] for r in db.rows('SELECT slug FROM "Skill" WHERE NOT released')}
+    check(hidden_db == hidden_fx, f"unreleased (hidden) skills {sorted(hidden_db)} == fixture released:false {sorted(hidden_fx)}")
+    held_hidden = [s for s in hidden_db if holders.get(s, 0) > 0]
+    check(not held_hidden, f"no card carries a hidden skill ({held_hidden})")
+
+    # ---- static efootbase snapshot (efootbase-static-data) -------------------
+    static_dir = Path(args.static_dir)
+    static_skills_path = static_dir / "skills.json"
+    if static_skills_path.exists():
+        print("Skill static data (dump/efootbase/static/skills.json)")
+        snap = json.loads(static_skills_path.read_text())
+        released_snap = [s for s in snap if s.get("on_wiki_list")]
+        want_show = sum(1 for s in released_snap if s["group"] == "showtime")
+        want_classic = sum(1 for s in released_snap if s["group"] == "classic")
+        cols = ["slug", "coalesce(\"efbKey\", '')", "released::text", "coalesce(\"group\"::text, '')",
+                "coalesce(\"iconKey\", '')", "length(description)", "effects::text", "coalesce(activation, '')"]
+        srows = {r[0]: r for r in db.rows('SELECT ' + ", ".join(cols) + ' FROM "Skill"')}
+        rel_with_key = [r for r in srows.values() if r[2] == "true" and r[1]]
+        check(len(rel_with_key) == len(released_snap),
+              f"released skills with efootbase data {len(rel_with_key)} == snapshot wiki skills {len(released_snap)}")
+        no_desc = [r[0] for r in rel_with_key if int(r[5]) == 0]
+        no_icon = [r[0] for r in rel_with_key if not r[4].startswith("skills/Skill_")]
+        check(not no_desc, f"every released efootbase skill has a description ({len(no_desc)} empty: {no_desc[:5]})")
+        check(not no_icon, f"every released efootbase skill has an icon key ({len(no_icon)} missing: {no_icon[:5]})")
+        got_show = sum(1 for r in rel_with_key if r[3] == "SHOWTIME")
+        got_classic = sum(1 for r in rel_with_key if r[3] == "CLASSIC")
+        check(got_show == want_show == 23, f"released Showtime skills db {got_show} == snapshot {want_show} == 23")
+        check(got_classic == want_classic == 44, f"released Classic skills db {got_classic} == snapshot {want_classic} == 44")
+        other = [r[0] for r in srows.values() if r[2] == "true" and not r[3]]
+        check(len(other) == len(fixture_skills) - len(snap),
+              f"non-skill entries without a group ('Other') {len(other)} == fixture {len(fixture_skills)} − snapshot {len(snap)}")
+        bad_eff: list[str] = []
+        n_eff = 0
+        for s in snap:
+            row = srows.get(skill_slug(s["key"]))
+            if row is None:
+                bad_eff.append(f"{s['key']}: no Skill row")
+                continue
+            want = [{"stat": EFOOTBASE_STAT_MAP.get(e["attributeKey"], f"?{e['attributeKey']}"), "value": e["value"]}
+                    for e in ((s.get("boost") or {}).get("effects") or [])]
+            got = json.loads(row[6])
+            n_eff += 1 if want else 0
+            if got != want or any(e["stat"] not in BASE_STATS for e in got):
+                bad_eff.append(f"{s['key']}: db {got} snapshot {want}")
+            act = ((s.get("boost") or {}).get("activation") or "").strip()
+            if row[7] != act:
+                bad_eff.append(f"{s['key']}: activation differs")
+            if row[1] != s["key"]:
+                bad_eff.append(f"{s['key']}: efbKey {row[1]!r}")
+        check(not bad_eff, f"effects (eFootLab stat names), activation and efbKey match the snapshot for {len(snap)} skills, "
+                           f"{n_eff} with effects ({len(bad_eff)} bad: {bad_eff[:3]})")
+    else:
+        print(f"Skill static data skipped ({static_skills_path} missing)")
 
     # ---- boosters ------------------------------------------------------------
     print("Booster")
@@ -337,7 +547,26 @@ def main() -> int:
     # ---- managers ------------------------------------------------------------
     print("Manager")
     managers = db.count('SELECT count(*) FROM "Manager"')
-    check(managers >= 65, f"Manager rows {managers} >= 65 fixtures")
+    fixture_managers = json.loads((FIXTURES_DIR / "managers.json").read_text())
+    check(managers >= len(fixture_managers), f"Manager rows {managers} >= {len(fixture_managers)} fixtures")
+    static_managers_path = Path(args.static_dir) / "managers.json"
+    if static_managers_path.exists():
+        snap_m = {m["id"]: m for m in json.loads(static_managers_path.read_text())}
+        mrows = {r[0]: r for r in db.rows('SELECT id::text, name, rating, coalesce("booster1Stat", \'\'), '
+                                          'coalesce("booster2Stat", \'\'), "inPicker"::text FROM "Manager" WHERE "inPicker"')}
+        check(set(mrows) == set(snap_m), f"inPicker managers {len(mrows)} == snapshot ids {len(snap_m)} (same set)")
+        bad_m = []
+        for mid, m in snap_m.items():
+            r = mrows.get(mid)
+            if r is None:
+                continue
+            want_pills = [EFOOTBASE_STAT_MAP.get(p, f"?{p}") if p else "" for p in (m["booster_1"], m["booster_2"])]
+            if r[1] != m["name"] or int(r[2]) != m["rating"] or not 83 <= int(r[2]) <= 90 \
+                    or [r[3], r[4]] != want_pills or not r[3] or (r[3] not in BASE_STATS) or (r[4] and r[4] not in BASE_STATS):
+                bad_m.append(f"{mid} {r[1:5]} vs {m['name']} {m['rating']} {want_pills}")
+        check(not bad_m, f"picker managers: name, rating 83–90 and pills (eFootLab stat names) match the snapshot ({bad_m[:3]})")
+    else:
+        print(f"  picker checks skipped ({static_managers_path} missing)")
 
     # ---- cross-fill ----------------------------------------------------------
     if not args.seed_only:
@@ -346,15 +575,17 @@ def main() -> int:
         # 65 art managers + 1,410 eFHUB-only coach names (1,454 distinct names in the
         # 2026-10 eFHUB file, 44 of them already carried by an art row) = 1,475. The
         # spec's "≥1,478" was measured on the old cross-fill, which created no-art
-        # duplicates of alias-merged art rows.
+        # duplicates of alias-merged art rows. With the 69 picker managers a cross-fill
+        # gives 1,477 rows and still 1,475 with tactics: Makino Tomoaki and R. Rodríguez
+        # are filled by id (their no-art twins 104079 / 100528 are deleted), Jürgen
+        # Klopp 17609902885263 and Cristian Chivu 17610171323785 stay empty on purpose.
         tactics = db.count('SELECT count(*) FROM "Manager" WHERE "possessionGame" > 0')
         check(tactics >= 1475, f"managers with non-zero tactics {tactics} >= 1475")
-        # The 65 art managers legitimately contain several versions of one coach
-        # (Mourinho ×3 …); what must never happen is a no-art eFHUB row duplicating an
-        # art row, or two no-art rows for one name.
-        dup_noart = db.count('SELECT count(*) FROM "Manager" n WHERE n."imageUrl" IS NULL AND EXISTS '
-                             '(SELECT 1 FROM "Manager" a WHERE a."imageUrl" IS NOT NULL AND lower(a.name) = lower(n.name))')
-        check(dup_noart == 0, f"no no-art manager duplicates an art manager ({dup_noart} found)")
+        # The art managers legitimately contain several versions of one coach
+        # (Mourinho ×3, Klopp ×2 …); what must never happen is a no-art eFHUB row
+        # duplicating an art row, or two no-art rows for one name. See the header
+        # ("Manager duplicates") for the rule and why --after-crossfill exists.
+        check_manager_twins(db, Path(args.efhub_db), args.after_crossfill)
         dup_names = db.count('SELECT count(*) FROM (SELECT lower(name) FROM "Manager" WHERE "imageUrl" IS NULL '
                              'GROUP BY 1 HAVING count(*) > 1) d')
         check(dup_names == 0, f"no eFHUB-only manager name appears twice ({dup_names} duplicated)")

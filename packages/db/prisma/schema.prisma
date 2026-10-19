@@ -278,11 +278,15 @@ model Manager {
   outWide           Int @default(0)
   longBall          Int @default(0)
   overload          Int @default(0)
-  // boost slots (booster_1/booster_2 from efootbase = stat key slug, not Booster.id)
+  // boost slots (booster_1/booster_2 from efootbase, stored as the eFootLab stat
+  // name — BASE_STATS, e.g. "ballWinning" for efootbase "tackling" — not Booster.id)
   boostId1 Int?
   boostId2 Int?
   booster1Stat String?
   booster2Stat String?
+  // One of the managers efootbase offers in its picker (69 in the 2026-10-18
+  // snapshot). Written by the seed from dump/efootbase/static/managers.json only.
+  inPicker Boolean @default(false)
 
   @@index([name])
 }
@@ -341,12 +345,37 @@ model Booster {
 
 // ---- Skill (67) ----
 
+// efootbase's two skill groups (dump/efootbase/static/skills.json `group`).
+// Entries efootbase does not treat as skills have no group (NULL → "Other").
+enum SkillGroup {
+  SHOWTIME
+  CLASSIC
+}
+
+// Skill catalogue. The fixture (packages/db/fixtures/skills.json) owns id, slug
+// (the player-skill join key — never changed) and `released`; the static
+// efootbase snapshot (git-ignored dump/efootbase/static/skills.json, see
+// docs/efootbase-static-snapshot.md) supplies name, description, group, order,
+// icon, effects and activation when it is present (openspec efootbase-static-data).
 model Skill {
-  id          Int    @id
-  slug        String @unique
+  id          Int         @id
+  slug        String      @unique
   name        String
-  description String @default("")
-  category    String @default("General")
+  description String      @default("")
+  category    String      @default("General")
+  // efootbase skill flag (`s_one_touch_pass`); NULL for the non-skill entries.
+  efbKey      String?     @unique
+  group       SkillGroup?
+  // efootbase wiki order (0-based); NULL sorts last.
+  sortOrder   Int?
+  // false = stored but hidden from the public lists (5 skills efootbase defines
+  // but no card carries yet).
+  released    Boolean     @default(true)
+  // R2 object key, e.g. "skills/Skill_OneTouchPass.webp" (the API builds the URL).
+  iconKey     String?
+  // [{ "stat": <BaseStat>, "value": <int> }] with eFootLab stat names; [] = none observed.
+  effects     Json        @default("[]")
+  activation  String?
   players     PlayerSkill[]
 
   @@index([category])

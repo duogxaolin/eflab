@@ -9,7 +9,7 @@
 - **Repo là PUBLIC.** Hai API key của bên thứ ba từng được ghi trong `apk-db-expansion.md` và `efootbase-ui-dna.md` đã được thay bằng `<redacted>` trong working tree (2026-10-17); lịch sử git vẫn còn — việc rewrite/rotate là quyết định của chủ repo. Không thêm key, dump, font hay asset có bản quyền vào `docs/`.
 - Các tài liệu được tham chiếu trong các bản index cũ nhưng **không tồn tại** trong thư mục này (`pesdb-net-analysis.md`, `data-sourcing-relationships.md`, `datamining-playbook.md`, `technical-recon.md`, `efhub-apk-extraction.md`, `efootbase-apk-analysis.md`) thuộc về workspace của bot bno, không phải eflab.
 
-## Mục lục (đúng 9 file đang có trong `docs/`)
+## Mục lục (đúng 10 file đang có trong `docs/`)
 
 | # | Tài liệu | Ngày | Mô tả ngắn |
 |---|----------|------|------------|
@@ -22,6 +22,7 @@
 | 7 | [efootbase-efhub-features.md](./efootbase-efhub-features.md) | 2026-09-27 | Kiểm kê tính năng efootbase.com và efhub.com: chủ sở hữu, stack, sitemap, trường dữ liệu, so sánh từng tính năng. |
 | 8 | [efootbase-ui-dna.md](./efootbase-ui-dna.md) | 2026-10-06 | DNA UI + function breakdown efootbase.com (web + APK §22) — nguồn của bố cục 4 trang mà eflab đi theo (palette zinc+lime hiện tại lấy từ CSS live của efootbase ngày 2026-10-07, không ghi trong doc này). §8 "API không dùng được" đã bị thay thế (xem Lưu ý). Key trong `.env` của APK đã được redact. |
 | 9 | [pesdb-ui-dna.md](./pesdb-ui-dna.md) | 2026-10-06 | DNA UI + function breakdown pesdb.net (nguồn ảnh của bot bno, không phải eflab). Màu tier 90+/80/70/<70 của pesdb là gốc của `--color-tier-*` trong eflab. |
+| 10 | [efootbase-static-snapshot.md](./efootbase-static-snapshot.md) | 2026-10-19 | Snapshot tĩnh efootbase (72 skill: mô tả, nhóm Showtime/Classic, hiệu ứng chỉ số, điều kiện kích hoạt, icon; 69 HLV trong picker): tên khoá thật của file, cách tái tạo thủ công (mong manh, không tự động hoá), upload R2, seed dùng nó thế nào. Nội dung bên thứ ba chỉ nằm trong `dump/` (git-ignored), DB và R2. |
 
 ## Ghi chú phương pháp luận
 

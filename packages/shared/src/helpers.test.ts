@@ -15,8 +15,10 @@ import {
   sortPositions,
 } from "./helpers";
 import {
+  BASE_STATS,
   CARD_TYPES,
   CARD_TYPE_LABELS,
+  EFOOTBASE_STAT_MAP,
   CARD_TYPE_BY_EFOOTBASE_CODE,
   DEFAULT_SORT_PRESET,
   MAX_FILTER_IDS,
@@ -208,6 +210,35 @@ function assert(cond: unknown, msg: string): void {
     const parsed = playerListInput.safeParse({ nationalityIds: ["14", 3], clubId: "2" });
     assert(parsed.success && eq(parsed.data.nationalityIds ?? [], [14, 3]) && parsed.data.clubId === 2, "digit strings come out as numbers");
   }
+}
+
+// EFOOTBASE_STAT_MAP (efootbase-static-data): the one table the seeder uses for
+// skill effects (camelCase) and manager pills (snake_case).
+{
+  const statSet = new Set<string>(BASE_STATS);
+  const targets = Object.values(EFOOTBASE_STAT_MAP);
+  assert(targets.every((t) => statSet.has(t)), "every EFOOTBASE_STAT_MAP target is a BaseStat");
+  assert(BASE_STATS.every((s) => targets.includes(s)), "every BaseStat is reachable from an efootbase key");
+  const snake = Object.keys(EFOOTBASE_STAT_MAP).filter((k) => /^[a-z]+(_[a-z]+)*$/.test(k) && (k.includes("_") || !/[A-Z]/.test(k)));
+  assert(new Set(snake.map((k) => EFOOTBASE_STAT_MAP[k])).size === BASE_STATS.length, "the snake_case keys cover all 26 stats once");
+  for (const [k, v] of [
+    ["tackling", "ballWinning"], ["jumping", "jump"], ["set_piece_taking", "placeKicking"],
+    ["setPieceTaking", "placeKicking"], ["gk_parrying", "gkParrying"], ["gkParrying", "gkParrying"],
+    ["lofted_pass", "loftedPass"], ["tightPossession", "tightPossession"], ["defensive_engagement", "defensiveEngagement"],
+  ] as const) {
+    assert(EFOOTBASE_STAT_MAP[k] === v, `efootbase "${k}" → ${v}`);
+  }
+  for (const unknown of ["Tackling", "set-piece-taking", "weak_foot_accuracy", "stamina_", "defensiveIQ"]) {
+    assert(EFOOTBASE_STAT_MAP[unknown] === undefined, `"${unknown}" is not mapped (the seed aborts on it)`);
+  }
+  // Super-sub's 25 camelCase effect keys (efootbase capture 2026-10-18) map to
+  // 25 distinct stats — every stat except Stamina.
+  const superSub = ["offensiveAwareness", "ballControl", "dribbling", "tightPossession", "lowPass", "loftedPass",
+    "finishing", "heading", "setPieceTaking", "curl", "defensiveAwareness", "tackling", "aggression",
+    "defensiveEngagement", "speed", "acceleration", "kickingPower", "jumping", "physicalContact", "balance",
+    "gkAwareness", "gkCatching", "gkParrying", "gkReflexes", "gkReach"];
+  const mapped = new Set(superSub.map((k) => EFOOTBASE_STAT_MAP[k]));
+  assert(!mapped.has(undefined) && mapped.size === 25 && !mapped.has("stamina"), "Super-sub's 25 effect keys → 25 stats, all but Stamina");
 }
 
 if (process.exitCode === 1) process.exit(1);

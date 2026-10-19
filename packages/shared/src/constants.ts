@@ -34,6 +34,33 @@ export const BASE_STATS = [
 
 export type BaseStat = (typeof BASE_STATS)[number];
 
+// THE mapping from an efootbase stat name to a BaseStat (openspec
+// efootbase-static-data). efootbase names three stats differently (`tackling` =
+// ballWinning, `jumping` = jump, `set_piece_taking` = placeKicking) and uses two
+// spellings: snake_case in the dump columns and the manager picker pills
+// (`lofted_pass`), camelCase in the skill boost effects (`setPieceTaking`). Both
+// spellings are listed explicitly; the seeder aborts on a key that is not here
+// (never guessed). scripts/verify-seed.py mirrors this table.
+export const EFOOTBASE_STAT_MAP: Readonly<Record<string, BaseStat>> = {
+  // snake_case — dump columns, manager pills
+  offensive_awareness: "offensiveAwareness", ball_control: "ballControl", dribbling: "dribbling",
+  tight_possession: "tightPossession", low_pass: "lowPass", lofted_pass: "loftedPass",
+  finishing: "finishing", heading: "heading", set_piece_taking: "placeKicking", curl: "curl",
+  speed: "speed", acceleration: "acceleration", kicking_power: "kickingPower", jumping: "jump",
+  physical_contact: "physicalContact", balance: "balance", stamina: "stamina",
+  defensive_awareness: "defensiveAwareness", tackling: "ballWinning",
+  defensive_engagement: "defensiveEngagement", aggression: "aggression",
+  gk_awareness: "gkAwareness", gk_catching: "gkCatching", gk_parrying: "gkParrying",
+  gk_reflexes: "gkReflexes", gk_reach: "gkReach",
+  // camelCase — skill effects (only the keys whose spelling differs from snake_case)
+  offensiveAwareness: "offensiveAwareness", ballControl: "ballControl",
+  tightPossession: "tightPossession", lowPass: "lowPass", loftedPass: "loftedPass",
+  setPieceTaking: "placeKicking", kickingPower: "kickingPower",
+  physicalContact: "physicalContact", defensiveAwareness: "defensiveAwareness",
+  defensiveEngagement: "defensiveEngagement", gkAwareness: "gkAwareness",
+  gkCatching: "gkCatching", gkParrying: "gkParrying", gkReflexes: "gkReflexes", gkReach: "gkReach",
+};
+
 // 11 physique / body-model fields (PlayerAppearance table).
 export const PHYSIQUE_FIELDS = [
   "neckLength",
@@ -133,8 +160,10 @@ export const CARD_TYPE_BY_EFOOTBASE_CODE: Readonly<Record<number, CardType>> = {
   7: "STRIKE_ARENA",
 };
 
-// Skills are catalogued in packages/db/fixtures/skills.json (84 entries) and
-// served by the `skill` router; there is no skill-id constant in code.
+// Skills are catalogued in packages/db/fixtures/skills.json (89 entries: 84
+// public + 5 unreleased, hidden) and served by the `skill` router; there is no
+// skill-id constant in code. Group, icon, effects and activation come from the
+// static efootbase snapshot (docs/efootbase-static-snapshot.md).
 
 // 10 training categories of the progression engine (player-progression-simulator).
 // Recovered from the eFHUB `player export` table: `MAX<stat> − <stat>` equals

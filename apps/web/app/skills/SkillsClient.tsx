@@ -4,17 +4,19 @@ import Link from "next/link";
 import { trpc } from "@/lib/trpc";
 import { PlayerCard } from "@/components/cards/PlayerCard";
 import { QueryErrorState } from "@/lib/query-state";
-import { SKILL_GROUP_LABELS, SKILL_GROUP_ORDER, compareSkills, skillDescription, skillGroup, skillLabel, type SkillGroup } from "@/lib/skill-labels";
+import { SKILL_GROUP_LABELS, SKILL_GROUP_ORDER, compareSkills, skillDescription, skillGroup, skillLabel, type SkillSection } from "@/lib/skill-labels";
+import { SkillIcon } from "@/components/skills/SkillIcon";
+import { SkillEffects } from "@/components/skills/SkillEffects";
 import type { SkillDTO } from "@eflab/shared";
 import { Sparkles } from "lucide-react";
 
-// Skills index (efootbase-parity-round2 "Skills Grouping"): every number comes
-// from the API — `playerCount` is the grouped PlayerSkill count, share = count
-// / all cards, and the "top cards" of the Showtime group are real holders
-// (skill.players, ovr DESC). The grouping and the display labels are the
-// web-only table in lib/skill-labels.ts (verified against efootbase's skill
-// list); nothing is synthesised — no rarity, rank or stat boosts, and no
-// invented tier label.
+// Skills index (efootbase-parity-round2 "Skills Grouping", efootbase-static-data):
+// every number comes from the API — `playerCount` is the grouped PlayerSkill
+// count, share = count / all cards, and the "top cards" of the Showtime group
+// are real holders (skill.players, ovr DESC). Group, order, artwork,
+// description, stat boosts and activation are efootbase's own data stored by
+// the seed (static snapshot); entries without a group sit under "Other".
+// Nothing is synthesised — no rarity, rank or invented boost or tier label.
 const ALL = "ALL";
 
 function shareOf(count: number, total: number | undefined): string {
@@ -56,14 +58,16 @@ function SkillCard({ skill, total, showTopCards }: { skill: SkillDTO; total: num
   const empty = skill.playerCount === 0;
   const label = skillLabel(skill);
   return (
-    <article className="min-w-0 rounded-2xl border border-[var(--color-line)]/80 bg-[var(--color-panel)]/50 p-4 space-y-3 flex flex-col justify-between hover:border-[var(--color-line-active)] transition-colors">
+    <article className="min-w-0 rounded-2xl border border-[var(--color-line)]/80 bg-[var(--color-panel)]/50 p-4 space-y-3 flex flex-col justify-between hover:border-[var(--color-line-active)] transition-colors" data-testid="skill-card">
       <div className="space-y-2">
+        {skill.iconUrl && <SkillIcon src={skill.iconUrl} width="fluid" className="rounded-lg" />}
         <h3 className="font-bold text-sm text-[var(--color-text-primary)]">
           <Link href={`/skills/${skill.slug}`} className="hover:text-[var(--color-accent)] transition-colors">
             {label}
           </Link>
         </h3>
         <p className="text-xs text-[var(--color-text-secondary)] leading-snug line-clamp-3">{skillDescription(skill)}</p>
+        <SkillEffects effects={skill.effects} activation={null} compact />
         <div className="flex items-center gap-2 text-[11px] font-mono text-[var(--color-text-dim)] tabular-nums">
           <span className={empty ? "text-[var(--color-text-dim)]" : "text-white"}>{skill.playerCount.toLocaleString("en-US")} cards</span>
           <span aria-hidden>·</span>
@@ -89,16 +93,17 @@ function SkillCard({ skill, total, showTopCards }: { skill: SkillDTO; total: num
 }
 
 export function SkillsClient() {
-  const [activeTab, setActiveTab] = useState<SkillGroup | typeof ALL>(ALL);
+  const [activeTab, setActiveTab] = useState<SkillSection | typeof ALL>(ALL);
   const skillsQuery = trpc.skill.list.useQuery({}, { staleTime: 60 * 60_000 });
   const catalogue = trpc.player.list.useQuery({ page: 1, limit: 1 }, { staleTime: 60 * 60_000 });
   const totalCards = catalogue.data?.total;
 
-  // Showtime first, then Classic, both in efootbase's order; the fixture
-  // entries efootbase does not list (all with 0 holders) come last.
+  // Showtime first, then Classic, both in efootbase's order (stored group and
+  // sortOrder); the fixture entries efootbase does not list (group null, all
+  // with 0 holders) come last under "Other".
   const groups = useMemo(() => {
     const sorted = [...(skillsQuery.data ?? [])].sort(compareSkills);
-    return SKILL_GROUP_ORDER.map((group) => ({ group, skills: sorted.filter((s) => skillGroup(s.slug) === group) })).filter((g) => g.skills.length > 0);
+    return SKILL_GROUP_ORDER.map((group) => ({ group, skills: sorted.filter((s) => skillGroup(s) === group) })).filter((g) => g.skills.length > 0);
   }, [skillsQuery.data]);
   const skills = skillsQuery.data ?? [];
   const visibleGroups = activeTab === ALL ? groups : groups.filter((g) => g.group === activeTab);
