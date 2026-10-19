@@ -1,7 +1,7 @@
 # CLAUDE.md — eflab monorepo
 
 > Instructions for Claude Code (and any agent) working in this repo. Read first.
-> Last full pass: 2026-10-17 (openspec change `eflab-parity-fixes`); dead surface removed 2026-10-18 (change `remove-dead-surface`); Progression switched to efootbase's exact model + manager picker 2026-10-19 (change `efootbase-exact-model-managers`).
+> Last full pass: 2026-10-17 (openspec change `eflab-parity-fixes`); dead surface removed 2026-10-18 (change `remove-dead-surface`); Progression switched to efootbase's exact model + manager picker 2026-10-19 (change `efootbase-exact-model-managers`); admin area + sync worker 2026-10-20 (change `admin-sync-worker`).
 
 ## What this is
 
@@ -9,7 +9,7 @@
 
 **The GitHub repo `duogxaolin/eflab` is PUBLIC** (`main` is pushed). Never commit secrets, `dump/`, database backups, Konami assets or audit reports. Two third-party keys were committed in `docs/` before 2026-10-17; they are redacted in the working tree but **still exist in git history** — rewriting history and rotating them is the owner's decision (see "Known limitations").
 
-This repo is **distinct from the `bno` bot** (a separate eFootball scraper the user also runs). Data-source decisions for bno live in memory under `bno-bot-data-decision`. **Don't conflate the two** — bno uses pesdb images and efhub data; eflab uses efootbase card renders mirrored to R2.
+This repo is **distinct from the `bno` bot** (a separate eFootball scraper the user also runs). Data-source decisions for bno live in memory under `bno-bot-data-decision`. **Don't conflate the two** — bno uses pesdb images and efhub data; eflab uses the card renders the efootbase dump links to, mirrored to R2 — mostly efootbase's CDN, but the dump's `transparent` render is a pesdb.net image for 36,815 of 50,691 cards (the sync worker fetches those from `pesdb.net/assets/img/` only).
 
 ## Stack
 
@@ -19,12 +19,13 @@ This repo is **distinct from the `bno` bot** (a separate eFootball scraper the u
 | API | `apps/api` | Fastify 5 · `@trpc/server` v11 · SuperJSON (BigInt-safe) |
 | DB | `packages/db` | Prisma 6 · PostgreSQL 16 · JSONL seeder + SQLite cross-fill |
 | Shared | `packages/shared` | Zod schemas · domain constants · pure helpers · progression math |
+| Worker | `apps/worker` | Node + `tsx` · sync worker (check / incremental / full), shells out to the Python scripts and the seed |
 | Config | `packages/config` | shared tsconfig presets |
 
 - Node >= 22, pnpm >= 10 (`packageManager: pnpm@11`). TypeScript 5.9 strict.
-- Dev: `pnpm dev` (all via turbo) or `pnpm web:dev` / `pnpm api:dev`. Ports: web :3000, api :4000.
+- Dev: `pnpm dev` (all via turbo) or `pnpm web:dev` / `pnpm api:dev` / `pnpm worker:dev`. Ports: web :3000, api :4000 (the worker listens on none).
 - DB bootstrap: `docker compose up -d` → `pnpm db:generate` → `pnpm db:migrate` → `pnpm db:refresh`. See "Running".
-- Tests: `pnpm test` = `pnpm test:unit` (turbo `test`, currently only `@eflab/shared`) then `pnpm test:smoke` (`scripts/smoke-test.sh`, boots the API on :4300). **No CI exists** — run it locally before claiming done.
+- Tests: `pnpm test` = `pnpm test:unit` (turbo `test`: `@eflab/shared`, `@eflab/db` — admin password hashing, shared row mapping — and `@eflab/worker` — worker / incremental / full suites against a local fake efootbase, each on its own scratch database `eflab_synctest_core` / `_inc` / `_full`, created, migrated and dropped; needs the local Postgres, skips its database part without it) then `pnpm test:smoke` (`scripts/smoke-test.sh`, boots the API on :4300; its admin section boots a second API on :4301 against a scratch database `eflab_smoke_admin_<pid>`). **No CI exists** — run it locally before claiming done.
 
 ## Layout
 
@@ -33,28 +34,41 @@ apps/web/app/         Routes: / (home), /players, /players/[baseId]/[cardId], /c
                       plus not-found.tsx, error.tsx, api/auth/google/route.ts. Detail routes = thin server page.tsx (fetch via lib/api-server.ts,
                       notFound(), generateMetadata) + *Client.tsx. The old /packs/[id] (Pack table) page is gone. Routes managers/tier-list/
                       community/articles/tournaments/new-players/pro/login/register/u were removed 2026-10-07; their API routers were
-                      removed 2026-10-18 (change remove-dead-surface, see "API surface").
+                      removed 2026-10-18 (change remove-dead-surface, see "API surface"). Private admin area (change admin-sync-worker):
+                      admin/ (layout.tsx force-dynamic + noindex, page.tsx + DashboardClient.tsx, login/, runs/, runs/[id]/) — client pages
+                      behind admin.me, not linked from public navigation.
 apps/web/lib/         r2-images.ts (R2 URL helpers: r2Url, playerCardUrl, playerCardDynamicUrl, conditionUrl), api-server.ts (server-side
                       API fetch), card-display.ts (labels, five tier colours, body-model labels), skill-labels.ts (skill label fallback,
                       sections from the stored group, wiki order, effect labels), filter-url.ts (/players URL state), trpc.tsx, auth.tsx,
-                      query-state.tsx, format-date.ts, use-debounced-value.ts
+                      query-state.tsx, format-date.ts, use-debounced-value.ts, admin-trpc.tsx (own tRPC client + QueryClient for /admin,
+                      `x-eflab-admin` header; imported only by app/admin/** — its header comment is the bundle rule), admin-paths.ts
 apps/web/components/  cards/PlayerCard.tsx (+useNearViewport, usePrefersReducedMotion), players/ (PitchMap, Pagination), filters/ (/players
                       filter dialogs), detail/ (CardInfo, BodyModel, StatGrid + CategoryRow + KeyStats, StarRating, skill-display,
                       SkillChip — the detail-page blocks), skills/ (SkillIcon, SkillEffects), packs/PackCarousel.tsx, layout/ (SiteHeader,
                       SiteFooter, EflabWordmark, MobileBottomNav), build-simulator/ (ProgressionPanel.tsx — detail-page Progression sheet,
-                      ManagerPicker.tsx — "Select Manager" dialog)
-apps/api/src/         server.ts, env.ts (NODE_ENV/WEB_ORIGIN/API_PORT/API_HOST/R2_PUBLIC_BASE), health.ts, auth/ (session, google),
-                      router/ (root.ts, trpc.ts, context.ts, routers/ player · featured · skill · auth · manager — nothing else is mounted)
+                      ManagerPicker.tsx — "Select Manager" dialog), admin/ (AdminShell session gate, admin-ui, RunSummary, run-actions,
+                      run-display)
+apps/api/src/         server.ts, env.ts (NODE_ENV/WEB_ORIGIN/API_PORT/API_HOST/R2_PUBLIC_BASE), health.ts, auth/ (session, google, admin —
+                      eflab_admin cookie, CSRF guard, sign-in limits), router/ (root.ts, trpc.ts [+ adminProcedure / adminPublicProcedure],
+                      context.ts, routers/ player · featured · skill · auth · manager · admin — nothing else is mounted)
+apps/worker/src/      main.ts (30-s loop, signals), runner.ts (tick: heartbeat, stale recovery, schedule, claim, execute), env.ts (variables,
+                      child env allow-list, test-mode guards), efootbase.ts (request identity = dump script's), child.ts (spawn, redaction,
+                      SIGTERM→SIGKILL), limits.ts, scripts.ts (dump / upload / seed children), catalogue.ts (row digests, lookups),
+                      handlers/ check · incremental · full; test/ (worker, incremental, full suites + harness: fake efootbase, fake bucket,
+                      stand-in upload, scratch databases)
 packages/db/prisma/   schema.prisma, migrations/ (20261017000000_baseline, 20261017000100_parity_fixes, 20261018000000_remove_dead_surface,
-                      20261019000000_efootbase_static_data, migration_lock.toml)
-packages/db/src/      client.ts, seed-efootbase-full.ts (efootbase dump + static snapshot → Postgres), seed-efhub-crossfill.ts (eFHUB SQLite cross-fill)
+                      20261019000000_efootbase_static_data, 20261019230000_admin_sync_worker, migration_lock.toml)
+packages/db/src/      client.ts, seed-efootbase-full.ts (efootbase dump + static snapshot → Postgres), seed-efhub-crossfill.ts (eFHUB SQLite
+                      cross-fill), efootbase-map.ts (row mapping shared by the seed and the worker, +test), upsert.ts (column-list upsert),
+                      admin-auth.ts (scrypt hashing, session tokens; subpath export `@eflab/db/admin-auth`, never imported by apps/web,
+                      +test), admin-cli.ts (`pnpm admin:*`)
 packages/db/fixtures/ skills.json (89 = 84 public + 5 `released: false`), leagues.json (34), managers.json (69 picker managers with R2 art,
                       fact-only: id, name, rating, pills), boosters.json (fixture boosters; dump boosters win on id overlap)
 packages/shared/src/  constants.ts (CARD_TYPES, CARD_TYPE_LABELS, CARD_TYPE_BY_EFOOTBASE_CODE, SORT_FIELDS, POSITIONS, PLAYING_STYLES…),
                       schemas.ts (Zod inputs), types.ts (DTOs), helpers.ts (+helpers.test.ts), progression.ts (engine, +progression.test.ts),
                       ovrModel.ts (efootbase's exact overall weights + proficiency bands, integers only — docs/efootbase-exact-model.md),
                       __fixtures__/progression-oracle.json (261 hub-sampled cards), __fixtures__/exact-model-oracle.json (5 anonymous cards,
-                      262 efootbase readings, numbers only)
+                      262 efootbase readings, numbers only), sync.ts (schedule / watermark / redaction / log tail, pure, +sync.test.ts)
 scripts/              efootbase_dump.py (efootbase API → dump/), r2_upload.py (dump → R2), fetch_card_assets.py (card bg/frame/condition assets),
                       verify-seed.py (dump ↔ DB integrity, read-only psql), smoke-test.sh (API smoke, self-booting)
 docs/                 reference analyses (index: docs/README.md)
@@ -71,6 +85,7 @@ docker-compose.yml    postgres:16 on 127.0.0.1:5433 (loopback only; the unused r
 | `skill` | `list`, `byId`, `players` (released skills only; DTO carries `group`, `sortOrder`, `iconUrl`, `effects` [eFootLab stat names], `activation`) | web (`/skills`, `/skills/[slug]`, player skill chips, filters), smoke test |
 | `auth` | `signUp`, `signIn`, `signOut`, `getSession` | `apps/web/lib/auth.tsx` (`getSession`/`signOut`; no sign-in UI is routed), Google OAuth routes |
 | `manager` | `picker` (the 69 `inPicker` managers, rating DESC then id ASC: id, name, rating, rebased `imageUrl`, 1–2 `pills` as eFootLab stat names; a row without a first pill or with an unknown stat is a 500, never guessed) | web (Progression panel "Select Manager"), smoke test |
+| `admin` | `signIn`, `signOut`, `me`, `config.get`, `config.update`, `runs.queue`, `runs.cancel`, `runs.list`, `runs.get`, `dashboard` (`adminProcedure`: 401 without an `eflab_admin` session, CSRF guard on mutations, `Cache-Control: no-store`; `signIn` is `adminPublicProcedure`) | web `/admin*` through `lib/admin-trpc.tsx`, smoke test (admin section) |
 
 Plus `GET /health` and the Google OAuth routes (`apps/api/src/auth/google.ts`). The `community`, `feed`, `tierList`, `user`, `pages`, `pack` and the old `manager` routers (the new `manager` router above only serves the picker, change `efootbase-exact-model-managers`), their Zod inputs / DTOs / constants in `@eflab/shared`, and the Build / Review / TierVote / TierList / Follow / Post / PostLike / Comment tables were deleted in change `remove-dead-surface` (2026-10-18) — see "Known limitations" for what is kept on purpose.
 
@@ -79,7 +94,7 @@ Plus `GET /health` and the Google OAuth routes (`apps/api/src/auth/google.ts`). 
 Player data is **not** self-datamined from the game (see `docs/efootball-apk-datamine-analysis.md`). Source of truth is the **efootbase dump**, with **eFHUB** as a secondary cross-fill.
 
 1. **Dump** — `scripts/efootbase_dump.py` (needs `EFBASE_API_KEY`; the script reads it from the `.env` passed with `--env`, default an APK-extract path) → `dump/efootbase/players.jsonl` (50,691 cards × 176 cols, re-dumped 2026-10-18), `players_meta.json` (field labels, card-type labels), `packs.json` (featured bundles), `teams.json`, `images/` (98,367 card/emblem files, ~6.5 GB). `dump/` is gitignored. See memory `efootbase-datapath`.
-2. **Seed** — `pnpm db:seed` (`packages/db/src/seed-efootbase-full.ts`). **Non-destructive upsert in ONE interactive transaction** (60-min timeout): Player and Manager are `INSERT … ON CONFLICT DO UPDATE` over a column list generated from the Prisma model minus `PLAYER_CROSSFILL_COLUMNS` / `MANAGER_CROSSFILL_COLUMNS`, so cross-fill-owned columns are **never written by the seed**. Country/League/Team/Pack/PackCard/Skill/PlayerSkill/FeaturedBundle(+Card) are replaced inside the same transaction (no FK reaches a user table). Booster is upserted by id (dump wins over fixtures). User tables (User/Account/Session) are untouched unless `--reset-users`; players missing from the dump are kept and logged unless `--prune`. The JSONL is streamed twice (lookups, then writes). Field mapping uses the dump's real keys: `jumping→jump`, `set_piece_taking→placeKicking`, `tackling→ballWinning`, `pos→registeredPosition`, `condition` via `[E,D,C,B,A]`, `injury_resistance`, `player_value→marketValue`, `leg_length_height→dribbleHeight`, `name_normalized→nameNormalized`. Unmatched `s_*` skill keys, card-type codes that disagree with `players_meta.json`/pack names, and unknown booster stat keys abort the seed. Position ratings (`ratingGK…ratingCF`) are nullable and left null by the seed.
+2. **Seed** — `pnpm db:seed` (`packages/db/src/seed-efootbase-full.ts`). **Non-destructive upsert in ONE interactive transaction** (60-min timeout): Player and Manager are `INSERT … ON CONFLICT DO UPDATE` over a column list generated from the Prisma model minus `PLAYER_CROSSFILL_COLUMNS` / `MANAGER_CROSSFILL_COLUMNS`, so cross-fill-owned columns are **never written by the seed**. Country/League/Team/Pack/PackCard/Skill/PlayerSkill/FeaturedBundle(+Card) are replaced inside the same transaction (no FK reaches a user table). Booster is upserted by id (dump wins over fixtures). User tables (User/Account/Session) are untouched unless `--reset-users`; players missing from the dump are kept and logged unless `--prune`. The JSONL is streamed twice (lookups, then writes). Field mapping uses the dump's real keys: `jumping→jump`, `set_piece_taking→placeKicking`, `tackling→ballWinning`, `pos→registeredPosition`, `condition` via `[E,D,C,B,A]`, `injury_resistance`, `player_value→marketValue`, `leg_length_height→dribbleHeight`, `name_normalized→nameNormalized`. Unmatched `s_*` skill keys, card-type codes that disagree with `players_meta.json`/pack names, and unknown booster stat keys abort the seed. Position ratings (`ratingGK…ratingCF`) are nullable and left null by the seed. The row mapping and the column-list upsert live in `efootbase-map.ts` / `upsert.ts`, shared with the sync worker (moved unchanged in change `admin-sync-worker`; the seed's output was proven identical on two scratch copies of the live database).
 3. **Cross-fill** — `pnpm db:crossfill` (`packages/db/src/seed-efhub-crossfill.ts`) reads `dump/efhub/efhub_db.sqlite` through the `sqlite3` CLI (`SQLITE3_BIN`, ServBay: `/Applications/ServBay/bin/sqlite3`; `EFHUB_DB_PATH` overrides the file). Writes only what efootbase cannot expose: Manager tactic ratings (exact-id merge, then name merge with `ALIASES` — skipped when the name's best eFHUB entry is another Manager row's card, so a new card never copies another card's tactics — then create; 1,475 managers with tactics), `Player.stars/reputation/overallPotential/gkClearing/maxGkClearing`, the 13 `ratingGK…ratingCF` from eFHUB `overallGK…overallCF` (reference only — the web computes position values with the exact formula), `communityTier` (10,745 tier badges), and 3 eFHUB-only players (ovr/maxOvr 40 placeholders). `registeredPosition` is seed-owned (dump `pos`); the cross-fill only reports mismatches. All SQL uses bound parameters. Idempotent.
 4. **`pnpm db:refresh` = `db:seed` then `db:crossfill`** — the documented refresh. A standalone `db:seed` keeps earlier cross-fill values but cannot add them; it prints that notice.
 5. **Verify** — `python3 -I scripts/verify-seed.py` streams the dump and compares it with the DB over read-only psql (`PGOPTIONS=-c default_transaction_read_only=on`); exit 1 on any mismatch. It also checks the static snapshot (below) when `dump/efootbase/static/` exists. Its manager-duplicate check reads the eFHUB SQLite read-only (`--efhub-db`, default `EFHUB_DB_PATH` / `dump/efhub/efhub_db.sqlite`) to tell cross-fill work still pending after a seed (info) from real duplicates (failure); run it with `--after-crossfill` right after `pnpm db:refresh` so pending rows fail too.
@@ -103,13 +118,22 @@ Cards render **one pre-composited image** from Cloudflare R2: `PlayerCard.tsx` l
 
 - **Helper**: `apps/web/lib/r2-images.ts` — `r2Url(key)`, `playerCardDynamicUrl(id)` (used by PlayerCard), `playerCardUrl(id)` (`_transparent`, home thumbnails), `conditionUrl(letter)`. Base URL = `NEXT_PUBLIC_R2_PUBLIC_BASE`, falling back to the dev bucket URL in code.
 - **Card image cache version (`?v=`)**: R2 serves objects with `Cache-Control: public, max-age=31536000, immutable`, and a re-dump overwrites changed card images under the same key (2026-10-18: 5,312 overwritten + 2,284 new). `playerCardUrl`/`playerCardDynamicUrl` therefore append `?v=${IMAGE_VERSION}` (R2 ignores the query; browser/edge cache keys change). `IMAGE_VERSION` = `NEXT_PUBLIC_IMAGE_VERSION` (build-time) when non-empty, else the committed `DEFAULT_IMAGE_VERSION` (`"20261019"`). **Bump it whenever card objects are overwritten in place on R2** (after `r2_upload.py` replaced existing `cards/` keys): edit `DEFAULT_IMAGE_VERSION` in `r2-images.ts` (preferred — works without configuration) or set `NEXT_PUBLIC_IMAGE_VERSION` and rebuild the web app. Condition/flag/emblem URLs are not versioned. Every card `<img>` must go through these helpers — never hand-build a `cards/…webp` URL.
-- **R2 bucket**: `efootlab`, public dev URL `https://pub-1a19c30950c04ef3964669ac4792f6f0.r2.dev`. Credentials (`R2_ACCOUNT_ID/R2_ACCESS_KEY_ID/R2_SECRET_ACCESS_KEY/R2_BUCKET`) live in the gitignored root `.env`; only `scripts/r2_upload.py` uses them.
+- **R2 bucket**: `efootlab`, public dev URL `https://pub-1a19c30950c04ef3964669ac4792f6f0.r2.dev`. Credentials (`R2_ACCOUNT_ID/R2_ACCESS_KEY_ID/R2_SECRET_ACCESS_KEY/R2_BUCKET`) live in the gitignored root `.env` (or, for a strict split, only in the sync worker's service environment — `docs/admin-sync.md`); only `scripts/r2_upload.py` uses them, run by hand or as the sync worker's upload child.
 - **Domain swap = two env vars, no DB rewrite**: flags/emblems/manager art are stored as absolute URLs in `Country.flagUrl`, `Team.emblemUrl`, `League.emblemUrl`, `Manager.imageUrl` (SHA256-named objects, not derivable from ids). The API rebases those stored URLs onto `R2_PUBLIC_BASE` on the way out (`rebaseR2Url` in `apps/api/src/env.ts`) and the web builds card/condition URLs from `NEXT_PUBLIC_R2_PUBLIC_BASE` — set both when moving the bucket. `NEXT_PUBLIC_R2_PUBLIC_BASE` also restricts `images.remotePatterns` in `next.config.ts`.
 - **Env loading (web)**: Next reads only `apps/web/.env*`; `apps/web/next.config.ts` additionally loads the **repo-root `.env`** through `@next/env` (`loadEnvConfig`, precedence shell > `apps/web/.env*` > root `.env*`). `NEXT_PUBLIC_*` values are inlined at build time; `apps/web/.env.example` documents them (`NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_R2_PUBLIC_BASE`, `NEXT_PUBLIC_IMAGE_VERSION`, `API_INTERNAL_URL`, `NEXT_PUBLIC_GIT_SHA`/`NEXT_PUBLIC_BUILD_UTC`).
 - **Upload pipeline**: `scripts/efootbase_dump.py` → `scripts/r2_upload.py --prefix dump/efootbase/images` (boto3, 32 workers, resume, `--key-prefix` for leaf dirs). Card assets: `scripts/fetch_card_assets.py` → `r2_upload.py --prefix dump/efootbase/card-assets` (only `conditions/` is rendered today). Manager art: `r2_upload.py --prefix dump/efootbase/images/managers --key-prefix managers/`. Skill icons / new manager art from the static snapshot: stage only the `.webp` files, then `--key-prefix skills/` / `--key-prefix managers/` (resume mode, never `--no-resume` on `managers/`) — see `docs/efootbase-static-snapshot.md`.
 - `PlayerCard` is `"use client"`, a single `<Link>` tile with an accessible name, raw `<img>` with `loading="lazy"`/`decoding="async"`/explicit size (`priority` for the first row), `onError` placeholder. SSR HTML does not contain R2 URLs — verify with a headless browser, not `curl | grep`.
 
 See `docs/eflab-image-pipeline.md` for the (older, dated 2026-10-06) pipeline write-up; this section is current.
+
+## Admin area and sync worker (change admin-sync-worker, 2026-10-20 — operations: `docs/admin-sync.md`)
+
+- **Tables** (migration `20261019230000_admin_sync_worker`, additive): `Admin` (scrypt `passwordHash`, `failedLogins`, `lockedUntil`, `disabledAt`), `AdminSession` (SHA-256 `tokenDigest` only, `lastSeenAt`, `expiresAt`), `SyncConfig` (single row id 1 inserted by the migration: `enabled`, `incrementalIntervalMin` 360, `fullWeekday` 0, `fullHourUtc` 3, `blockedUntil`/`blockedReason`, `workerHeartbeatAt`), `SyncRun` (kind CHECK/INCREMENTAL/FULL, trigger, status QUEUED/RUNNING/OK/FAILED/BLOCKED/CANCELLED, `heartbeatAt`, `cancelRequested`, `stats` Json = `syncRunStatsSchema`, `logTail` ≤ 64 KB, watermarks); enums `SyncKind` / `SyncTrigger` / `SyncStatus`; raw-SQL extras Prisma does not model — the partial unique index **`SyncRun_one_running`** (at most one RUNNING row; the worker claims with a conditional UPDATE) and CHECK constraints (single row, schedule ranges, log size). Separate from `User`/`Session`/`Account`; the `auth` router is unchanged.
+- **Admin auth**: accounts only from `pnpm admin:create|admin:set-password|admin:disable <name>` (hidden prompt or `ADMIN_PASSWORD`, never an argument, ≥ 12 chars); cookie `eflab_admin` (HttpOnly, SameSite=Strict, Secure outside development → web and API must be the same site), 12 h idle / 7 d absolute; 5 failures → 15-min lock — atomic against concurrent / batched attempts (each attempt counted by one conditional UPDATE before its scrypt; the session only under `FOR UPDATE` with a streak ≤ 5 incl. in-flight attempts; failure paths run the same statements, timing equal except the lock-setting attempt; the counter commits with `synchronous_commit = off`), 20 attempts / 15 min per `req.ip` (in memory; `trustProxy` is **not** set — behind a proxy all clients share one budget; never `trustProxy: true` while the API is directly reachable: forged `X-Forwarded-For`); mutations need `x-eflab-admin: 1` + an Origin in `WEB_ORIGIN`; generic "Wrong user name or password".
+- **Worker** (`pnpm worker:dev` / `pnpm worker:start`, cwd `apps/worker`, root `.env`): 30-s tick = heartbeat → stale RUNNING runs (no heartbeat 10 min) FAILED "worker restarted" → queue due runs (`dueRuns` in `@eflab/shared/sync`) → claim the oldest QUEUED run. Check = one request; incremental = `efootbase_dump.py --data-parts meta,players --newest-first-since <newest releaseDate − 7 d>`, validation like the seed, images then one upsert transaction (Player minus cross-fill columns, PlayerSkill, Booster, missing Country/Team/League; never deletes); full = pre-flight (static `skills.json` + `skill-icons/`, key, `R2_PUBLIC_BASE`, ≥ 2 GB, boto3) → full dump to a 0700 temp dir → row-digest comparison → the seed as a child (no `--prune`/`--reset-users`) → `--etag-vs-bucket` images → `r2_upload.py --no-resume`. Limits: check 30 s, incremental 30 min, full 6 h. 403/429/HTML → BLOCKED, `blockedUntil` + 6 h. Queue: 409 for an active run of the same group (incremental + full share one), 412 for a sync while blocked. Only the worker reads `EFBASE_API_KEY` / `R2_*`; children get an allow-listed env and read no `.env` file (dump child `--key-from-env`, upload child `r2_upload.py --env /dev/null`); secrets are masked in logs.
+- New dump-script flags (defaults unchanged): `--newest-first-since`, `--data-parts` / `--meta-packs-only`, `--etag-vs-bucket`, `--key-from-env`, `--api-base`, `--allow-host` (tests only, needs `SYNC_TEST_MODE=1`, loopback only), `--validate-only` (every source-data check, no request, no file, exit 1 on a refusal).
+- **Source data is untrusted** (verify findings C1, W-a/b/e): images only over https from `cdn.assets.efootbase.com` (every kind) and `pesdb.net/assets/img/` (`transparent` renders only — 36,815 of 50,691 dump cards), emblem kinds nationality/league/team only, safe file names (fullmatch; emblems `.png`), positive int ids, wrong shapes refused not crashed, every write inside the output dir and never through a symlink (`.part` via `O_EXCL|O_NOFOLLOW`), bodies ≤ 10 MB with a PNG/WEBP/JPEG/GIF signature (Content-Type never trusted; HTML, also behind a BOM = a challenge: blocks only from efootbase's API/CDN, from pesdb.net it skips pesdb's images), no `%` / dot segment in allow-listed paths, API answers ≤ 32 MB, no redirect to another origin or with user-info; the worker checks rows (`checkSourceImages`, raw-string checks mirror Python) and runs `efootbase_dump.py --validate-only` before any write (full: before the seed); `basename` takes the name from the URL path. 0 refusals on the 2026-10-18 dump (102,992 URLs identical).
+- **Cancel vs commit** (W3): the incremental write checks the abort signal before / inside its transaction (rollback), the runner holds an abandoned run RUNNING while a write is in flight (`ctx.writeCatalogue`, `CATALOGUE_WRITE_WAIT_MS`) and never records CANCELLED after rows committed (incl. the full run's seed exit 0; the seed child is not abortable). Redaction masks raw / percent-encoded / JSON-escaped / base64 forms (DB password also from `?password=`), over-long child lines are dropped whole; secrets < 8 chars are not masked, so a real worker refuses to start with a shorter `EFBASE_API_KEY`.
 
 ## Conventions
 
@@ -130,12 +154,14 @@ docker compose up -d --remove-orphans  # postgres 127.0.0.1:5433 (--remove-orpha
 cp .env.example .env                 # fill DATABASE_URL etc. (root .env is read by api, db scripts and next.config.ts)
 pnpm install
 pnpm db:generate                     # prisma generate
-pnpm db:migrate                      # prisma migrate deploy — baseline + parity_fixes (extensions pg_trgm/unaccent, GIN index) + remove_dead_surface (drops 8 user-content tables)
+pnpm db:migrate                      # prisma migrate deploy — baseline + parity_fixes (extensions pg_trgm/unaccent, GIN index) + remove_dead_surface (drops 8 user-content tables) + efootbase_static_data + admin_sync_worker (4 admin/sync tables)
 pnpm db:refresh                      # db:seed (upsert, ~1 min) then db:crossfill (needs dump/efhub/efhub_db.sqlite + SQLITE3_BIN)
 python3 -I scripts/verify-seed.py --after-crossfill   # dump ↔ DB integrity (read-only psql; the flag: right after db:refresh)
 pnpm api:dev & pnpm web:dev          # :4000 + :3000
+pnpm admin:create <name>             # first admin (hidden prompt); then /admin/login — see docs/admin-sync.md before starting the worker
+pnpm worker:dev                      # sync worker (its first tick queues an incremental run unless the schedule is disabled)
 pnpm typecheck                       # tsc --noEmit in every package
-pnpm test                            # unit tests (@eflab/shared) + scripts/smoke-test.sh (boots the API on :4300; API_URL=… reuses a running one)
+pnpm test                            # unit tests (@eflab/shared, @eflab/db, @eflab/worker) + scripts/smoke-test.sh (boots the API on :4300; API_URL=… reuses a running one)
 # tRPC by hand (superjson-wrapped input):
 curl -sS "http://localhost:4000/trpc/player.list?input=%7B%22json%22%3A%7B%22page%22%3A1%2C%22limit%22%3A24%2C%22sort%22%3A%22ovr%22%2C%22order%22%3A%22desc%22%7D%7D"
 curl -sS http://localhost:4000/health
@@ -180,11 +206,26 @@ The detail page's Progression panel (`components/build-simulator/ProgressionPane
 - **Kept on purpose after `remove-dead-surface` (2026-10-18)** — not dead by accident, each has an owner decision behind it: the `auth` router + Google OAuth + User/Session/Account (no sign-in UI is routed; `auth.tsx` still calls `getSession`/`signOut`); `protectedProcedure` in `router/trpc.ts` (no mounted procedure uses it since the community routers went); the Pack/PackCard (2,065 / 13,828) and Manager (1,479; 69 `inPicker`, read by `manager.picker` since efootbase-exact-model-managers) tables with their seeding and cross-fill (data assets; the APIs read only the pack name in `player.byId` and the picker rows); `better-auth` (only `better-auth/crypto` is imported); `zod` and `superjson` as direct `apps/api` dependencies (the API imports both through `@eflab/shared`). The R2 bucket still holds the `card-backgrounds/`, `frames/`, `managers/` objects nobody renders.
 - **Konami fonts** (`apps/web/public/fonts/eFootballSans-*.ttf`, `eFootballStencil-Regular.ttf`, loaded by `globals.css`) have an unknown licence.
 - **Git history still contains the two previously committed third-party keys** (`docs/apk-db-expansion.md`, `docs/efootbase-ui-dna.md`); redaction covers the working tree only.
+- **Sync worker limits** (change `admin-sync-worker`, details in `docs/admin-sync.md`):
+  - Incremental runs see only new cards (`time_added` does not move on stat edits): edits reach the DB only through the weekly full run; incremental downloads the images of the cards / emblems it inserts and ETag-compares (`--etag-vs-bucket`, needs `R2_PUBLIC_BASE`) those of the known cards it rewrites, replacing only differing ones (counted as overwritten); it never creates Pack rows.
+  - Neither run does the eFHUB cross-fill.
+  - Overwritten card images need a `DEFAULT_IMAGE_VERSION` bump and a web rebuild by hand (the dashboard warns with the count).
+  - The full run's changed-image test assumes R2's single-part ETag = content MD5 (not verified against the real bucket; if wrong, more downloads, never a missed change). The r2.dev public URL is rate-limited, and non-200/404 bucket answers count as "possible overwrite".
+  - A full run records the ids whose images it must compare (`stats.imagesPendingIds`, written before its seed; the API sends only `imagesPending`) and removes them when its image step finished; the next full run compares the pending ones again (also after a kill). Its seed child is never stopped by cancel / time limit / worker stop (≤ 70 min), so a full run may outlast 6 h by the seed's rest and the service stop timeout should be 75 min.
+  - All stored times are written time-safely — typed Prisma queries, or `jsonb_to_recordset(… timestamp(3))` (the upserts; Postgres ignores the `Z`), never a raw `Date` parameter — so the database's TimeZone does not matter (suites run under America/New_York and Asia/Ho_Chi_Minh).
+  - Image failures never stop a run (third verify W1): a failed image, or one skipped because pesdb.net refused (its 403 / 429 / challenge skips only its own images — only efootbase's API / CDN refusals block the source for 6 h), is counted failed and its card owed (`imagesPendingIds`, `imagesChecked`); the next run compares owed images again. "Overwritten" = a body that differs from a bucket object with a content-MD5 ETag (equal bodies are dropped; non-MD5 bucket ETags → `imagesUnverified`) — the only count behind the image-version warning (W2). Bodies need a PNG/WEBP/JPEG/GIF signature (S1).
+  - Blocked → 6 h with no request.
+  - A full run needs the static snapshot (`skills.json` + `skill-icons/`) and 2 GB free.
+  - The worker counts as online for 2 min after its last heartbeat.
+  - `trustProxy` is unset, so behind a proxy the per-address sign-in limit is global.
+  - The admin cookie is SameSite=Strict: web and API must be the same site.
+  - With the default root `.env` the key and R2 credentials are also present, unread, in the API / Next environment — the strict split is a separate worker env file.
+  - Admin code adds ~1 KB gzip to the public First Load JS (shared-chunk split, no duplicated code).
 - **No CI** — `pnpm typecheck` and `pnpm test` are run by hand.
 
 ## docs index
 
-`docs/README.md` is the index. Files that exist: `apk-db-expansion.md`, `ecosystem-proposal.md`, `efhub-sqlite-gap-analysis.md`, `efhub-ui-dna.md`, `eflab-image-pipeline.md`, `efootball-apk-datamine-analysis.md`, `efootbase-efhub-features.md`, `efootbase-static-snapshot.md` (static skill / manager snapshot: file shapes, regeneration, upload), `efootbase-exact-model.md` (efootbase's overall formula, proficiency bands and manager effect: provenance, accepted terms risk, verification, regeneration), `efootbase-ui-dna.md`, `pesdb-ui-dna.md`. The dated DNA/analysis docs are snapshots (e.g. `efootbase-ui-dna.md` §8 "API unusable" was superseded on 2026-10-06 when the dump was taken).
+`docs/README.md` is the index. Files that exist: `admin-sync.md` (admin area + sync worker operations: secrets, service examples, first run, cookie/proxy, limits, recovery, rollback SQL, testing), `apk-db-expansion.md`, `ecosystem-proposal.md`, `efhub-sqlite-gap-analysis.md`, `efhub-ui-dna.md`, `eflab-image-pipeline.md`, `efootball-apk-datamine-analysis.md`, `efootbase-efhub-features.md`, `efootbase-static-snapshot.md` (static skill / manager snapshot: file shapes, regeneration, upload), `efootbase-exact-model.md` (efootbase's overall formula, proficiency bands and manager effect: provenance, accepted terms risk, verification, regeneration), `efootbase-ui-dna.md`, `pesdb-ui-dna.md`. The dated DNA/analysis docs are snapshots (e.g. `efootbase-ui-dna.md` §8 "API unusable" was superseded on 2026-10-06 when the dump was taken).
 
 ## Memory index (loaded each session)
 

@@ -9,6 +9,8 @@ Design principles and interface specification for eflab. The visual language fol
 > Updated 2026-10-19 (openspec change `efootbase-static-data`): skills pages and player skill chips show efootbase's stored data — artwork, description, group, wiki order, stat boosts, activation — and the chips open a keyboard-accessible native popover.
 >
 > Updated 2026-10-19 (openspec change `efootbase-exact-model-managers`): the Progression panel shows efootbase's exact overall (no "~", no anchor or position warnings), a "Select Manager" dialog, lime "+1" manager chips, and the Pitch Map / Best Fit / "At POS" are computed with the formula for every card.
+>
+> Updated 2026-10-20 (openspec change `admin-sync-worker`): private admin pages (`/admin/login`, `/admin`, `/admin/runs`, `/admin/runs/[id]`) — see "Admin Area".
 
 ## Design Tokens
 
@@ -107,6 +109,31 @@ One token per `CardType` (`STANDARD #64748b`, `LEGENDARY #fbbf24`, `TRENDING #06
 - 84 skills grouped **Showtime Skills (23) / Classic Skills (44)** from the stored efootbase group, in efootbase's wiki order (`sortOrder`); fixture entries efootbase does not treat as skills — AI styles, motion styles, set-piece variants — have no group and sit under "Other catalogue entries (17)"; the 5 unreleased skills are never listed. Each card shows the efootbase artwork as a full-width 576:346 banner (lazy, `rounded-lg`, `object-fit: contain` — 9 of the 67 stills are 576×324 and are letterboxed, never cropped; "Other" entries have none), the name, the efootbase description (`line-clamp-3`), the lime boost pills when efootbase showed boosts (compact summary for Super-sub), the real holder count (`playerCount`) and share of all cards, top holders (`skill.players` top-N) and an empty state for zero-holder skills.
 - `/skills/[slug]`: artwork (max 288 px wide beside the title from `sm`, full width above it on phones), title, description, group chip ("Showtime Skills" / "Classic Skills" / "Other catalogue entries") and, when efootbase showed them, a "Stat boost" block (`data-testid="skill-effects"`) with "+6 Dribbling"-style pills and "Activation: …"; an unreleased slug is a 404.
 - No synthesised rarity, rank, stat boosts or invented tier labels ("Premium" is gone); "Showtime" is only ever the observed group, never a badge invented for a skill; boosts and activation are only ever efootbase's own (skills without data show none).
+
+### Admin Area (`/admin*`, change `admin-sync-worker`)
+- **Private and quiet**:
+  - not linked from the header, footer, mobile nav or a sitemap; `noindex` (metadata + `X-Robots-Tag`), `no-store`;
+  - client-rendered behind `admin.me`, so the HTML holds no admin data. Until it answers, only a neutral centred line shows ("Checking the admin session…", then "Redirecting to the sign-in page…" on a 401), or an error with a Retry button.
+  - Same site chrome and `max-w-6xl` container as the public pages. The admin frame is a panel bar with a lime uppercase "ADMIN" micro-label (shield icon), `nav[aria-label="Admin"]` (Dashboard / Run history, `aria-current="page"` on an elevated pill), "Signed in as NAME" and a secondary "Sign out" button.
+- **Tokens**: the existing ones only — no new colour.
+  - Surfaces: `--color-panel` with `--color-line` borders (`rounded-xl` panels with uppercase micro-label headings), `--color-elevated` for the current nav pill, `--color-canvas` for the log tail.
+  - Status badges (`rounded-lg`, 11 px bold uppercase, 15 % tint + 50 % border): QUEUED neutral (`line-active` / `elevated` / secondary text), RUNNING cyan `accent-secondary`, OK lime `accent`, FAILED red `accent-danger`, BLOCKED amber `accent-warn`, CANCELLED dim.
+  - Notices (10 % tint + 50 % border): danger "efootbase blocked our requests" (names the time), warn "The worker is offline" (queued runs wait), warn "Card images were overwritten" (count + raise the image version and rebuild), info for neutral help.
+  - Primary action = lime button, secondary = `button--secondary`, danger = red outline (cancel).
+- **Pages**:
+  - **sign-in**: `max-w-sm` card, labelled user-name / password fields (`autocomplete` username / current-password), one generic error "Wrong user name or password" in a `role="alert"` region;
+  - **dashboard**: title + one-line purpose, a dim "Updated … · refreshing every 3 s while a run is queued or running / every 30 s / paused while this tab is hidden" line, the notices, Worker, Next scheduled runs, Newest card, Last finished run, **Run now** and **Schedule** panels;
+  - **run history**: newest first, "Load more" cursor pages without duplicates, "N runs shown · all runs";
+  - **run detail**: status, times, the statistics table, the check result, cancel, and the log tail.
+- **States**: pulse placeholders while loading (`aria-busy`, labelled). Polling every 3 s only while a run is queued or running and the tab is visible; nothing polls while hidden, and the data refreshes at once when the tab comes back. A failed refresh keeps the last values with a "Could not refresh…" alert. Empty states say what is missing ("No output yet.", "This run stored no log output.").
+- **Buttons that cannot act stay focusable**: `aria-disabled` (dimmed, `cursor-not-allowed`, clicks ignored) and the reason shown as visible amber text under the button, linked with `aria-describedby`. While usable, the same slot carries a dim hint (what the run does; incremental: "Stat edits to older cards are only seen by a full sync"). Reasons name the conflict ("Incremental sync #12 is running — one sync at a time.", "Refused until … UTC: efootbase blocked our requests. Only a check can be queued.").
+- **Full sync** opens a confirmation in the shared filter `Modal` (named native `<dialog>`, focus trap, Escape and focus return; launcher `aria-haspopup="dialog"`) explaining why it is heavy and asking for a `pg_dump` before the first one. Nothing is queued until "Queue full sync" is pressed.
+- **Schedule form**: labelled controls (enabled checkbox, interval number input 15–1440 min, weekday and UTC hour selects), `aria-invalid` + described help/error text per field, and a save result in a polite live region (`role="alert"` for errors).
+- **Accessibility**:
+  - live regions — a `sr-only` polite announcer for run status changes on the dashboard, history and detail, plus polite feedback after queuing or cancelling (alert on error);
+  - every control has a visible lime focus outline;
+  - the log tail is a focusable `<pre>` (`tabIndex=0`, labelled "Log tail of run N") that scrolls inside itself (max 28 rem).
+  - No horizontal page scroll from 320 to 1280 px: `min-w-0` grids, long values wrap with `overflow-wrap: anywhere`, and the three Run-now buttons stack below `sm`.
 
 ## Interaction & Motion
 - Transitions `transition-all duration-150 ease-out`; dialog fade + slight scale.
