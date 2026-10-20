@@ -1,7 +1,7 @@
 // seed-efhub-crossfill.ts — cross-fill eflab Postgres from the eFHUB CDN SQLite
 // dump. Run AFTER `pnpm db:seed` (`pnpm db:refresh` runs both). This script only
 // fills the columns efootbase cannot expose; the seeder never writes them (see
-// PLAYER_CROSSFILL_COLUMNS / MANAGER_CROSSFILL_COLUMNS in seed-efootbase-full.ts),
+// PLAYER_CROSSFILL_COLUMNS / MANAGER_CROSSFILL_COLUMNS in efootbase-map.ts),
 // so seed → cross-fill → seed keeps them.
 //
 //   Phase 1  Manager tactic ratings. eFHUB has ~1.5k coach rows (several versions

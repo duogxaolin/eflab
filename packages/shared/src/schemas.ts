@@ -11,6 +11,7 @@ import {
   SORT_FIELDS,
   SORT_PRESETS,
 } from "./constants";
+import { SYNC_INTERVAL_MAX_MINUTES, SYNC_INTERVAL_MIN_MINUTES, SYNC_KINDS } from "./sync";
 
 // BigInt-friendly id transformer. SuperJSON handles bigint at the wire layer, but Zod
 // parses the request (strings) so we coerce. Bounded to a Postgres int8
@@ -168,3 +169,99 @@ export const signInInput = z.object({
   email: z.string().trim().toLowerCase().email(),
   password: z.string().min(1),
 });
+
+// ---- Admin area + sync worker (the `admin` router; openspec admin-sync-worker) ----
+// Admin accounts are separate from the visitor accounts above (capability
+// admin-access). Schedule bounds are also CHECK constraints in the migration.
+
+/** Admin user name: 3–32 characters from a-z 0-9 _ . - (lower case only). */
+export const ADMIN_USERNAME_RE = /^[a-z0-9_.-]{3,32}$/;
+export const ADMIN_PASSWORD_MIN_LENGTH = 12;
+/** Upper bound on a password's length (keeps the hashing input bounded). */
+export const ADMIN_PASSWORD_MAX_LENGTH = 1024;
+
+export const adminUsername = z.string().regex(ADMIN_USERNAME_RE, "user name: 3–32 characters from a-z 0-9 _ . -");
+export const adminPassword = z
+  .string()
+  .min(ADMIN_PASSWORD_MIN_LENGTH, `password: at least ${ADMIN_PASSWORD_MIN_LENGTH} characters`)
+  .max(ADMIN_PASSWORD_MAX_LENGTH, `password: at most ${ADMIN_PASSWORD_MAX_LENGTH} characters`);
+
+// Sign-in does not apply the user-name pattern or the password minimum: any
+// failure answers the same generic message, so the input check must not tell an
+// invalid name from an unknown one. Only sizes are bounded.
+export const adminSignInInput = z.object({
+  username: z.string().max(64),
+  password: z.string().max(ADMIN_PASSWORD_MAX_LENGTH),
+});
+
+export const syncConfigUpdateInput = z.object({
+  enabled: z.boolean(),
+  incrementalIntervalMin: z.number().int().min(SYNC_INTERVAL_MIN_MINUTES).max(SYNC_INTERVAL_MAX_MINUTES),
+  fullWeekday: z.number().int().min(0).max(6),
+  fullHourUtc: z.number().int().min(0).max(23),
+});
+export type SyncConfigUpdateInput = z.infer<typeof syncConfigUpdateInput>;
+
+export const syncQueueInput = z.object({ kind: z.enum(SYNC_KINDS) });
+export const syncRunIdInput = z.object({ id: z.number().int().min(1).max(INT4_MAX) });
+export const syncRunsListInput = z.object({
+  /** id of the last run of the previous page (runs are listed newest first, id DESC). */
+  cursor: z.number().int().min(1).max(INT4_MAX).optional(),
+  limit: z.number().int().min(1).max(50).default(20),
+});
+
+const count = z.number().int().min(0).max(INT4_MAX);
+const isoTime = z.string().datetime();
+// Statistics / check results stored in SyncRun.stats and returned by the admin
+// API. `.strict()`: a key that is not listed here (e.g. a credential by
+// mistake) fails validation instead of being stored or sent.
+export const syncCheckResultSchema = z
+  .object({
+    answered: z.boolean(),
+    httpStatus: z.number().int().min(0).max(999).nullable(),
+    challenge: z.boolean(),
+    responseMs: count.nullable(),
+    newestReleaseAt: isoTime.nullable(),
+    dbNewestReleaseAt: isoTime.nullable(),
+    /** true when the source's newest card is newer than the database's newest. */
+    newerThanDb: z.boolean().nullable(),
+  })
+  .strict();
+export const syncRunStatsSchema = z
+  .object({
+    pages: count,
+    requests: count,
+    cardsNew: count,
+    cardsChanged: count,
+    cardsUnchanged: count,
+    imagesDownloaded: count,
+    imagesUploaded: count,
+    imagesOverwritten: count,
+    imagesFailed: count,
+    durationMs: count,
+    check: syncCheckResultSchema,
+    /** Images that replaced a bucket object whose ETag is not a content MD5 — maybe overwritten, not verified (third verify W2). */
+    imagesUnverified: count,
+    /**
+     * Stored only (never sent by the admin API): card ids whose images must
+     * still be compared with the bucket — a FULL run writes its whole list
+     * before its seed; once a run's image step finished (`imagesChecked`) the
+     * list holds only what is still owed (failed / skipped images, ids it could
+     * not compare). The next incremental / full run takes them over (second
+     * verify CR2, third verify W1). At most every card of the catalogue.
+     */
+    imagesPendingIds: z.array(z.number().int().positive().max(Number.MAX_SAFE_INTEGER)).max(200_000),
+    /** Stored only: this run's image step finished, so its `imagesPendingIds` are exactly what is still owed. */
+    imagesChecked: z.boolean(),
+    /** What the admin API sends instead of `imagesPendingIds`: their number. */
+    imagesPending: count,
+  })
+  .partial()
+  .strict();
+/** Statistics as the admin API returns them (`imagesPendingIds` replaced by `imagesPending`, `imagesChecked` withheld). */
+export function publicRunStats(stats: SyncRunStats): SyncRunStats {
+  const { imagesPendingIds, imagesChecked: _checked, ...rest } = stats;
+  return imagesPendingIds && imagesPendingIds.length > 0 ? { ...rest, imagesPending: imagesPendingIds.length } : rest;
+}
+export type SyncCheckResult = z.infer<typeof syncCheckResultSchema>;
+export type SyncRunStats = z.infer<typeof syncRunStatsSchema>;

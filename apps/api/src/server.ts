@@ -9,6 +9,7 @@ import { appRouter } from "./router/root.js";
 import { createContext } from "./router/context.js";
 import { googleOAuthRoutes } from "./auth/google.js";
 import { healthRoutes } from "./health.js";
+import { isAdminTrpcUrl } from "./auth/admin.js";
 import { API_HOST, API_PORT, isDev, webOrigins } from "./env.js";
 
 // Largest number of procedures one batched tRPC request may carry. The web
@@ -26,7 +27,19 @@ export async function buildServer() {
   });
 
   await server.register(helmet, { contentSecurityPolicy: false });
+  // allowedHeaders is left unset on purpose: @fastify/cors then reflects the
+  // preflight's Access-Control-Request-Headers, which admits the admin CSRF
+  // header `x-eflab-admin` (openspec admin-sync-worker) for the allowed origins
+  // only, without narrowing what the public tRPC client may send.
   await server.register(cors, { origin: [...webOrigins], credentials: true });
+
+  // Admin responses are never cached (admin-access "Protected Admin API"):
+  // every /trpc call that names an admin.* procedure — batches and errors
+  // raised before a procedure runs included.
+  server.addHook("onSend", async (req, reply, payload) => {
+    if (isAdminTrpcUrl(req.url)) void reply.header("Cache-Control", "no-store");
+    return payload;
+  });
 
   // Non-tRPC routes (health, OAuth): never echo an internal error message or a
   // stack outside development; expected 4xx errors keep their message.

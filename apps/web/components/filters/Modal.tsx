@@ -23,6 +23,7 @@ export function Modal({
   title,
   children,
   headerExtra,
+  footer,
   panelClassName = "",
 }: {
   open: boolean;
@@ -31,6 +32,8 @@ export function Modal({
   children: ReactNode;
   /** Rendered under the title (e.g. a search field or a switch). */
   headerExtra?: ReactNode;
+  /** Replaces the "Done" button in the footer (e.g. a confirmation's Cancel / Confirm pair). */
+  footer?: ReactNode;
   panelClassName?: string;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
@@ -90,14 +93,16 @@ export function Modal({
             </button>
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">{children}</div>
-          <div className="flex justify-end border-t border-[var(--color-line)] px-4 py-2.5">
-            <button
-              type="button"
-              onClick={onClose}
-              className="rounded-full bg-[var(--color-accent)] px-4 py-1.5 text-xs font-bold text-[var(--color-accent-foreground)] hover:brightness-110 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
-            >
-              Done
-            </button>
+          <div className="flex flex-wrap justify-end gap-2 border-t border-[var(--color-line)] px-4 py-2.5">
+            {footer ?? (
+              <button
+                type="button"
+                onClick={onClose}
+                className="rounded-full bg-[var(--color-accent)] px-4 py-1.5 text-xs font-bold text-[var(--color-accent-foreground)] hover:brightness-110 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
+              >
+                Done
+              </button>
+            )}
           </div>
         </div>
       )}

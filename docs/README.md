@@ -1,6 +1,6 @@
 # Tài liệu tham khảo — eflab `docs/`
 
-> **Cập nhật index:** 2026-10-17 (openspec change `eflab-parity-fixes`).
+> **Cập nhật index:** 2026-10-20 (openspec change `admin-sync-worker`).
 > **Phạm vi:** Các phân tích kỹ thuật về hệ sinh thái cơ sở dữ liệu eFootball (efootbase.com, efhub.com, pesdb.net) và các quyết định thiết kế của eflab. Tài liệu vận hành hiện hành của repo nằm ở `CLAUDE.md` + `README.md` (gốc repo) và `openspec/ui-dna.md`.
 
 ## Lưu ý quan trọng
@@ -9,7 +9,7 @@
 - **Repo là PUBLIC.** Hai API key của bên thứ ba từng được ghi trong `apk-db-expansion.md` và `efootbase-ui-dna.md` đã được thay bằng `<redacted>` trong working tree (2026-10-17); lịch sử git vẫn còn — việc rewrite/rotate là quyết định của chủ repo. Không thêm key, dump, font hay asset có bản quyền vào `docs/`.
 - Các tài liệu được tham chiếu trong các bản index cũ nhưng **không tồn tại** trong thư mục này (`pesdb-net-analysis.md`, `data-sourcing-relationships.md`, `datamining-playbook.md`, `technical-recon.md`, `efhub-apk-extraction.md`, `efootbase-apk-analysis.md`) thuộc về workspace của bot bno, không phải eflab.
 
-## Mục lục (đúng 11 file đang có trong `docs/`)
+## Mục lục (đúng 12 file đang có trong `docs/`)
 
 | # | Tài liệu | Ngày | Mô tả ngắn |
 |---|----------|------|------------|
@@ -24,6 +24,7 @@
 | 9 | [pesdb-ui-dna.md](./pesdb-ui-dna.md) | 2026-10-06 | DNA UI + function breakdown pesdb.net (nguồn ảnh của bot bno, không phải eflab). Màu tier 90+/80/70/<70 của pesdb là gốc của `--color-tier-*` trong eflab. |
 | 10 | [efootbase-static-snapshot.md](./efootbase-static-snapshot.md) | 2026-10-19 | Snapshot tĩnh efootbase (72 skill: mô tả, nhóm Showtime/Classic, hiệu ứng chỉ số, điều kiện kích hoạt, icon; 69 HLV trong picker): tên khoá thật của file, cách tái tạo thủ công (mong manh, không tự động hoá), upload R2, seed dùng nó thế nào. Nội dung bên thứ ba chỉ nằm trong `dump/` (git-ignored), DB và R2. |
 | 11 | [efootbase-exact-model.md](./efootbase-exact-model.md) | 2026-10-19 | Mô hình chính xác của efootbase cho Progression: bảng trọng số số nguyên của công thức overall (13 vị trí × 28 hạng tử), bảng band Manager Proficiency, hiệu ứng HLV (+1 cho 1–2 chỉ số), nguồn gốc (client công khai của efootbase — chủ repo chấp nhận rủi ro điều khoản), kết quả kiểm chứng (793/793 overall, 10,309/10,309 ô vị trí), giới hạn và cách tái tạo khi efootbase đổi hằng số. |
+| 12 | [admin-sync.md](./admin-sync.md) | 2026-10-20 | Vận hành khu admin (`/admin`, tài khoản riêng tạo bằng `pnpm admin:*`) và sync worker (`apps/worker`: check / incremental / full): ai giữ secret nào, tên biến môi trường (chỉ tên), chạy worker thành service (systemd / launchd / pm2, không chứa secret), checklist lần chạy đầu (pg_dump, migrate, tạo admin, check, một incremental bằng tay), yêu cầu cùng site của cookie SameSite=Strict và ghi chú `trustProxy`, lịch mặc định và ngữ nghĩa hàng đợi (409 / 412), khôi phục khi worker chết, giới hạn, SQL rollback (đã thử trên DB scratch), cách test không chạm efootbase. |
 
 ## Ghi chú phương pháp luận
 

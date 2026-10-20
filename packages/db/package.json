@@ -8,7 +8,10 @@
   "exports": {
     ".": "./src/index.ts",
     "./prisma": "./src/prisma.ts",
-    "./client": "./src/client.ts"
+    "./client": "./src/client.ts",
+    "./admin-auth": "./src/admin-auth.ts",
+    "./efootbase-map": "./src/efootbase-map.ts",
+    "./upsert": "./src/upsert.ts"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json --noEmit",
@@ -21,7 +24,11 @@
     "db:migrate:dev": "prisma migrate dev --schema=prisma/schema.prisma",
     "db:seed": "tsx --env-file-if-exists=../../.env src/seed-efootbase-full.ts",
     "db:crossfill": "tsx --env-file-if-exists=../../.env src/seed-efhub-crossfill.ts",
-    "db:refresh": "pnpm run db:seed && pnpm run db:crossfill"
+    "db:refresh": "pnpm run db:seed && pnpm run db:crossfill",
+    "admin:create": "tsx --env-file-if-exists=../../.env src/admin-cli.ts create",
+    "admin:set-password": "tsx --env-file-if-exists=../../.env src/admin-cli.ts set-password",
+    "admin:disable": "tsx --env-file-if-exists=../../.env src/admin-cli.ts disable",
+    "test": "tsx src/admin-auth.test.ts && tsx src/efootbase-map.test.ts"
   },
   "dependencies": {
     "@eflab/config": "workspace:*",

@@ -18,8 +18,13 @@
     "db:seed": "pnpm --filter @eflab/db run db:seed",
     "db:crossfill": "pnpm --filter @eflab/db run db:crossfill",
     "db:refresh": "pnpm --filter @eflab/db run db:refresh",
+    "admin:create": "pnpm --filter @eflab/db run admin:create",
+    "admin:set-password": "pnpm --filter @eflab/db run admin:set-password",
+    "admin:disable": "pnpm --filter @eflab/db run admin:disable",
     "api:dev": "pnpm --filter @eflab/api dev",
     "web:dev": "pnpm --filter @eflab/web dev",
+    "worker:dev": "pnpm --filter @eflab/worker dev",
+    "worker:start": "pnpm --filter @eflab/worker start",
     "clean": "turbo run clean && rm -rf node_modules apps/*/node_modules packages/*/node_modules"
   },
   "devDependencies": {

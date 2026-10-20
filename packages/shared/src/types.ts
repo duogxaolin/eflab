@@ -1,4 +1,6 @@
 import type { BaseStat, CardType, PhysiqueField, Position, PositionProficiency, TrainingCategory } from "./constants";
+import type { SyncRunStats } from "./schemas";
+import type { SyncKind, SyncStatus, SyncTrigger } from "./sync";
 
 // Serialized DTO shapes (what tRPC returns after SuperJSON). BigInt → string.
 /** Everything a PlayerCard tile needs in a list/grid (player.list, trending,
@@ -280,4 +282,79 @@ export interface FeaturedBundleDTO {
   releaseDate: string;
   position: number;
   cards: CardPreview[];
+}
+
+// ---- Admin area + sync worker (the `admin` router; openspec admin-sync-worker) ----
+// No DTO below carries a password hash, a session token or digest, the
+// efootbase key or an R2 credential (admin-access "Protected Admin API").
+
+/** admin.me / admin.signIn — the signed-in admin. */
+export interface AdminMeDTO {
+  id: number;
+  username: string;
+  createdAt: string;
+  lastLoginAt: string | null;
+}
+
+/** The single SyncConfig row as the dashboard reads it. */
+export interface SyncConfigDTO {
+  enabled: boolean;
+  incrementalIntervalMin: number;
+  fullWeekday: number;
+  fullHourUtc: number;
+  blockedUntil: string | null;
+  blockedReason: string | null;
+  workerHeartbeatAt: string | null;
+  updatedAt: string;
+  /** User name of the admin who last changed the schedule, or null. */
+  updatedBy: string | null;
+}
+
+/** One run in the history list (no log tail). */
+export interface SyncRunSummaryDTO {
+  id: number;
+  kind: SyncKind;
+  trigger: SyncTrigger;
+  status: SyncStatus;
+  /** User name of the admin who queued a manual run; null for scheduled runs. */
+  requestedBy: string | null;
+  queuedAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  cancelRequested: boolean;
+  error: string | null;
+  /** Validated against `syncRunStatsSchema`; `{}` when the stored value fails it (then `statsInvalid`). */
+  stats: SyncRunStats;
+  /** true when the stored statistics did not match `syncRunStatsSchema` — they are withheld, never guessed. */
+  statsInvalid: boolean;
+  watermarkBefore: string | null;
+  watermarkAfter: string | null;
+}
+
+/** admin.runs.get — a run with its (redacted, ≤ 64 KB) log tail. */
+export interface SyncRunDTO extends SyncRunSummaryDTO {
+  logTail: string;
+}
+
+/** admin.runs.list — newest first; pass `nextCursor` back as `cursor`. */
+export interface SyncRunsPageDTO {
+  items: SyncRunSummaryDTO[];
+  nextCursor: number | null;
+}
+
+/** admin.dashboard. */
+export interface SyncDashboardDTO {
+  workerOnline: boolean;
+  config: SyncConfigDTO;
+  /** Latest finished run (any kind; queued / running ones are in `activeRuns`). */
+  lastRun: SyncRunSummaryDTO | null;
+  /** Queued and running runs, oldest first (the order the worker takes them). */
+  activeRuns: SyncRunSummaryDTO[];
+  next: { incremental: string | null; full: string | null };
+  /** Newest Player.releaseDate in the database. */
+  newestCardReleaseAt: string | null;
+  /** The card with that release date (highest id on a tie), or null in an empty catalogue. */
+  newestCard: { id: string; baseId: string; name: string; releaseAt: string } | null;
+  /** Latest finished run that overwrote card images (raise the image version). */
+  overwrittenImages: { runId: number; count: number; finishedAt: string | null } | null;
 }

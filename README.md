@@ -14,6 +14,7 @@ Not affiliated with Konami. Player data comes from public third-party dumps (efo
 | API | `apps/api` | Fastify 5 · `@trpc/server` v11 · SuperJSON |
 | DB | `packages/db` | Prisma 6 · PostgreSQL 16 · JSONL seeder + SQLite cross-fill |
 | Shared | `packages/shared` | Zod schemas · domain constants · pure helpers · progression math |
+| Worker | `apps/worker` | Node + `tsx` sync worker (API check, incremental and full sync; drives the Python scripts and the seed) |
 | Config | `packages/config` | shared tsconfig presets |
 
 Theme: efootbase-style **zinc + lime** dark UI (canvas `#060607`, panel `#18181b`, accent `#acf41a`; tokens in `apps/web/app/globals.css`, spec in `openspec/ui-dna.md`). Cards are a single pre-composited R2 image with HTML overlays and a CSS 3D tilt — no Three.js/WebGL.
@@ -23,11 +24,14 @@ Theme: efootbase-style **zinc + lime** dark UI (canvas `#060607`, panel `#18181b
 ```
 eflab/
 ├── apps/
-│   ├── api/        # Fastify + tRPC (player, featured, skill, auth) + /health + Google OAuth
-│   └── web/        # Next.js routes: / /players /players/[baseId]/[cardId] /compare /packs /packs/[slug] /skills /skills/[slug]
+│   ├── api/        # Fastify + tRPC (player, featured, skill, manager, auth, admin) + /health + Google OAuth
+│   ├── web/        # Next.js routes: / /players /players/[baseId]/[cardId] /compare /packs /packs/[slug] /skills /skills/[slug]
+│   │               #   + private /admin, /admin/login, /admin/runs, /admin/runs/[id] (noindex, not linked)
+│   └── worker/     # sync worker: schedule + run queue in Postgres, check / incremental / full runs (+tests on scratch databases)
 ├── packages/
-│   ├── db/         # Prisma schema + migrations, seed-efootbase-full.ts, seed-efhub-crossfill.ts, fixtures/
-│   ├── shared/     # Zod schemas, constants (CARD_TYPE_LABELS, SORT_FIELDS…), helpers (+tests), progression (+tests)
+│   ├── db/         # Prisma schema + migrations, seed-efootbase-full.ts, seed-efhub-crossfill.ts, efootbase-map.ts (shared row mapping),
+│   │               #   admin-auth.ts + admin-cli.ts (admin accounts), fixtures/
+│   ├── shared/     # Zod schemas, constants (CARD_TYPE_LABELS, SORT_FIELDS…), helpers (+tests), progression (+tests), sync (+tests)
 │   └── config/     # tsconfig presets
 ├── scripts/
 │   ├── efootbase_dump.py     # efootbase API → dump/efootbase/ (needs EFBASE_API_KEY)
@@ -73,7 +77,7 @@ The single root `.env` is read by the API and the db scripts (`tsx --env-file-if
 
 ```bash
 pnpm db:generate   # prisma generate
-pnpm db:migrate    # prisma migrate deploy: 20261017000000_baseline (+ pg_trgm/unaccent), 20261017000100_parity_fixes, 20261018000000_remove_dead_surface, 20261019000000_efootbase_static_data
+pnpm db:migrate    # prisma migrate deploy: 20261017000000_baseline (+ pg_trgm/unaccent), 20261017000100_parity_fixes, 20261018000000_remove_dead_surface, 20261019000000_efootbase_static_data, 20261019230000_admin_sync_worker
 pnpm db:refresh    # db:seed (efootbase dump → Postgres, upsert in one transaction) then db:crossfill (eFHUB SQLite)
 python3 -I scripts/verify-seed.py --after-crossfill   # optional: assert the DB matches the dump (flag: right after db:refresh)
 ```
@@ -108,11 +112,12 @@ Open http://localhost:3000.
 
 ```bash
 pnpm typecheck   # tsc --noEmit in every package
-pnpm test        # unit tests (@eflab/shared: progression oracle + helpers) then scripts/smoke-test.sh
+pnpm test        # unit tests (@eflab/shared: progression oracle, helpers, sync; @eflab/db: admin passwords, row mapping;
+                 #   @eflab/worker: fake efootbase + scratch databases eflab_synctest_*) then scripts/smoke-test.sh
 pnpm build       # next build (web) + tsc --noEmit (api / db / shared)
 ```
 
-`scripts/smoke-test.sh` starts the API itself on port **4300** (`SMOKE_API_PORT` to change), waits for `/health`, runs 42 checks against the refreshed database (featured bundle by slug, removed routers answer 404, `manager.picker` — 69 managers in order, 1–2 valid pills, images on the R2 host — 84 skills with the static efootbase data — Showtime 23 / Classic 44 / Other 17, descriptions, R2 artwork, Momentum Dribbling's +6 boosts, unreleased skills hidden — every card type non-empty, sort presets without duplicates, filters narrow, multi-valued position / league / team lists (OR inside, AND between, 400 for over-long or out-of-range lists), duplicate-free pagination, compare order, accent-insensitive search, 400 on out-of-range ids, malformed-cookie tolerance) and stops the API on exit; the manager tactic cross-fill is asserted by `scripts/verify-seed.py`. Set `API_URL=http://localhost:4000` to run the checks against an API that is already running.
+`scripts/smoke-test.sh` starts the API itself on port **4300** (`SMOKE_API_PORT` to change), waits for `/health`, runs 42 checks against the refreshed database (featured bundle by slug, removed routers answer 404, `manager.picker` — 69 managers in order, 1–2 valid pills, images on the R2 host — 84 skills with the static efootbase data — Showtime 23 / Classic 44 / Other 17, descriptions, R2 artwork, Momentum Dribbling's +6 boosts, unreleased skills hidden — every card type non-empty, sort presets without duplicates, filters narrow, multi-valued position / league / team lists (OR inside, AND between, 400 for over-long or out-of-range lists), duplicate-free pagination, compare order, accent-insensitive search, 400 on out-of-range ids, malformed-cookie tolerance) and stops the API on exit. Its admin section starts a second API on port 4301 (`SMOKE_ADMIN_PORT`) against a scratch database it creates, migrates and drops (`eflab_smoke_admin_<pid>`, one throwaway admin) and checks the admin API's negative paths (401, 403, identical sign-in failures, lock-out, no secret fields, `no-store`); the manager tactic cross-fill is asserted by `scripts/verify-seed.py`. Set `API_URL=http://localhost:4000` to run the checks against an API that is already running.
 
 **There is no CI.** Run `pnpm typecheck` and `pnpm test` locally before pushing.
 
@@ -137,8 +142,29 @@ tRPC lives under `/trpc/*` (GET with a superjson-wrapped `input`, batches of at 
 | `manager.picker` | the 69 managers of efootbase's picker (rating desc, then id): name, rating, image URL, one or two stat pills — the Progression panel's "Select Manager" |
 | `auth.getSession` / `auth.signOut` | session plumbing used by `lib/auth.tsx` (no sign-in UI is routed) |
 | `auth.signUp` / `auth.signIn` | email/password registration and login (kept with the auth system; no web caller) |
+| `admin.*` | private admin area: `signIn` / `signOut` / `me`, `config.get` / `config.update` (schedule), `runs.queue` / `runs.cancel` / `runs.list` / `runs.get`, `dashboard` — own accounts and `eflab_admin` cookie, 401 without an admin session, CSRF header on mutations, `Cache-Control: no-store` |
 
 The old `manager` router and the `pack`, `community`, `user`, `tierList`, `feed` and `pages` routers were removed on 2026-10-18 (change `remove-dead-surface`) together with the Build / Review / TierVote / TierList / Follow / Post / PostLike / Comment tables; the Pack and Manager tables stay as seeded data (the new `manager.picker` reads the picker rows).
+
+## Admin area and sync worker
+
+The catalogue can stay current without manual dumps:
+
+- **The worker** (`pnpm worker:start`, `apps/worker`) checks efootbase on a schedule and runs one job at a time from a queue kept in Postgres:
+  - an API check (one request);
+  - an incremental sync (cards newer than the newest one stored, minus 7 days, with their images);
+  - a weekly full sync (the whole dump, the existing seed, changed images).
+- **The private admin pages** (`/admin`) show the worker's state, the schedule form, buttons to queue a check / incremental / full sync or cancel one, and the run history with statistics and log tail.
+- **Admin accounts** are separate from visitor accounts and are created only from the command line:
+
+  ```bash
+  pnpm admin:create <username>        # hidden password prompt (≥ 12 characters); also admin:set-password, admin:disable
+  pnpm worker:dev                     # or worker:start / a service — read docs/admin-sync.md first
+  ```
+
+The worker is the only process that uses the efootbase key and the R2 credentials. It needs `python3` with `boto3`, and, for full runs, the static snapshot and 2 GB of free temporary space. With the schedule enabled (the default), its first tick queues an incremental run.
+
+[`docs/admin-sync.md`](docs/admin-sync.md) covers the rest: service examples, the first-run checklist, the same-site cookie requirement, the limits, recovery and the rollback SQL.
 
 ## Progression panel
 
@@ -146,9 +172,9 @@ The player detail page carries a Progression sheet for every card with a level c
 
 - **the panel opens on the Max-OVR build** for the card's registered position with every usable booster on, Manager Proficiency 90 and no manager — the same opening state as efootbase's sheet; "custom build" means any deviation from that state, Reset zeroes every category (the proficiency and the manager stay) and Max OVR restores the optimum (the manager stays);
 - **points are shown in efootbase's whole-point unit** (`toDisplayPoints`, twice the engine's training points): a level-32 card reads "62/62 pts", the first four stat points of a category cost 1 each, the next four 2 each (engine: budget = level cap − 1, the nth stat point costs 0.5 × ⌈n / 4⌉);
-- each category raises every stat it contains by one per stat point (Shooting → Finishing, Place Kicking, Curl; Passing → Low Pass, Lofted Pass; Dribbling → Dribbling, Ball Control, Tight Possession; Dexterity → Offensive Awareness, Acceleration, Balance; **Lower Body Strength** → Kicking Power, Speed, Stamina; **Aerial Strength** → Heading, Physical Contact, Jumping; Defending → Defensive Awareness, Defensive Engagement, Tackling, Aggression; **Goalkeeper 1** → GK Awareness **and Jumping**; Goalkeeper 2 → GK Parrying, GK Reach; Goalkeeper 3 → GK Catching, GK Reflexes), with no cap at 99 — the labels are efootbase's (`PROGRESSION_CATEGORY_LABELS`). Jumping is the one stat in two categories: it rises with Aerial Strength and with Goalkeeper 1 together, which is what every one of the 44,103 eFHUB cards shows (change `jump-from-gk1`, 2026-10-18 — before it, goalkeeper Jump was shown as "n/a (card-specific)");
+- each category raises every stat it contains by one per stat point (Shooting → Finishing, Place Kicking, Curl; Passing → Low Pass, Lofted Pass; Dribbling → Dribbling, Ball Control, Tight Possession; Dexterity → Offensive Awareness, Acceleration, Balance; **Lower Body Strength** → Kicking Power, Speed, Stamina; **Aerial Strength** → Heading, Physical Contact, Jumping; Defending → Defensive Awareness, Defensive Engagement, Tackling, Aggression; **Goalkeeper 1** → GK Awareness **and Jumping**; Goalkeeper 2 → GK Parrying, GK Reach; Goalkeeper 3 → GK Catching, GK Reflexes), with no cap at 99 on the points bought (base + training is cut to 99 only after the proficiency bonus, see below) — the labels are efootbase's (`PROGRESSION_CATEGORY_LABELS`). Jumping is the one stat in two categories: it rises with Aerial Strength and with Goalkeeper 1 together, which is what every one of the 44,103 eFHUB cards shows (change `jump-from-gk1`, 2026-10-18 — before it, goalkeeper Jump was shown as "n/a (card-specific)");
 - boosters add their real stat vectors; a booster without stat data (the common "Booster +1") is shown as a note, cannot be toggled and never counts as a custom build;
-- **Manager Proficiency** (slider 70–90, default 90 — efootbase applies it even with no manager selected): a trained stat `s` (base + training) gains 1–3 by efootbase's band table for the level (level 90: 40–55 → 1, 56–82 → 2, 83–98 → 3; nothing at 70–76, below the first band or at 99+), never past 99; boosters come after it and may pass 99. A stat trained above 99 is kept (efootbase's client cuts it to 99; the game's own max-level overall agrees with keeping it on 94 vs 65 of the 99 cards where it matters);
+- **Manager Proficiency** (slider 70–90, default 90 — efootbase applies it even with no manager selected): a trained stat `s` (base + training) gains 1–3 by efootbase's band table for the level (level 90: 40–55 → 1, 56–82 → 2, 83–98 → 3; nothing at 70–76, below the first band or at 99+), never past 99; boosters come after it and may pass 99. A stat trained above 99 is cut to 99 before the boosters, as on efootbase's sheet (98 + 4 → 99; owner decision 2026-10-19 — the points bought above 99 are not counted, and the stat's tooltip shows the part cut; the game's own max-level overall leans the other way, 94 vs 65 of the 99 cards where it matters, see `docs/efootbase-exact-model.md`);
 - **managers**: "Select Manager" opens a dialog with efootbase's 69 picker managers (rating badge, one or two "+1" stat pills, search by name or stat; sorted by rating, then id). Choosing one sets the proficiency to its rating (83–90) and adds +1 to its pill stats after the boosters — a rating below 90 can lower other stats; choosing it again or moving the slider deselects it; Reset and Max OVR keep it;
 - the **overall** is efootbase's own integer formula (13 positions × 28 weights, stats scaled by 1 / 0.97 / 0.85 at full / half / no proficiency, height and weak-foot terms, `floor((sum + 499) / 1000)` limited to 40..127) — no "~", no anchor, no fitted penalty. It reproduced every overall (793/793), stat (20,618/20,618) and position tile (10,309/10,309) read on efootbase for five cards, and 263/263 builds of an earlier capture; Messi at SS reads Max 106/109/109/110 and Reset 94/97/97/97 at 70/80/85/90, as on efootbase. Other cards are checked in bulk only: the formula equals the dump's overall on 99.9 % of 40,516 level-cap-1 cards and, fed the eFHUB max-level stats, efootbase's max-level overall on 95.1 % of 9,843 cards (98.4 % within 1);
 - the **Pitch Map, Best Fit and "At POS"** are computed with the same formula for every card (the 2,284 newest cards without eFHUB data included), from the current build or, without a panel, from the stats on display; the stored eFHUB position ratings are no longer shown;
@@ -167,6 +193,7 @@ See `.env.example` (root) and `apps/web/.env.example`. Summary:
 - Web: `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_R2_PUBLIC_BASE`, `NEXT_PUBLIC_IMAGE_VERSION` (card image cache version, see below), `API_INTERNAL_URL`, `NEXT_PUBLIC_GIT_SHA`/`NEXT_PUBLIC_BUILD_UTC` (filled from git by `next.config.ts`).
 - Seeders: `EFOOTBASE_DUMP_PATH`, `EFOOTBASE_META_PATH`, `EFOOTBASE_PACKS_PATH`, `EFHUB_DB_PATH`, `SQLITE3_BIN`.
 - Scripts: `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET=efootlab`, `EFBASE_API_KEY` (dump script, via `--env`), `PSQL` (verify-seed).
+- Sync worker: `DATABASE_URL`, `EFBASE_API_KEY`, the `R2_*` variables above, `R2_PUBLIC_BASE` (required by incremental and full runs), optional `EFBASE_API_BASE`, `SYNC_PYTHON`, `SYNC_R2_UPLOAD_CMD`, `EFOOTBASE_STATIC_DIR`; `NODE_ENV=test` / `SYNC_TEST_MODE=1` = test mode (loopback source, scratch database, stand-in upload). Admin commands: `ADMIN_PASSWORD` instead of the prompt (never store it in `.env`). Meanings and where to keep the secrets: `docs/admin-sync.md`.
 
 Changing the R2 domain = set `R2_PUBLIC_BASE` (API) and `NEXT_PUBLIC_R2_PUBLIC_BASE` (web) and rebuild the web app; the database is not rewritten.
 
@@ -174,7 +201,7 @@ Card image URLs carry a cache version (`cards/{id}_dynamic.webp?v=20261019`) bec
 
 ## Known limitations
 
-- The Progression panel uses efootbase's constants (recovered from its public client; owner-accepted terms risk): exact on every reading of five measured cards, checked in bulk elsewhere (see above), and they must be re-derived when efootbase changes them (`docs/efootbase-exact-model.md`); a stat trained above 99 is kept, where efootbase's client would show 99; Max OVR ignores the bonus (up to 1 displayed point below the best build); the picker's order inside a rating is by id; Position Training, In-Match Roles and manager tactics are not modelled; builds are not saved anywhere.
+- The Progression panel uses efootbase's constants (recovered from its public client; owner-accepted terms risk): exact on every reading of five measured cards, checked in bulk elsewhere (see above), and they must be re-derived when efootbase changes them (`docs/efootbase-exact-model.md`); a stat trained above 99 is cut to 99 before the boosters, like efootbase's sheet (the game's own max-level overall agrees better with keeping it); Max OVR ignores the bonus and the cut (up to 1 displayed point below the best build, up to 2 when the preset trains a stat past 99); the picker's order inside a rating is by id; Position Training, In-Match Roles and manager tactics are not modelled; builds are not saved anywhere.
 - 40,516 of the 50,691 dump cards carry `levelCap` 1; their max-level view equals the base view and they show a note ("No Progression panel for this card: its max level is 1, so it has no training points to spend") instead of the panel.
 - **Dump freshness**: re-dumped 2026-10-18; the newest `releaseDate` in the database is 2026-10-15 (Ricardo Quaresma, missing from the 2026-10-06 dump, is now present). The cards added by the re-dump have no eFHUB cross-fill data and overwritten card images may be served stale from caches (see above). Refreshing again needs `scripts/efootbase_dump.py` with an API key.
 - **efootbase's filter / sort / search results could not be compared**: its API answers automation with a Cloudflare bot check, so the catalogue filters were verified against our own data only (labels and controls follow the capture).
@@ -183,7 +210,15 @@ Card image URLs carry a cache version (`cards/{id}_dynamic.webp?v=20261019`) bec
 - **Newer than the dump**: efootbase's Skills filter lists 28 Showtime skills, 5 of which (Beast Drive, Decisive Pass, GK Aerial Claim, GK Rush Out, Sharp Cut) are not in the dump — they are stored as hidden `Skill` rows (`released: false`, never returned by the API) that carry efootbase's description, the Showtime group and wiki order but no icon, no stat effects, no activation and no holders, so our Showtime group has 23. The AI style "Long Ranger" is likewise unavailable (no column). The four playing styles that post-dated the first dump (Press Back, Tough Marker, Deep Defender, Build-up GK — ids 23, 31, 32, 34) are carried by cards of the 2026-10 re-dump and are offered in the Playing Style filter; their names come from efootbase's English UI strings because the dump's field labels still lack them.
 - Japanese/Chinese name search runs only for non-ASCII queries and is not index-backed.
 - The `/players` Nation filter is shared by internal country id (`nat=14`, repeated for several nations) because the data has no ISO code column; such a link stays valid only while the country ids are unchanged (a re-seed that renumbers them changes its meaning). Position, League and Team links repeat `pos` / `league` / `team` the same way (`/players?pos=SS&pos=CF&league=4&league=12`); old single-value links keep working. Each id list holds at most 50 values: the pickers say so ("At most 50 selections") and disable further options, and a hand-written link with more keeps the 50 smallest ids.
-- Kept on purpose: the `auth` router with Google OAuth (no sign-in UI), the Pack/PackCard and Manager tables (seeded data, no API reads them except the pack name on a card), and `better-auth` (only its crypto helpers are used).
+- Kept on purpose: the `auth` router with Google OAuth (no visitor sign-in UI), the Pack/PackCard and Manager tables (seeded data, no API reads them except the pack name on a card), and `better-auth` (only its crypto helpers are used).
+- **Sync worker** (`docs/admin-sync.md`):
+  - an incremental run sees only new cards — stat edits arrive with the weekly full run;
+  - no run does the eFHUB cross-fill;
+  - overwritten card images need an image-version bump and a web rebuild by hand;
+  - changed-image detection assumes R2's ETag is the content MD5, which is not yet verified;
+  - a block from efootbase pauses everything for 6 hours;
+  - web and API must be the same site for the admin cookie;
+  - behind a reverse proxy the per-address sign-in limit is shared by all clients until Fastify's `trustProxy` is configured in code.
 - The eFootball fonts in `apps/web/public/fonts/` have an unknown licence.
 - Git history still contains two third-party keys that were redacted from `docs/` on 2026-10-17.
 
