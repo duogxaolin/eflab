@@ -43,29 +43,34 @@ export function Pagination({
     const next = Math.min(Math.max(1, p), total);
     if (next !== current) onChange(next);
   };
-  const edgeBtn =
-    "button button--sm button--secondary inline-flex items-center justify-center disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-accent)]";
+  // 36 px pills (.pagination__btn on the secondary button); the current page
+  // is the accent. First / last are icon-only; previous / next show their
+  // word from 640 px.
+  const btn = "button button--secondary pagination__btn";
+  const iconBtn = `${btn} button--icon-only`;
+  // Below 640 px previous / next are icon-only squares too.
+  const stepBtn = `${btn} max-sm:w-9 max-sm:px-0`;
 
   return (
     <nav
       aria-label="Pagination"
-      className={`flex flex-wrap items-center justify-between gap-3 pt-6 border-t border-[var(--color-line)] text-xs text-[var(--color-text-secondary)] ${className}`}
+      className={`flex flex-wrap items-center justify-between gap-3 border-t border-[var(--color-line-separator)] pt-6 text-xs text-[var(--color-text-secondary)] ${className}`}
     >
       <span className="tabular-nums">
-        Page {current} of {total}
+        Page {current.toLocaleString("en-US")} of {total.toLocaleString("en-US")}
       </span>
-      <div className="flex flex-wrap items-center gap-1.5 max-w-full">
-        <button type="button" onClick={() => go(1)} disabled={current <= 1} className={edgeBtn} aria-label="First page">
-          <ChevronsLeft className="size-3.5" aria-hidden />
+      <div className="flex max-w-full flex-wrap items-center gap-1.5">
+        <button type="button" onClick={() => go(1)} disabled={current <= 1} className={iconBtn} aria-label="First page">
+          <ChevronsLeft className="size-4" aria-hidden />
         </button>
-        <button type="button" onClick={() => go(current - 1)} disabled={current <= 1} className={edgeBtn} aria-label="Previous page">
-          <ChevronLeft className="size-3.5" aria-hidden />
-          <span className="hidden sm:inline ml-1">Previous</span>
+        <button type="button" onClick={() => go(current - 1)} disabled={current <= 1} className={stepBtn} aria-label="Previous page">
+          <ChevronLeft className="size-4" aria-hidden />
+          <span className="hidden sm:inline">Previous</span>
         </button>
 
         {pageWindow(current, total).map((p, i) =>
           p === null ? (
-            <span key={`gap-${i}`} className="px-1 text-[var(--color-text-dim)]" aria-hidden>
+            <span key={`gap-${i}`} className="px-1 text-[var(--color-text-secondary)]" aria-hidden>
               …
             </span>
           ) : (
@@ -75,23 +80,19 @@ export function Pagination({
               onClick={() => go(p)}
               aria-current={p === current ? "page" : undefined}
               aria-label={`Page ${p}`}
-              className={`min-w-8 h-8 px-2 rounded-lg text-xs font-bold tabular-nums transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-accent)] ${
-                p === current
-                  ? "bg-[var(--color-accent)] text-black"
-                  : "bg-[var(--color-panel)] text-[var(--color-text-secondary)] hover:bg-[var(--color-elevated)] hover:text-white"
-              }`}
+              className={btn}
             >
               {p}
             </button>
           ),
         )}
 
-        <button type="button" onClick={() => go(current + 1)} disabled={current >= total} className={edgeBtn} aria-label="Next page">
-          <span className="hidden sm:inline mr-1">Next</span>
-          <ChevronRight className="size-3.5" aria-hidden />
+        <button type="button" onClick={() => go(current + 1)} disabled={current >= total} className={stepBtn} aria-label="Next page">
+          <span className="hidden sm:inline">Next</span>
+          <ChevronRight className="size-4" aria-hidden />
         </button>
-        <button type="button" onClick={() => go(total)} disabled={current >= total} className={edgeBtn} aria-label="Last page">
-          <ChevronsRight className="size-3.5" aria-hidden />
+        <button type="button" onClick={() => go(total)} disabled={current >= total} className={iconBtn} aria-label="Last page">
+          <ChevronsRight className="size-4" aria-hidden />
         </button>
       </div>
     </nav>

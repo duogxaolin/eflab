@@ -55,7 +55,9 @@ const TIER_TEXT_CLASS: Readonly<Record<StatTier, string>> = {
   elite: "text-[var(--color-tier-elite)]",
   high: "text-[var(--color-tier-high)]",
   mid: "text-[var(--color-tier-mid)]",
-  low: "text-[var(--color-tier-low)]",
+  // Text uses the derived low-tier tone (globals.css `--color-tier-low-text`):
+  // the fill colour itself is below 4.5:1 as text on the #272727 rows.
+  low: "text-[var(--color-tier-low-text)]",
 };
 const TIER_BG_CLASS: Readonly<Record<StatTier, string>> = {
   max: "bg-[var(--color-tier-max)]",
@@ -74,10 +76,12 @@ export function statTierBg(value: number): string {
   return TIER_BG_CLASS[statTier(value)];
 }
 
-/** Text colour that reads on a tier-coloured pill: the four bright tiers
- *  (magenta, teal, lime, amber) take the dark on-accent text, red takes white. */
-export function statTierForeground(value: number): string {
-  return statTier(value) === "low" ? "text-white" : "text-[var(--color-accent-foreground)]";
+/** Text colour on a tier-coloured pill: black on every tier (efootbase-ui-
+ *  redesign — the reference's value pills; black on the red tier #ff2e2e reads
+ *  5.68:1, white only 3.70:1). The value is kept as a function so callers do
+ *  not hard-code it. */
+export function statTierForeground(_value: number): string {
+  return "text-black";
 }
 
 /** Body-model values run 1–10: 7+ reads as high, 4–6 as mid, 1–3 as low. */

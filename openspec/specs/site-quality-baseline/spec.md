@@ -32,7 +32,7 @@ Card face images SHALL load lazily and asynchronously decode, SHALL declare thei
 - **THEN** fewer than 40 card-face image requests are made, and total image transfer is under 6 MB.
 
 ### Requirement: Keyboard and Screen-Reader Access
-Card tiles SHALL be keyboard-focusable links (or buttons) with accessible names; filter popovers SHALL expose expanded state and close on Escape with focus returned; the search palette and compare picker SHALL be modal dialogs with a name, focus trap, Escape to close and focus restoration; carousels SHALL pause on focus, when the tab is hidden, and when reduced motion is requested, and SHALL offer a pause control; tilt effects SHALL be disabled under reduced motion.
+Card tiles SHALL be keyboard-focusable links (or buttons) with accessible names; filter popovers SHALL expose expanded state and close on Escape with focus returned; the search palette, the compare picker, filter dialogs, bottom sheets and the manager drawer SHALL be modal dialogs with a name, focus trap, Escape to close and focus restoration; carousels SHALL pause on focus, when the tab is hidden, and when reduced motion is requested, and SHALL offer a pause control; hover and tab-bar motion SHALL be disabled under reduced motion.
 
 #### Scenario: Keyboard-only navigation
 - **WHEN** a keyboard user presses Tab on `/players`
@@ -40,7 +40,7 @@ Card tiles SHALL be keyboard-focusable links (or buttons) with accessible names;
 
 #### Scenario: Reduced motion
 - **WHEN** the operating system requests reduced motion
-- **THEN** carousels do not auto-advance and cards do not tilt.
+- **THEN** carousels do not auto-advance and cards do not animate on hover.
 
 ### Requirement: Debounced Search and Error States
 Search inputs SHALL wait for typing to pause before querying, SHALL cancel superseded requests, and every data-driven page SHALL show an explicit error state with a retry action when a request fails; client errors (HTTP 4xx) SHALL NOT be retried automatically.

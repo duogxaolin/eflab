@@ -70,17 +70,6 @@ The players page SHALL reflect its query, card types, filters, sort and page in 
 - **WHEN** a user opens `/players?pos=12&pos=11&nat=14&nat=3`
 - **THEN** the position filter shows CF and SS selected, the nation filter shows two nations selected, and re-saving the state produces the canonical URL for that state (`pos=SS&pos=CF&nat=3&nat=14`: positions in catalogue order, ids ascending); re-saving a canonical URL leaves it unchanged.
 
-### Requirement: Home Quick Filters Do What They Say
-Each home quick filter SHALL produce a players list that matches its label: the card-type chips send the efootbase card-type code (`/players?card=5` for "Epic & Big Time" — Big Time cards are stored under `EPIC` per efootbase's own labels — `card=6` for "Highlight & Show Time", `card=1` for "Legendary") and "90+ OVR" SHALL send `/players?base=90-`, returning only cards with base overall at least 90.
-
-#### Scenario: 90+ OVR
-- **WHEN** a user clicks "90+ OVR"
-- **THEN** the players list shows only cards with base overall ≥ 90, the Base Overall Rating filter reads "≥ 90", the Filters button shows one active filter and the Reset control is visible.
-
-#### Scenario: Epic & Big Time
-- **WHEN** a user clicks "Epic & Big Time"
-- **THEN** the URL is `/players?card=5` and every returned card is of type Epic (1,094 cards in the 2026-10-18 data).
-
 ### Requirement: Pagination Controls Reach Every Page
 The pagination control SHALL always let the user reach any page, show the current page as active, and scroll the grid back to the top when the page changes.
 
@@ -118,7 +107,7 @@ The home page SHALL NOT display comments, creators, votes or follower counts tha
 - **THEN** the home sidebar shows no comment list (or a clearly labelled empty state).
 
 ### Requirement: Player Detail Accuracy
-The player detail page SHALL show height in feet and inches by flooring the feet value, SHALL show the defensive-position card from defensive data, SHALL render weak-foot stars equal to the 1–4 level, SHALL show "…" only when more skills exist than are displayed, SHALL show the real max level on the max-level badge, and SHALL NOT present controls (Progression sliders, presets) that change nothing.
+The player detail page SHALL show height in feet and inches by flooring the feet value, SHALL show the defensive-position card from defensive data, SHALL render weak-foot stars equal to the 1–4 level, SHALL show "…" only when more skills exist than are displayed, SHALL show the card's real max level (the dump's level cap) as a "Max Level" row in the Card Info block — the card face carries no MAX LEVEL badge since the interface follows the reference — and SHALL NOT present controls (Progression sliders, presets) that change nothing.
 
 #### Scenario: Height conversion
 - **WHEN** a player is 182 cm tall
@@ -127,6 +116,10 @@ The player detail page SHALL show height in feet and inches by flooring the feet
 #### Scenario: Progression controls
 - **WHEN** a user moves a Progression slider
 - **THEN** the displayed stats and OVR update using the shared progression engine within the available point budget, or the control is not shown.
+
+#### Scenario: Real max level
+- **WHEN** the detail page of a card with a level cap of 32, and of a card with a level cap of 1, is opened at 1440 and at 390 px
+- **THEN** Card Info shows "Max Level" 32 and 1 respectively, and the card face shows no MAX LEVEL badge.
 
 ### Requirement: Unknown Detail URLs Return 404
 A player, pack or skill URL that does not resolve to a record, or whose base id does not match the card, SHALL return HTTP 404 and render a not-found page; each route SHALL have its own page title.

@@ -17,8 +17,9 @@ function getServerSnapshot(): boolean {
   return false;
 }
 
-/** true when the OS asks for reduced motion. Shared by the card tilt and the
- *  pack carousel (both skip animation when it is set). */
+/** true when the OS asks for reduced motion. Used by the pack carousel (no
+ *  auto-advance, instant scrolling when it is set); the card tile's hover
+ *  scale handles reduced motion in CSS. */
 export function usePrefersReducedMotion(): boolean {
   return useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
 }
