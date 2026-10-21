@@ -4,11 +4,15 @@
 The card showcase UI capability renders responsive, aesthetically distinct eFootball player cards using CSS 3D hardware-accelerated transforms, dynamic booster badges, and interactive position familiarity heatmaps without WebGL runtime overhead.
 ## Requirements
 ### Requirement: CSS 3D Hardware-Accelerated Card View
-The card presentation MUST render using standard CSS 3D transforms (`rotateX`, `rotateY`, `perspective`) and pointer-follow tilt animations rather than Three.js or WebGL contexts.
+The card presentation MUST render the single pre-composited card image with CSS only (no Three.js or WebGL). On hover or keyboard focus of a card tile, the tile SHALL scale to 1.05 with a raised stacking order and its caption text SHALL turn from 80 % white to full white; the pointer-follow 3D tilt and glare are removed. The scale transition SHALL be disabled when the operating system requests reduced motion.
 
 #### Scenario: Pointer movement over card
-- **WHEN** a user hovers or drags across a player card on desktop or touch devices
-- **THEN** the card applies smooth interactive 3D rotation, dynamic foil reflections, and lighting glare effects at 60 FPS without crashing headless or low-end rendering contexts.
+- **WHEN** a user hovers a player card tile on a desktop pointer
+- **THEN** the tile scales to 1.05 above its neighbours, its caption turns full white, and no 3D rotation or glare layer is applied.
+
+#### Scenario: Reduced motion hover
+- **WHEN** the operating system requests reduced motion and the user hovers a card tile
+- **THEN** the tile does not animate a scale change.
 
 ### Requirement: Dynamic Booster Badges
 The card component MUST clearly display active booster bonuses (e.g., `+4 Defending`, `Lofted Pass +6`) matching the card's booster slot configuration.
