@@ -38,32 +38,26 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  themeColor: "#060607",
+  themeColor: "#060606",
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en" className={inter.variable} suppressHydrationWarning>
-      <body className="min-h-screen text-[var(--color-text-primary)]">
-        {/* aurora gradient backdrop (fixed, pointer-events:none, behind the app) */}
-        <div className="efb-backdrop efb-backdrop--app" aria-hidden>
-          <div
-            className="efb-backdrop__aurora"
-            style={
-              {
-                "--efb-aurora-a": "#34D9C8",
-                "--efb-aurora-b": "#3B82F6",
-                "--efb-aurora-c": "#8B5CF6",
-              } as React.CSSProperties
-            }
-          >
-            <div className="aurora-container" />
-          </div>
+      {/* Below lg the body reserves the floating tab bar's height plus the
+          safe-area inset, so the last footer line scrolls clear of the bar. */}
+      <body className="relative flex min-h-screen flex-col text-[var(--color-text-primary)] max-lg:pb-[calc(5.25rem+env(safe-area-inset-bottom,0px))]">
+        {/* Aurora strip at the top of the document (scrolls with the page,
+            pointer-events:none, behind the app). The tint layer is switched on
+            by a page that sets data-card-tint (see globals.css). */}
+        <div className="efb-backdrop" aria-hidden>
+          <div className="efb-backdrop__aurora" />
+          <div className="efb-backdrop__tint" />
         </div>
         <Providers>
-          <div className="relative z-1 flex min-h-screen flex-col">
+          <div className="relative z-1 flex flex-1 flex-col">
             <SiteHeader />
-            <main className="flex-1 mx-auto w-full max-w-6xl px-4 py-8 pb-24 md:pb-16">
+            <main className="flex-1 mx-auto w-full max-w-6xl px-4 py-8">
               {children}
             </main>
             <SiteFooter />

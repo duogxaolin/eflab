@@ -5,22 +5,26 @@ import type { Route } from "next";
 import Link from "next/link";
 import { trpc } from "@/lib/trpc";
 import { PlayerCard } from "@/components/cards/PlayerCard";
+import { SearchPalette } from "@/components/search/SearchPalette";
 import { QueryErrorState } from "@/lib/query-state";
-import { useDebouncedValue, SEARCH_MIN_LENGTH } from "@/lib/use-debounced-value";
 import { CARD_TYPE_LABELS, INT8_MAX, positionTiles, type PlayerCardDTO, type BaseStat, type Position } from "@eflab/shared";
 import { ATTACKING_STATS, DEFENDING_STATS, STRENGTH_STATS, POSITION_BY_INDEX, statLabel } from "@/lib/card-display";
-import { Plus, ArrowLeftRight, Link as LinkIcon, Search, X, Check, Sparkles } from "lucide-react";
+import { Plus, ArrowLeftRight, Link as LinkIcon, X, Check, Sparkles } from "lucide-react";
 
 // Pitch position grid (left→right, top→bottom) — 12 outfield slots + GK.
 const PITCH_SLOTS: Position[] = ["LWF", "SS", "RWF", "LMF", "AMF", "RMF", "CMF", "DMF", "LB", "CB", "RB", "GK"];
-// Two slots, like efootbase's compare ("Compare two eFootball player cards side
-// by side"): `?ids` is trimmed to the first two valid ids, so the API — which
-// accepts up to four — never returns a card that has no tile on this page.
+// Two slots (a two-card tool): `?ids` is trimmed to the first two valid ids,
+// so the API — which accepts up to four — never returns a card that has no
+// tile on this page.
 const MAX_SLOTS = 2;
 const ID_PATTERN = /^\d{1,19}$/;
 // A card id is a Postgres int8: 19 digits can still exceed INT8_MAX, and the
 // API rejects the whole batch for one oversized id — drop it here instead.
 const isValidId = (s: string): boolean => ID_PATTERN.test(s) && BigInt(s) <= INT8_MAX;
+
+// Side colours: slot 1 = accent (lime), slot 2 = cyan — every panel.
+const SIDE_A = "var(--color-accent)";
+const SIDE_B = "var(--color-accent-secondary)";
 
 /** Hexagonal radar chart comparing SHT, PAS, STR, DEF, SPD, DRI. */
 function CompareRadar({ p1, p2 }: { p1?: PlayerCardDTO; p2?: PlayerCardDTO }) {
@@ -47,38 +51,35 @@ function CompareRadar({ p1, p2 }: { p1?: PlayerCardDTO; p2?: PlayerCardDTO }) {
       .join(" ");
 
   return (
-    <div className="flex flex-col items-center justify-center p-2">
-      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="overflow-visible max-w-full" role="img" aria-label="Stat radar">
-        {[0.25, 0.5, 0.75, 1].map((scale) => (
-          <polygon
-            key={scale}
-            points={axes.map((a) => `${center + radius * scale * Math.cos(a.angle)},${center + radius * scale * Math.sin(a.angle)}`).join(" ")}
-            fill="none"
-            stroke="rgba(255, 255, 255, 0.1)"
-            strokeWidth="1"
-          />
-        ))}
-        {axes.map((a) => (
-          <g key={a.label}>
-            <line x1={center} y1={center} x2={center + radius * Math.cos(a.angle)} y2={center + radius * Math.sin(a.angle)} stroke="rgba(255, 255, 255, 0.12)" strokeWidth="1" />
-            <text
-              x={center + (radius + 18) * Math.cos(a.angle)}
-              y={center + (radius + 18) * Math.sin(a.angle)}
-              textAnchor="middle"
-              dominantBaseline="central"
-              fill="rgba(255, 255, 255, 0.6)"
-              fontSize="11"
-              fontFamily="monospace"
-              fontWeight="bold"
-            >
-              {a.label}
-            </text>
-          </g>
-        ))}
-        {p1 && <polygon points={polygon(p1)} fill="rgba(172, 244, 26, 0.25)" stroke="#acf41a" strokeWidth="2" />}
-        {p2 && <polygon points={polygon(p2)} fill="rgba(6, 182, 212, 0.25)" stroke="#06b6d4" strokeWidth="2" />}
-      </svg>
-    </div>
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="h-auto max-w-full overflow-visible" role="img" aria-label="Stat radar">
+      {[0.25, 0.5, 0.75, 1].map((scale) => (
+        <polygon
+          key={scale}
+          points={axes.map((a) => `${center + radius * scale * Math.cos(a.angle)},${center + radius * scale * Math.sin(a.angle)}`).join(" ")}
+          fill="none"
+          stroke="rgba(255, 255, 255, 0.1)"
+          strokeWidth="1"
+        />
+      ))}
+      {axes.map((a) => (
+        <g key={a.label}>
+          <line x1={center} y1={center} x2={center + radius * Math.cos(a.angle)} y2={center + radius * Math.sin(a.angle)} stroke="rgba(255, 255, 255, 0.12)" strokeWidth="1" />
+          {/* Axis labels 12 px muted (Inter, as the rest of the page). */}
+          <text
+            x={center + (radius + 18) * Math.cos(a.angle)}
+            y={center + (radius + 18) * Math.sin(a.angle)}
+            textAnchor="middle"
+            dominantBaseline="central"
+            fontSize="12"
+            style={{ fill: "var(--color-text-secondary)" }}
+          >
+            {a.label}
+          </text>
+        </g>
+      ))}
+      {p1 && <polygon points={polygon(p1)} strokeWidth="2" style={{ fill: `color-mix(in srgb, ${SIDE_A} 25%, transparent)`, stroke: SIDE_A }} />}
+      {p2 && <polygon points={polygon(p2)} strokeWidth="2" style={{ fill: `color-mix(in srgb, ${SIDE_B} 25%, transparent)`, stroke: SIDE_B }} />}
+    </svg>
   );
 }
 
@@ -121,8 +122,17 @@ export function CompareClient() {
   }, [rawIds, selected, setSelected]);
 
   const [pickSlot, setPickSlot] = useState<number | null>(null);
-  const [searchVal, setSearchVal] = useState("");
   const [copied, setCopied] = useState(false);
+  // Persistent slot wrappers: the picker returns focus here when the button
+  // that opened it was replaced by the chosen card.
+  const slotRefs = useRef<Array<HTMLDivElement | null>>([]);
+  const lastSlotRef = useRef<number>(0);
+  // Slot just filled from the picker: focus waits on its wrapper and moves to
+  // the card link once the card has loaded (the opener button is gone).
+  const [focusSlot, setFocusSlot] = useState<number | null>(null);
+  // The same slot for the palette's close handler (read synchronously, so it
+  // does not depend on the render that state update triggers).
+  const pendingFocusRef = useRef<number | null>(null);
 
   // Compare fires as soon as ANY card is picked so the chosen card renders at
   // once; the matrix below is gated on two loaded slots.
@@ -138,8 +148,9 @@ export function CompareClient() {
   // Position tiles of each loaded card (exact formula on its level-1 stats).
   const tilesBySlot = loadedSlots.map((p) => positionTiles(p.stats, { height: p.height, weakFootAccuracy: p.weakFootAccuracy }, p.positionAptitudes));
 
+  const canSwap = selected.length === 2;
   const swapPlayers = () => {
-    if (selected.length === 2) setSelected([selected[1]!, selected[0]!]);
+    if (canSwap) setSelected([selected[1]!, selected[0]!]);
   };
   const copyLink = () => {
     void navigator.clipboard.writeText(window.location.href);
@@ -147,70 +158,64 @@ export function CompareClient() {
     setTimeout(() => setCopied(false), 2000);
   };
   const removeSlot = (slotIdx: number) => setSelected(selected.filter((_, i) => i !== slotIdx));
+  const openPicker = (slot: number) => {
+    lastSlotRef.current = slot;
+    setPickSlot(slot);
+  };
   const selectCardForSlot = (id: string) => {
     if (pickSlot === null) return;
     const next = [...selected];
     next[pickSlot] = id;
-    setSelected(next.filter(Boolean));
-    setPickSlot(null);
+    const filtered = next.filter(Boolean);
+    setSelected(filtered);
+    // An empty slot 2 picked while slot 1 is empty becomes slot 1.
+    pendingFocusRef.current = filtered.indexOf(id);
+    setFocusSlot(filtered.indexOf(id));
   };
-
-  // ---- Picker dialog: native <dialog> (modal, focus trapped by the browser,
-  // Escape closes via `cancel`), focus restored to the opener on close.
-  const dialogRef = useRef<HTMLDialogElement>(null);
-  const openerRef = useRef<HTMLElement | null>(null);
-  const openPicker = (slot: number) => {
-    openerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    setSearchVal("");
-    setPickSlot(slot);
-  };
+  // Once the picked card is on screen, hand focus from the wrapper to its link
+  // (only if focus is still parked on the wrapper or lost to the body).
+  const focusTarget = focusSlot !== null ? slots[focusSlot] : undefined;
   useEffect(() => {
-    const dialog = dialogRef.current;
-    if (!dialog) return;
-    if (pickSlot !== null) {
-      if (!dialog.open) dialog.showModal();
-    } else if (dialog.open) {
-      dialog.close();
+    if (focusSlot === null || !focusTarget) return;
+    const wrap = slotRefs.current[focusSlot];
+    const active = document.activeElement;
+    if (wrap && (active === wrap || active === document.body || active === null)) {
+      wrap.querySelector<HTMLElement>("a.pcb-tile")?.focus();
     }
-  }, [pickSlot]);
-  const onDialogClose = () => {
-    setPickSlot(null);
-    setSearchVal("");
-    openerRef.current?.focus();
-    openerRef.current = null;
-  };
-
-  const debouncedSearch = useDebouncedValue(searchVal.trim(), 250);
-  const canSearch = debouncedSearch.length >= SEARCH_MIN_LENGTH;
-  const search = trpc.player.search.useQuery({ q: debouncedSearch, limit: 10 }, { enabled: pickSlot !== null && canSearch });
-  const searchResults = canSearch ? search.data ?? [] : [];
+    setFocusSlot(null);
+  }, [focusSlot, focusTarget]);
 
   const renderSlot = (slotIdx: number) => {
     const cardId = selected[slotIdx];
     const player = slots[slotIdx];
     if (cardId && player) {
       return (
-        <div className="flex flex-col items-center space-y-3">
-          <div className="relative group w-44 sm:w-48 max-w-full">
-            <PlayerCard player={player} size="full" showDetails />
+        <div className="flex w-full md:max-w-40 flex-col items-center gap-3">
+          <div className="relative w-full">
+            {/* caption "none": the slot prints the name (a link) below the card. */}
+            <PlayerCard player={player} size="full" caption="none" showDetails />
+            {/* z-20: above the card tile, which rises to z 10 on hover / focus. */}
             <button
               type="button"
               onClick={() => removeSlot(slotIdx)}
               aria-label={`Remove ${player.name} from slot ${slotIdx + 1}`}
-              className="absolute -top-2 -right-2 p-1.5 rounded-full bg-[var(--color-panel)] border border-[var(--color-line-active)] text-[var(--color-text-secondary)] hover:text-white shadow-md transition-colors cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-accent)]"
+              className="button button--sm button--icon-only button--secondary absolute -right-2 -top-2 z-20 shadow-md"
             >
-              <X className="h-3 w-3" aria-hidden />
+              <X className="size-3.5" aria-hidden />
             </button>
           </div>
-          <div className="text-center">
-            <h3 className="font-bold text-sm text-white">
-              <Link href={`/players/${player.baseId}/${player.id}`} className="hover:text-[var(--color-accent)] transition-colors">
+          <div className="min-w-0 text-center">
+            <h2 className="text-sm font-semibold text-[var(--color-text-primary)]">
+              {/* hit-44: the 17 px tall name gets a 44 px tall tap area on touch screens. inline-block (the
+                  only, centred content of the h2, so it looks the same) keeps one box when a long name
+                  wraps, so the area is not split across the two line fragments. */}
+              <Link href={`/players/${player.baseId}/${player.id}`} className="hit-44 inline-block transition-colors hover:text-[var(--color-accent)]">
                 {player.name}
               </Link>
-            </h3>
-            <span className="text-xs text-[var(--color-text-dim)] font-mono">
+            </h2>
+            <p className="mt-0.5 text-xs text-[var(--color-text-secondary)] tabular-nums">
               {CARD_TYPE_LABELS[player.cardType]} · {player.ovr} OVR · Max {player.maxOvr}
-            </span>
+            </p>
           </div>
         </div>
       );
@@ -218,13 +223,13 @@ export function CompareClient() {
     if (cardId && compareQ.isError) {
       // Retry re-runs the batch; Remove drops this id so the other slot can load.
       return (
-        <div className="flex w-44 sm:w-48 flex-col items-center gap-2">
+        <div className="flex w-full md:max-w-40 flex-col items-center gap-2">
           <QueryErrorState error={compareQ.error} onRetry={() => void compareQ.refetch()} title="Could not load this card" className="w-full !p-4" />
           <button
             type="button"
             onClick={() => removeSlot(slotIdx)}
             aria-label={`Remove card #${cardId} from slot ${slotIdx + 1}`}
-            className="text-xs text-[var(--color-accent)] hover:underline cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-accent)]"
+            className="button button--sm button--ghost text-[var(--color-accent)]"
           >
             Remove
           </button>
@@ -234,28 +239,24 @@ export function CompareClient() {
     if (cardId && compareQ.isSuccess && !compareQ.isPlaceholderData) {
       // The API skipped this id: unknown card → drop it from the URL.
       return (
-        <div className="w-44 sm:w-48 aspect-[240/339] rounded-2xl border border-[var(--color-line)] bg-[var(--color-panel)] flex flex-col items-center justify-center p-4 text-center text-xs text-[var(--color-text-dim)] space-y-2">
-          <p>Card #{cardId} was not found.</p>
-          <button type="button" onClick={() => removeSlot(slotIdx)} className="text-[var(--color-accent)] hover:underline cursor-pointer">
+        <div className="efb-compare-slot cursor-default">
+          <p className="text-xs text-[var(--color-text-secondary)]">Card #{cardId} was not found.</p>
+          <button type="button" onClick={() => removeSlot(slotIdx)} className="button button--sm button--ghost mt-2 text-[var(--color-accent)]">
             Remove
           </button>
         </div>
       );
     }
     if (cardId) {
-      return <div className="w-44 sm:w-48 aspect-[240/339] rounded-2xl bg-[var(--color-panel)] animate-pulse" aria-busy="true" aria-label="Loading card" />;
+      return <div className="efb-compare-slot animate-pulse" aria-busy="true" aria-label="Loading card" />;
     }
     return (
-      <button
-        type="button"
-        onClick={() => openPicker(slotIdx)}
-        className="w-44 sm:w-48 aspect-[240/339] rounded-2xl border border-[var(--color-line)] bg-[var(--color-panel)] hover:bg-[var(--color-elevated)] hover:border-[var(--color-line-active)] flex flex-col items-center justify-center p-4 text-center transition-all cursor-pointer group focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-accent)]"
-      >
-        <div className="h-10 w-10 rounded-full bg-[var(--color-elevated)] flex items-center justify-center text-[var(--color-text-secondary)] group-hover:text-white transition-colors shadow">
-          <Plus className="h-5 w-5" aria-hidden />
-        </div>
-        <span className="font-bold text-sm text-white mt-3">Add Player</span>
-        <span className="text-xs text-[var(--color-text-dim)] mt-1">Slot {slotIdx + 1} — search and select a player</span>
+      <button type="button" onClick={() => openPicker(slotIdx)} aria-haspopup="dialog" aria-label={`Add Player to slot ${slotIdx + 1}: search and select a player`} className="efb-compare-slot">
+        <span className="efb-compare-slot__plus" aria-hidden>
+          <Plus className="size-5" />
+        </span>
+        <span className="text-sm font-semibold text-[var(--color-text-primary)]">Add Player</span>
+        <span className="text-xs text-[var(--color-text-secondary)]">Search and select a player</span>
       </button>
     );
   };
@@ -266,258 +267,216 @@ export function CompareClient() {
   const matrixReady = left !== undefined && right !== undefined;
 
   return (
-    <div className="space-y-6">
-      {/* Breadcrumbs matching efootbase */}
-      <ol data-slot="breadcrumbs" aria-label="Breadcrumbs" className="breadcrumbs -ml-0.5 list-none p-0 m-0">
+    <div>
+      <ol data-slot="breadcrumbs" aria-label="Breadcrumbs" className="breadcrumbs -ml-0.5 mb-3 list-none p-0">
         <li className="breadcrumbs__item">
-          <Link className="breadcrumbs__link text-xs" href="/">
+          <Link className="breadcrumbs__link hit-44" href="/">
             Home
           </Link>
-          <span className="breadcrumbs__separator text-xs">›</span>
+          <span className="breadcrumbs__separator" aria-hidden>
+            ›
+          </span>
         </li>
-        <li className="breadcrumbs__item text-white text-xs font-medium">Compare</li>
+        <li className="breadcrumbs__item" aria-current="page">
+          Compare
+        </li>
       </ol>
 
+      {/* Title row: H1 36/40 (30/36 below 768) + the 36 × 36 ghost swap and
+          copy-link buttons at the right. */}
       <div className="flex items-start justify-between gap-4">
-        <div className="space-y-1">
-          <h1 className="text-3xl font-bold sm:text-4xl text-white tracking-tight">Compare</h1>
-          <p className="text-xs sm:text-sm text-[var(--color-text-secondary)] max-w-2xl leading-relaxed">
-            Compare eFootball player cards side by side — stats, skills, position proficiency and boosters.
-          </p>
-        </div>
-        <div className="flex items-center gap-2 shrink-0">
-          {selected.length >= 2 && (
-            <button
-              type="button"
-              onClick={swapPlayers}
-              className="p-2 rounded-xl bg-[var(--color-panel)] border border-[var(--color-line)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-elevated)] transition-colors cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-accent)]"
-              title="Swap players"
-              aria-label="Swap the two players"
-            >
-              <ArrowLeftRight className="h-4 w-4" aria-hidden />
-            </button>
-          )}
+        <h1 className="efb-h1 text-[var(--color-text-primary)]">Compare</h1>
+        <div className="flex shrink-0 items-center gap-0.5">
+          <button
+            type="button"
+            onClick={swapPlayers}
+            aria-disabled={!canSwap}
+            className="button button--md button--icon-only button--ghost"
+            title={canSwap ? "Swap players" : "Pick two players to swap them"}
+            aria-label="Swap the two players"
+          >
+            <ArrowLeftRight className="size-5" aria-hidden />
+          </button>
           <button
             type="button"
             onClick={copyLink}
-            className="p-2 rounded-xl bg-[var(--color-panel)] border border-[var(--color-line)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-elevated)] transition-colors cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-accent)]"
+            className="button button--md button--icon-only button--ghost"
             title="Copy share link"
             aria-label={copied ? "Link copied" : "Copy share link"}
           >
-            {copied ? <Check className="h-4 w-4 text-[var(--color-accent)]" aria-hidden /> : <LinkIcon className="h-4 w-4" aria-hidden />}
+            {copied ? <Check className="size-5 text-[var(--color-accent)]" aria-hidden /> : <LinkIcon className="size-5" aria-hidden />}
           </button>
         </div>
       </div>
+      <p className="efb-subtitle mt-3">
+        Compare two eFootball player cards side by side — stats, skills, position proficiency and boosters.
+      </p>
 
-      {/* Console: slot 1 · radar · slot 2 */}
-      <div className="grid grid-cols-1 md:grid-cols-[1fr_auto_1fr] items-center justify-center gap-6 max-w-4xl mx-auto pt-4">
-        <div className="flex justify-center">{renderSlot(0)}</div>
-        <div className="hidden md:flex flex-col items-center justify-center">
+      {/* Console: slot 1 · radar · slot 2 — 260 / flexible / 260 from 768 px;
+          below, the two slots side by side and the radar under them. */}
+      <div className="efb-compare-console mt-6">
+        <div ref={(el) => void (slotRefs.current[0] = el)} tabIndex={-1} className="efb-compare-console__slot outline-none">
+          {renderSlot(0)}
+        </div>
+        <div className="efb-compare-console__radar">
           <CompareRadar p1={left} p2={right} />
         </div>
-        <div className="flex justify-center">{renderSlot(1)}</div>
+        <div ref={(el) => void (slotRefs.current[1] = el)} tabIndex={-1} className="efb-compare-console__slot outline-none">
+          {renderSlot(1)}
+        </div>
       </div>
 
-      {/* Picker — named modal dialog */}
-      <dialog
-        ref={dialogRef}
-        onClose={onDialogClose}
-        // Chrome lets a non-empty <input type="search"> swallow the first Escape
-        // (it clears the field) before the dialog's `cancel` fires — close on
-        // the key itself so one Escape always dismisses the picker.
-        onKeyDown={(e) => {
-          if (e.key === "Escape") {
-            e.preventDefault();
-            e.currentTarget.close();
-          }
+      {/* Picker = the shared search palette (named modal dialog, focus trap,
+          Escape, focus return). Enter picks the first result. */}
+      <SearchPalette
+        open={pickSlot !== null}
+        onClose={() => setPickSlot(null)}
+        title={`Select player for slot ${(pickSlot ?? lastSlotRef.current) + 1}`}
+        onSelect={(p) => selectCardForSlot(p.id)}
+        // After a pick: the slot's wrapper (the effect above then moves focus
+        // to the card link); after Escape / backdrop: the opener (null).
+        returnFocusTo={() => {
+          const slot = pendingFocusRef.current;
+          pendingFocusRef.current = null;
+          return slot !== null ? slotRefs.current[slot] ?? null : null;
         }}
-        aria-labelledby="compare-picker-title"
-        className="m-auto w-full max-w-md rounded-2xl bg-[var(--color-panel)] border border-[var(--color-line)] p-5 shadow-2xl text-[var(--color-text-primary)] backdrop:bg-black/80 backdrop:backdrop-blur-sm"
-      >
-        {pickSlot !== null && (
-          <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <h2 id="compare-picker-title" className="font-bold text-sm text-[var(--color-text-primary)]">
-                Select player for slot {pickSlot + 1}
-              </h2>
-              <button
-                type="button"
-                onClick={() => dialogRef.current?.close()}
-                className="p-1 rounded-lg text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-accent)]"
-                aria-label="Close"
-              >
-                <X className="h-4 w-4" aria-hidden />
-              </button>
-            </div>
-
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-[var(--color-text-dim)]" aria-hidden />
-              <input
-                autoFocus
-                type="search"
-                value={searchVal}
-                onChange={(e) => setSearchVal(e.target.value)}
-                placeholder="Search player name (e.g. Messi, Haaland)…"
-                aria-label="Search player name"
-                className="w-full h-10 pl-9 pr-4 rounded-xl bg-[var(--color-canvas)] border border-[var(--color-line)] text-xs text-[var(--color-text-primary)] placeholder-[var(--color-text-dim)] focus:outline-none focus:border-[var(--color-line-active)]"
-              />
-            </div>
-
-            <div className="max-h-64 overflow-y-auto divide-y divide-zinc-800/60" aria-live="polite">
-              {!canSearch ? (
-                <div className="py-6 text-center text-xs text-[var(--color-text-dim)]">Type at least {SEARCH_MIN_LENGTH} characters.</div>
-              ) : search.isError ? (
-                <div className="py-6 text-center text-xs text-[var(--color-text-dim)]">
-                  Search failed.{" "}
-                  <button type="button" onClick={() => void search.refetch()} className="text-[var(--color-accent)] hover:underline cursor-pointer">
-                    Retry
-                  </button>
-                </div>
-              ) : search.isPending ? (
-                <div className="py-6 text-center text-xs text-[var(--color-text-dim)]">Searching…</div>
-              ) : searchResults.length === 0 ? (
-                <div className="py-6 text-center text-xs text-[var(--color-text-dim)]">No players found.</div>
-              ) : (
-                searchResults.map((p) => (
-                  <button
-                    key={p.id}
-                    type="button"
-                    onClick={() => selectCardForSlot(p.id)}
-                    className="w-full py-2.5 px-2 text-left hover:bg-[var(--color-elevated)]/80 rounded-lg flex items-center justify-between gap-3 text-xs transition-colors cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--color-accent)]"
-                  >
-                    <div className="min-w-0">
-                      <div className="font-bold text-[var(--color-text-primary)] truncate">{p.name}</div>
-                      <div className="text-[10px] text-[var(--color-text-dim)]">
-                        {CARD_TYPE_LABELS[p.cardType]} · {POSITION_BY_INDEX[p.registeredPosition] ?? "—"}
-                      </div>
-                    </div>
-                    <span className="font-bold font-mono text-[var(--color-accent)] shrink-0">{p.ovr} OVR</span>
-                  </button>
-                ))
-              )}
-            </div>
-          </div>
-        )}
-      </dialog>
+      />
 
       {selected.length >= 1 && compareQ.isError && loadedSlots.length === 0 && (
-        <QueryErrorState error={compareQ.error} onRetry={() => void compareQ.refetch()} title="Could not load the comparison" />
+        <QueryErrorState error={compareQ.error} onRetry={() => void compareQ.refetch()} title="Could not load the comparison" className="mt-6" />
       )}
 
       {/* Stat matrix — left column = slot 1, right column = slot 2 */}
       {matrixReady && (
-        <div className="rounded-2xl border border-[var(--color-line)]/80 bg-[var(--color-panel)]/40 p-4 sm:p-6 space-y-6 mt-8 overflow-hidden">
-          <div className="flex items-center justify-between gap-2 border-b border-[var(--color-line)] pb-3">
-            <span className="font-bold text-sm text-[var(--color-accent)] truncate">{left.name}</span>
-            <span className="text-xs font-mono text-[var(--color-text-dim)] shrink-0">ATTRIBUTES</span>
-            <span className="font-bold text-sm text-[var(--color-accent-secondary)] truncate text-right">{right.name}</span>
-          </div>
-
-          {[
-            { title: "ATTACKING", stats: attackingCols },
-            { title: "STRENGTH & ATHLETICISM", stats: strengthCols },
-            { title: "DEFENDING & GOALKEEPING", stats: defendingCols },
-          ].map((cat) => (
-            <div key={cat.title} className="space-y-2">
-              <h4 className="text-[10px] font-bold uppercase tracking-wider text-[var(--color-text-dim)]">{cat.title}</h4>
-              <div className="space-y-1 font-mono text-xs">
-                {cat.stats.map((st) => {
-                  const valA = left.stats[st] ?? 0;
-                  const valB = right.stats[st] ?? 0;
-                  const isAWinner = valA > valB;
-                  const isBWinner = valB > valA;
-                  return (
-                    <div key={st} className="grid grid-cols-[32px_1fr_minmax(72px,160px)_1fr_32px] items-center gap-2 sm:gap-3 py-1 px-1 sm:px-2 rounded-lg hover:bg-[var(--color-elevated)]/30 transition-colors">
-                      <span className={`text-right font-bold ${isAWinner ? "text-[var(--color-accent)]" : "text-[var(--color-text-secondary)]"}`}>{valA}</span>
-                      <div className="h-1.5 w-full bg-[var(--color-elevated)]/80 rounded-full overflow-hidden flex justify-end">
-                        <div className={`h-full ${isAWinner ? "bg-[var(--color-accent)]" : "bg-[var(--color-line-active)]"}`} style={{ width: `${Math.min(100, valA)}%` }} />
-                      </div>
-                      <span className="text-center font-sans text-[11px] text-[var(--color-text-secondary)] truncate">{statLabel(st)}</span>
-                      <div className="h-1.5 w-full bg-[var(--color-elevated)]/80 rounded-full overflow-hidden flex justify-start">
-                        <div className={`h-full ${isBWinner ? "bg-[var(--color-accent-secondary)]" : "bg-[var(--color-line-active)]"}`} style={{ width: `${Math.min(100, valB)}%` }} />
-                      </div>
-                      <span className={`text-left font-bold ${isBWinner ? "text-[var(--color-accent-secondary)]" : "text-[var(--color-text-secondary)]"}`}>{valB}</span>
-                    </div>
-                  );
-                })}
-              </div>
+        <div className="mt-8 space-y-6">
+          <section className="efb-card space-y-5 overflow-hidden" aria-labelledby="compare-attributes">
+            <div className="flex items-center justify-between gap-2 border-b border-[var(--color-line-separator)] pb-3">
+              <span className="truncate text-sm font-semibold text-[var(--color-accent)]">{left.name}</span>
+              <h2 id="compare-attributes" className="efb-card__title shrink-0 text-[var(--color-text-secondary)]">
+                Attributes
+              </h2>
+              <span className="truncate text-right text-sm font-semibold text-[var(--color-accent-secondary)]">{right.name}</span>
             </div>
-          ))}
-        </div>
-      )}
 
-      {/* Position proficiency — one column per slot, in slot order */}
-      {matrixReady && (
-        <div className="rounded-2xl border border-[var(--color-line)]/80 bg-[var(--color-panel)]/40 p-4 sm:p-6 space-y-4">
-          <div className="flex items-center justify-between gap-2 border-b border-[var(--color-line)] pb-3">
-            <span className="text-xs font-mono uppercase tracking-wider text-[var(--color-text-dim)]">Position Proficiency</span>
-            <span className="text-[10px] text-[var(--color-text-dim)]">● registered · ● partial · ● none</span>
-          </div>
-          <div className="grid grid-cols-2 gap-4 sm:gap-6">
-            {loadedSlots.map((p, i) => (
-              <div key={`${i}-${p.id}`} className="space-y-2">
-                <div className="flex items-center justify-between text-xs">
-                  <span className="font-bold text-[var(--color-text-primary)] truncate">{p.name}</span>
-                  <span className="font-mono text-[var(--color-text-dim)]">{POSITION_BY_INDEX[p.registeredPosition] ?? "—"}</span>
-                </div>
-                <div className="relative rounded-xl bg-gradient-to-b from-emerald-950/30 to-emerald-900/10 border border-emerald-900/40 px-3 py-3">
-                  <div className="grid grid-cols-3 gap-y-3 gap-x-2">
-                    {PITCH_SLOTS.map((pos) => {
-                      const v = p.positionAptitudes[pos];
-                      // Same exact formula as the detail page's Pitch Map, on the
-                      // level-1 stats this page compares.
-                      const r = tilesBySlot[i]![pos];
-                      return (
-                        <div key={pos} className="flex flex-col items-center gap-1" title={`${pos}: ${r} OVR at level 1`} data-testid={`compare-tile-${pos}`}>
-                          <span className={`inline-block h-3 w-3 rounded-full ${aptitudeDot(v)} ring-1 ring-black/30`} />
-                          <span className="text-[9px] font-mono text-[var(--color-text-secondary)]">{pos}</span>
+            {[
+              { title: "Attacking", stats: attackingCols },
+              { title: "Strength & athleticism", stats: strengthCols },
+              { title: "Defending & goalkeeping", stats: defendingCols },
+            ].map((cat) => (
+              <div key={cat.title} className="space-y-2">
+                <h3 className="text-xs font-medium text-[var(--color-text-secondary)]">{cat.title}</h3>
+                <div className="space-y-1 text-sm tabular-nums">
+                  {cat.stats.map((st) => {
+                    const valA = left.stats[st] ?? 0;
+                    const valB = right.stats[st] ?? 0;
+                    const isAWinner = valA > valB;
+                    const isBWinner = valB > valA;
+                    return (
+                      <div
+                        key={st}
+                        className="grid grid-cols-[32px_1fr_minmax(72px,160px)_1fr_32px] items-center gap-2 rounded-lg px-1 py-1 transition-colors hover:bg-[var(--color-default)] sm:gap-3 sm:px-2"
+                      >
+                        <span className={`text-right font-bold ${isAWinner ? "text-[var(--color-accent)]" : "text-[var(--color-text-secondary)]"}`}>{valA}</span>
+                        <div className="flex h-1.5 w-full justify-end overflow-hidden rounded-full bg-[var(--color-default)]">
+                          <div className={`h-full ${isAWinner ? "bg-[var(--color-accent)]" : "bg-[var(--color-line-active)]"}`} style={{ width: `${Math.min(100, valA)}%` }} />
                         </div>
-                      );
-                    })}
-                  </div>
+                        <span className="truncate text-center text-xs text-[var(--color-text-secondary)]">{statLabel(st)}</span>
+                        <div className="flex h-1.5 w-full justify-start overflow-hidden rounded-full bg-[var(--color-default)]">
+                          <div className={`h-full ${isBWinner ? "bg-[var(--color-accent-secondary)]" : "bg-[var(--color-line-active)]"}`} style={{ width: `${Math.min(100, valB)}%` }} />
+                        </div>
+                        <span className={`text-left font-bold ${isBWinner ? "text-[var(--color-accent-secondary)]" : "text-[var(--color-text-secondary)]"}`}>{valB}</span>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             ))}
-          </div>
-        </div>
-      )}
+          </section>
 
-      {/* Boosters — one column per slot, in slot order */}
-      {matrixReady && (
-        <div className="rounded-2xl border border-[var(--color-line)]/80 bg-[var(--color-panel)]/40 p-4 sm:p-6 space-y-4">
-          <div className="flex items-center gap-2 border-b border-[var(--color-line)] pb-3">
-            <Sparkles className="h-3.5 w-3.5 text-[var(--color-accent)]" aria-hidden />
-            <span className="text-xs font-mono uppercase tracking-wider text-[var(--color-text-dim)]">Boosters</span>
-          </div>
-          <div className="grid grid-cols-2 gap-4 sm:gap-6">
-            {loadedSlots.map((p, i) => {
-              const boosters = [p.booster1, p.booster2].filter((b): b is NonNullable<typeof b> => b !== null);
-              return (
-                <div key={`${i}-${p.id}`} className="space-y-2 min-w-0">
-                  <span className="font-bold text-[var(--color-text-primary)] text-sm truncate block">{p.name}</span>
-                  <div className="flex flex-wrap gap-2">
-                    {boosters.length === 0 && <span className="text-[11px] text-[var(--color-text-dim)] italic">No boosters assigned</span>}
-                    {boosters.map((b, j) => (
-                      <div key={`b-${p.id}-${j}-${b.id}`} className="inline-flex flex-col gap-1 px-2.5 py-1.5 rounded-xl border border-[var(--color-accent-secondary)]/30 bg-[var(--color-accent-secondary)]/10 max-w-full">
-                        <span className="inline-flex items-center gap-1 text-[11px] font-bold text-[var(--color-accent-secondary)]">
-                          <Sparkles className="h-3 w-3" aria-hidden /> {b.name}
-                        </span>
-                        {Object.keys(b.stats).length > 0 && (
-                          <div className="flex flex-wrap gap-1">
-                            {Object.entries(b.stats).map(([k, v]) => (
-                              <span key={k} className="px-1.5 py-0.5 rounded-md bg-[var(--color-accent-secondary)]/10 text-[10px] font-mono text-[var(--color-accent-secondary)]">
-                                +{v} {statLabel(k as BaseStat)}
-                              </span>
-                            ))}
+          {/* Position proficiency — one column per slot, in slot order */}
+          <section className="efb-card space-y-4" aria-labelledby="compare-proficiency">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--color-line-separator)] pb-3">
+              <h2 id="compare-proficiency" className="efb-card__title">
+                Position proficiency
+              </h2>
+              <span className="flex items-center gap-3 text-xs text-[var(--color-text-secondary)]">
+                <span className="inline-flex items-center gap-1">
+                  <span className="size-2.5 rounded-full bg-[var(--color-accent)]" aria-hidden /> registered
+                </span>
+                <span className="inline-flex items-center gap-1">
+                  <span className="size-2.5 rounded-full bg-[var(--color-accent-secondary)]" aria-hidden /> partial
+                </span>
+                <span className="inline-flex items-center gap-1">
+                  <span className="size-2.5 rounded-full bg-[var(--color-line-active)]" aria-hidden /> none
+                </span>
+              </span>
+            </div>
+            <div className="grid grid-cols-2 gap-4 sm:gap-6">
+              {loadedSlots.map((p, i) => (
+                <div key={`${i}-${p.id}`} className="min-w-0 space-y-2">
+                  <div className="flex items-center justify-between gap-2 text-xs">
+                    <span className="truncate font-semibold text-[var(--color-text-primary)]">{p.name}</span>
+                    <span className="text-[var(--color-text-secondary)]">{POSITION_BY_INDEX[p.registeredPosition] ?? "—"}</span>
+                  </div>
+                  <div className="rounded-2xl bg-[var(--color-panel)] px-3 py-3">
+                    <div className="grid grid-cols-3 gap-x-2 gap-y-3">
+                      {PITCH_SLOTS.map((pos) => {
+                        const v = p.positionAptitudes[pos];
+                        // Same exact formula as the detail page's Pitch Map, on the
+                        // level-1 stats this page compares.
+                        const r = tilesBySlot[i]![pos];
+                        return (
+                          <div key={pos} className="flex flex-col items-center gap-1" title={`${pos}: ${r} OVR at level 1`} data-testid={`compare-tile-${pos}`}>
+                            <span className={`inline-block size-3 rounded-full ${aptitudeDot(v)} ring-1 ring-black/30`} />
+                            <span className="text-[11px] text-[var(--color-text-secondary)]">{pos}</span>
                           </div>
-                        )}
-                      </div>
-                    ))}
+                        );
+                      })}
+                    </div>
                   </div>
                 </div>
-              );
-            })}
-          </div>
+              ))}
+            </div>
+          </section>
+
+          {/* Boosters — one column per slot, in slot order */}
+          <section className="efb-card space-y-4" aria-labelledby="compare-boosters">
+            <div className="flex items-center gap-2 border-b border-[var(--color-line-separator)] pb-3">
+              <Sparkles className="size-4 text-[var(--color-skill-boost)]" aria-hidden />
+              <h2 id="compare-boosters" className="efb-card__title">
+                Boosters
+              </h2>
+            </div>
+            <div className="grid grid-cols-2 gap-4 sm:gap-6">
+              {loadedSlots.map((p, i) => {
+                const boosters = [p.booster1, p.booster2].filter((b): b is NonNullable<typeof b> => b !== null);
+                return (
+                  <div key={`${i}-${p.id}`} className="min-w-0 space-y-2">
+                    <span className="block truncate text-sm font-semibold text-[var(--color-text-primary)]">{p.name}</span>
+                    <div className="flex flex-wrap gap-2">
+                      {boosters.length === 0 && <span className="text-xs text-[var(--color-text-secondary)]">No boosters assigned</span>}
+                      {boosters.map((b, j) => (
+                        <div key={`b-${p.id}-${j}-${b.id}`} className="inline-flex max-w-full flex-col gap-1 rounded-xl bg-[var(--color-default)] px-2.5 py-1.5">
+                          <span className="inline-flex items-center gap-1 text-xs font-semibold text-[var(--color-skill-boost)]">
+                            <Sparkles className="size-3" aria-hidden /> {b.name}
+                          </span>
+                          {Object.keys(b.stats).length > 0 && (
+                            <div className="flex flex-wrap gap-1">
+                              {Object.entries(b.stats).map(([k, v]) => (
+                                <span key={k} className="rounded-md bg-[var(--color-panel)] px-1.5 py-0.5 text-[11px] font-medium tabular-nums text-[var(--color-text-primary)]">
+                                  +{v} {statLabel(k as BaseStat)}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
         </div>
       )}
     </div>

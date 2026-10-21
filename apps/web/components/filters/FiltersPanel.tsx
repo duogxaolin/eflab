@@ -1,5 +1,5 @@
 "use client";
-import { ChevronRight } from "lucide-react";
+import { BarChart3, ChevronRight, Globe, PersonStanding, ShieldHalf, Target, Trophy, Zap, type LucideIcon } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { skillLabel } from "@/lib/skill-labels";
 import type { PlayersState } from "@/lib/filter-url";
@@ -37,8 +37,11 @@ const STARS = (n: number) => Array.from({ length: n }, (_, i) => i + 1);
  * long lists (Stats, Body Model, Playing Style, Skills, Nation, League, Team)
  * followed by the inline sections — Position, Card Type, Base / Max Overall
  * Rating, Strong Foot, Condition, Form, WF Accuracy, WF Usage, Height, Weight,
- * Age. Rendered in the desktop <aside> and inside the mobile "Filters" dialog.
- * Every change goes through `update`, which writes the URL and resets the page.
+ * Age. Rendered in the desktop <aside> and inside the mobile "Filters" bottom
+ * sheet. Every change goes through `update`, which writes the URL and resets
+ * the page. Look (`.filter-*` in globals.css): 40 px launcher rows with a
+ * Lucide icon tile and a chevron, 34 px toggles, 36 px number fields, 12 px
+ * muted section labels and #ffffff0f rules between the sections.
  */
 export function FiltersPanel({
   state,
@@ -70,47 +73,44 @@ export function FiltersPanel({
     const s = skills.data?.find((x) => x.id === id);
     return s ? skillLabel(s) : `#${id}`;
   });
-  const launchers: ReadonlyArray<{ kind: FilterDialogKind; label: string; summary: string }> = [
-    { kind: "stats", label: "Stats", summary: statCount ? `${statCount} range${statCount > 1 ? "s" : ""}${state.statsAtMax ? " · max" : ""}` : "" },
-    { kind: "body", label: "Body Model", summary: bodyCount ? `${bodyCount} range${bodyCount > 1 ? "s" : ""}` : "" },
-    { kind: "style", label: "Playing Style", summary: styleSummary.join(" · ") },
-    { kind: "skills", label: "Skills", summary: skillNames.join(" · ") },
-    { kind: "nation", label: "Nation", summary: namesOf(state.nat, countries.data) },
-    { kind: "league", label: "League", summary: namesOf(state.league, leagues.data) },
-    { kind: "team", label: "Team", summary: namesOf(state.team, teams.data) },
+  const launchers: ReadonlyArray<{ kind: FilterDialogKind; label: string; icon: LucideIcon; summary: string }> = [
+    { kind: "stats", label: "Stats", icon: BarChart3, summary: statCount ? `${statCount} range${statCount > 1 ? "s" : ""}${state.statsAtMax ? " · max" : ""}` : "" },
+    { kind: "body", label: "Body Model", icon: PersonStanding, summary: bodyCount ? `${bodyCount} range${bodyCount > 1 ? "s" : ""}` : "" },
+    { kind: "style", label: "Playing Style", icon: Target, summary: styleSummary.join(" · ") },
+    { kind: "skills", label: "Skills", icon: Zap, summary: skillNames.join(" · ") },
+    { kind: "nation", label: "Nation", icon: Globe, summary: namesOf(state.nat, countries.data) },
+    { kind: "league", label: "League", icon: Trophy, summary: namesOf(state.league, leagues.data) },
+    { kind: "team", label: "Team", icon: ShieldHalf, summary: namesOf(state.team, teams.data) },
   ];
 
   const b = FILTER_RANGE_BOUNDS;
+  // Sections are separated by `.filter-panel`'s rules (12 px above / below).
   return (
-    <div className="space-y-5 text-xs">
-      <ul className="m-0 list-none divide-y divide-white/5 p-0">
+    <div className="filter-panel">
+      <ul className="filter-rows">
         {launchers.map((l) => (
           <li key={l.kind}>
-            <button
-              type="button"
-              onClick={() => openDialog(l.kind)}
-              aria-haspopup="dialog"
-              className="flex w-full items-center justify-between gap-3 py-2.5 text-left text-white hover:text-[var(--color-accent)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-accent)]"
-            >
-              <span className="min-w-0">
-                <span className="block text-sm font-medium">{l.label}</span>
-                {l.summary && <span className="block truncate text-[11px] text-[var(--color-accent)]">{l.summary}</span>}
+            <button type="button" onClick={() => openDialog(l.kind)} aria-haspopup="dialog" className="filter-row hit-44">
+              <span className="filter-row__icon" aria-hidden>
+                <l.icon className="size-4" />
               </span>
-              <ChevronRight className="size-4 shrink-0 text-white/40" aria-hidden />
+              <span className="filter-row__label">{l.label}</span>
+              {l.summary && <span className="filter-row__summary">{l.summary}</span>}
+              <ChevronRight className="filter-row__chevron size-4" aria-hidden />
             </button>
           </li>
         ))}
       </ul>
 
       {/* 13 independent toggles (aria-pressed): a card matches when it plays
-          any selected position (multi-select-filters). */}
+          any selected position (multi-select-filters). Pitch rows 3,3,3,3,1 —
+          GK sits in the middle column. */}
       <ToggleGroup<Position>
         label="Position"
         columns={3}
-        options={POSITION_GRID.map((p) => ({ value: p, label: p }))}
+        options={POSITION_GRID.map((p) => ({ value: p, label: p, className: p === "GK" ? "col-start-2" : undefined }))}
         selected={state.pos}
         onChange={(pos) => update({ pos: sortPositions(pos) })}
-        buttonClassName="h-9 font-semibold"
       />
 
       <ToggleGroup<CardType>
@@ -119,7 +119,6 @@ export function FiltersPanel({
         options={CARD_TYPES.map((t) => ({ value: t, label: CARD_TYPE_LABELS[t] }))}
         selected={state.types ?? []}
         onChange={(types) => update({ types: types.length === 0 || types.length === CARD_TYPES.length ? null : CARD_TYPES.filter((t) => types.includes(t)) })}
-        buttonClassName="h-9"
       />
 
       <RangeFields label="Base Overall Rating" value={state.base} bounds={b.ovr} onChange={(base) => update({ base })} />
@@ -135,7 +134,6 @@ export function FiltersPanel({
         ]}
         selected={state.foot === undefined ? [] : [state.foot]}
         onChange={([foot]) => update({ foot })}
-        buttonClassName="h-9"
       />
 
       <ToggleGroup<Condition>
@@ -151,7 +149,7 @@ export function FiltersPanel({
         }))}
         selected={state.condition}
         onChange={(condition) => update({ condition: CONDITIONS.filter((c) => condition.includes(c)) })}
-        buttonClassName="h-9 px-0"
+        buttonClassName="px-0"
       />
 
       <ToggleGroup<number>
@@ -160,7 +158,6 @@ export function FiltersPanel({
         options={STARS(3).map((n) => ({ value: n, label: n, ariaLabel: `Form: ${n} of 3 stars (${FORM_LABELS[n - 1]})` }))}
         selected={state.form}
         onChange={(form) => update({ form: form.sort((a, c) => a - c) })}
-        buttonClassName="h-9"
       />
       <ToggleGroup<number>
         label="WF Accuracy"
@@ -168,7 +165,6 @@ export function FiltersPanel({
         options={STARS(4).map((n) => ({ value: n, label: n, ariaLabel: `WF Accuracy: ${n} of 4 stars (${WEAK_FOOT_ACCURACY_LABELS[n - 1]})` }))}
         selected={state.wfa}
         onChange={(wfa) => update({ wfa: wfa.sort((a, c) => a - c) })}
-        buttonClassName="h-9"
       />
       <ToggleGroup<number>
         label="WF Usage"
@@ -176,7 +172,6 @@ export function FiltersPanel({
         options={STARS(4).map((n) => ({ value: n, label: n, ariaLabel: `WF Usage: ${n} of 4 stars (${WEAK_FOOT_USAGE_LABELS[n - 1]})` }))}
         selected={state.wfu}
         onChange={(wfu) => update({ wfu: wfu.sort((a, c) => a - c) })}
-        buttonClassName="h-9"
       />
 
       <RangeFields label="Height" unit=" cm" value={state.height} bounds={b.height} onChange={(height) => update({ height })} />

@@ -1,4 +1,5 @@
 "use client";
+import { ChevronsUp, Crosshair, Footprints, Hand, Send, Shield, Volleyball, Zap, type LucideIcon } from "lucide-react";
 import {
   PROGRESSION_CATEGORY_LABELS,
   TRAINING_CATEGORIES,
@@ -83,8 +84,8 @@ interface SectionProps {
 
 function StatSection({ title, statKeys, values, boosterDeltas, trainingDeltas, capDeltas, proficiencyDeltas, managerDeltas, highlight, onHighlight }: SectionProps) {
   return (
-    <div className="space-y-2 min-w-0">
-      <h3 className="text-xs font-bold uppercase tracking-wider text-white border-b border-[var(--color-line)] pb-1.5">{title}</h3>
+    <div className="min-w-0">
+      <h3 className="efb-group-head">{title}</h3>
       <div className="space-y-1">
         {statKeys.map((st) => {
           const val = values[st];
@@ -109,7 +110,7 @@ function StatSection({ title, statKeys, values, boosterDeltas, trainingDeltas, c
             <button
               key={st}
               type="button"
-              className="efb-stat-row cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--color-accent)]"
+              className="efb-stat-row hit-44 cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-focus)]"
               data-stat={st}
               data-category={cats.join(" ")}
               data-hit={hit ? "true" : undefined}
@@ -122,9 +123,15 @@ function StatSection({ title, statKeys, values, boosterDeltas, trainingDeltas, c
               <span className={`efb-stat-row__label ${statTierClass(val)}`} data-testid="stat-name">
                 {statLabel(st)}
               </span>
-              <DeltaChip delta={boosterDeltas?.[st]} title="Booster" />
-              <DeltaChip delta={managerDeltas?.[st]} title="Manager" kind="manager" />
-              <span className={`efb-stat-row__value ${statTierBg(val)} ${statTierForeground(val)}`}>{val}</span>
+              <span className="efb-stat-row__end">
+                {(boost !== 0 || mgr !== 0) && (
+                  <span className="efb-stat-row__chips">
+                    <DeltaChip delta={boosterDeltas?.[st]} title="Booster" />
+                    <DeltaChip delta={managerDeltas?.[st]} title="Manager" kind="manager" />
+                  </span>
+                )}
+                <span className={`efb-stat-row__value ${statTierBg(val)} ${statTierForeground(val)}`}>{val}</span>
+              </span>
             </button>
           );
         })}
@@ -133,9 +140,12 @@ function StatSection({ title, statKeys, values, boosterDeltas, trainingDeltas, c
   );
 }
 
+/** Three groups side by side from `lg`, two columns below (Attacking and
+ *  Defending, then Strength — DOM order, so the Tab order follows the eye),
+ *  one column under 360 px where two would leave a name ~55 px of room. */
 export function StatGrid(props: Omit<SectionProps, "title" | "statKeys">) {
   return (
-    <div className="grid grid-cols-1 gap-6 md:grid-cols-3" data-testid="stat-grid">
+    <div className="grid grid-cols-1 gap-x-3 gap-y-4 min-[360px]:grid-cols-2 lg:grid-cols-3 lg:gap-6" data-testid="stat-grid">
       <StatSection title="Attacking" statKeys={ATTACKING_STATS} {...props} />
       <StatSection title="Defending" statKeys={DEFENDING_STATS} {...props} />
       <StatSection title="Strength" statKeys={STRENGTH_STATS} {...props} />
@@ -143,9 +153,27 @@ export function StatGrid(props: Omit<SectionProps, "title" | "statKeys">) {
   );
 }
 
-/** Compact readout of the ten training categories ("Shooting 8" …). Each chip
- *  highlights the stats its category raises; it is a readout, the steppers in
- *  the Progression panel change the values. */
+/** Icon of each training category on the category strip (Lucide; the three
+ *  goalkeeper categories share the glove icon and carry their number). */
+export const CATEGORY_ICON: Readonly<Record<TrainingCategory, LucideIcon>> = {
+  Shooting: Crosshair,
+  Passing: Send,
+  Dribbling: Volleyball,
+  Dexterity: Zap,
+  LowerBody: Footprints,
+  Aerial: ChevronsUp,
+  Defending: Shield,
+  GK1: Hand,
+  GK2: Hand,
+  GK3: Hand,
+};
+export const CATEGORY_SUFFIX: Partial<Record<TrainingCategory, string>> = { GK1: "1", GK2: "2", GK3: "3" };
+
+/** Category strip: the stat points the current build spends in each of the
+ *  ten training categories, as icon + number in one dark bar. Each counter
+ *  is a toggle (aria-pressed, named by the category) that highlights the
+ *  stats its category raises; it is a readout — the steppers in the
+ *  Progression panel change the values. */
 export function CategoryRow({
   allocation,
   highlight,
@@ -156,27 +184,28 @@ export function CategoryRow({
   onHighlight: (next: StatHighlight) => void;
 }) {
   return (
-    <div className="flex flex-wrap gap-1.5" role="group" aria-label="Training categories of the current build" data-testid="category-row">
+    <div className="efb-category-strip" role="group" aria-label="Training categories of the current build" data-testid="category-row">
       {TRAINING_CATEGORIES.map((cat) => {
         const v = allocation[cat];
         const hit = highlight === cat;
+        const label = PROGRESSION_CATEGORY_LABELS[cat];
+        const Icon = CATEGORY_ICON[cat];
+        const suffix = CATEGORY_SUFFIX[cat];
         return (
           <button
             key={cat}
             type="button"
             aria-pressed={hit}
+            aria-label={`${label}: ${v}`}
+            title={`${label}: ${v} stat point${v === 1 ? "" : "s"} — highlight its stats`}
             data-testid={`category-chip-${cat}`}
+            data-spent={v > 0 ? "true" : undefined}
             onClick={() => onHighlight(hit ? null : cat)}
-            className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-[11px] font-semibold transition-colors cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--color-accent)] ${
-              hit
-                ? "border-[var(--color-accent)]/60 bg-[var(--color-accent)]/15 text-white"
-                : v > 0
-                  ? "border-[var(--color-line)] bg-[var(--color-canvas)] text-white hover:border-[var(--color-line-active)]"
-                  : "border-[var(--color-line)] bg-[var(--color-canvas)] text-[var(--color-text-dim)] hover:border-[var(--color-line-active)]"
-            }`}
+            className="efb-category-strip__item hit-44"
           >
-            <span>{PROGRESSION_CATEGORY_LABELS[cat]}</span>
-            <span className={`font-mono tabular-nums ${v > 0 ? "text-[var(--color-accent)]" : ""}`}>{v}</span>
+            <Icon className="size-4 shrink-0" aria-hidden />
+            {suffix && <span className="efb-category-strip__sub" aria-hidden>{suffix}</span>}
+            <span aria-hidden>{v}</span>
           </button>
         );
       })}
@@ -195,13 +224,13 @@ export function KeyStats({
   boosterDeltas?: Record<BaseStat, number>;
 }) {
   return (
-    <dl className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 pt-1">
+    <dl className="grid grid-cols-2 gap-1.5 pt-1">
       {statKeys.map((st) => {
         const v = values[st];
         return (
-          <div key={st} className="min-w-0 rounded-lg bg-[var(--color-panel)] border border-[var(--color-line)] px-2 py-1.5">
-            <dt className="text-[10px] leading-tight text-[var(--color-text-dim)]" data-testid="stat-name">{statLabel(st)}</dt>
-            <dd className={`flex items-center gap-1.5 font-mono text-sm font-bold tabular-nums ${statTierClass(v)}`}>
+          <div key={st} className="min-w-0 rounded-lg bg-[var(--color-default)] px-2.5 py-1.5">
+            <dt className="text-xs leading-4 text-[var(--color-text-secondary)] [hyphens:auto] break-words" data-testid="stat-name">{statLabel(st)}</dt>
+            <dd className={`mt-0.5 flex items-center gap-1.5 text-sm font-bold tabular-nums ${statTierClass(v)}`}>
               {v}
               <DeltaChip delta={boosterDeltas?.[st]} title="Booster" />
             </dd>

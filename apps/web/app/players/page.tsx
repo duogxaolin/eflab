@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Suspense } from "react";
 import { PlayersClient } from "./PlayersClient";
 import { CardGridSkeleton } from "@/lib/query-state";
+import { PLAYERS_GRID } from "./players-grid";
 
 export const metadata: Metadata = {
   title: "Players",
@@ -11,7 +12,7 @@ export const metadata: Metadata = {
 
 export default function PlayersPage() {
   return (
-    <Suspense fallback={<CardGridSkeleton />}>
+    <Suspense fallback={<CardGridSkeleton className={PLAYERS_GRID} />}>
       <PlayersClient />
     </Suspense>
   );

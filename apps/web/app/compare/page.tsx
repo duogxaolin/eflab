@@ -4,7 +4,7 @@ import { CompareClient } from "./CompareClient";
 
 export const metadata: Metadata = {
   title: "Compare players",
-  description: "Compare up to four eFootball player cards side by side — stats, position proficiency and boosters.",
+  description: "Compare two eFootball player cards side by side — stats, position proficiency and boosters.",
 };
 
 export default function ComparePage() {

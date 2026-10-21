@@ -1,31 +1,39 @@
 "use client";
-import { useRef, useCallback, useState } from "react";
+import { useRef, useState } from "react";
 import Link from "next/link";
-import type { PointerEvent as ReactPointerEvent } from "react";
+import { Shield, Swords } from "lucide-react";
 import type { CardPreview } from "@eflab/shared";
 import { playingStyleName } from "@eflab/shared";
 import { CARD_TYPE_COLOR_VAR, CARD_TYPE_LABEL, positionOf } from "@/lib/card-display";
 import { playerCardDynamicUrl, conditionUrl } from "@/lib/r2-images";
-import { usePrefersReducedMotion } from "./usePrefersReducedMotion";
 import { useNearViewport } from "./useNearViewport";
 
 // efootbase-aligned card tile. The face is the single `cards/{id}_dynamic.webp`
 // render from R2 (animated background + frame baked in); the OVR block,
-// condition badge, detail overlays and glare are markup on top, positioned by
-// the proportional `.pcb*` CSS in globals.css (container-query units, so the
+// condition badge and detail overlays are markup on top, positioned by the
+// proportional `.pcb*` CSS in globals.css (container-query units, so the
 // geometry is identical at every card width). This component only supplies
 // markup + class names — no inline position/size classes on `.pcb__*`.
 //
 // Accessibility / performance contract (site-quality-baseline):
-//   · the whole tile (card + optional name block) is ONE real <Link> with an
+//   · the whole tile (card + optional caption) is ONE real <Link> with an
 //     explicit accessible name, keyboard-focusable with a visible focus ring;
 //   · images are lazy + async-decoded with explicit dimensions, and the face
 //     only receives its `src` once the card is within FACE_LOAD_MARGIN of the
 //     viewport (native lazy loading alone fetches ~1250 px ahead, far too much
 //     for a 190-card page); `priority` opts the first row into eager loading;
-//   · tilt + glare are pointer-driven and disabled under prefers-reduced-motion.
+//   · hover / keyboard focus scales the card to 1.05 above its neighbours and
+//     brightens the caption — pure CSS (`.pcb-tile*` in globals.css); under
+//     prefers-reduced-motion the scale applies without a transition.
 
 type CardSize = "sm" | "md" | "full";
+
+/** Text under the card, inside the same link:
+ *   "name"   — the player name on one line (home, carousels, skill holders);
+ *   "styles" — the name visually hidden, then the attack and defence playing
+ *              styles on two lines with an icon each (/players, packs);
+ *   "none"   — the card only. */
+export type CardCaption = "name" | "styles" | "none";
 
 const SIZE_CLASS: Record<CardSize, string> = {
   sm: "w-24",     // 96px — trending horizontal scroll (efootbase w-24)
@@ -46,7 +54,7 @@ export type PlayerCardData = CardPreview & { levelCap?: number | null };
 export function PlayerCard({
   player,
   size = "full",
-  showName = false,
+  caption = "none",
   showDetails = false,
   priority = false,
   levelCap,
@@ -54,13 +62,15 @@ export function PlayerCard({
 }: {
   player: PlayerCardData;
   size?: CardSize;
-  /** Render the player name (+ attack/defence playing-style pills) below the
-   *  card, inside the same link — efootbase grid/list layout. */
-  showName?: boolean;
-  /** Render the detail-only overlays (efootbase /players/{id} card):
+  /** Caption variant below the card (see `CardCaption`). */
+  caption?: CardCaption;
+  /** Render the extra overlays (used by the compare slots only):
    *    .pcb__nation            — circular nationality flag (left-mid)
    *    .pcb__badge--max-level   — "MAX LVL NN" pill (bottom-left, green)
-   *    .pcb__badge--max-ovr    — "MAX NN" pill (bottom-right, replaces condition) */
+   *    .pcb__badge--max-ovr    — "MAX NN" pill (bottom-right, replaces condition)
+   *  The player detail face (efootbase-ui-redesign) passes none of them: the
+   *  reference face is the card with its condition letter only — no MAX
+   *  badges, and no flag circle over the club crest baked into the render. */
   showDetails?: boolean;
   /** Eager-load the face (first row of a grid / above the fold). Everything
    *  else is lazy. */
@@ -72,29 +82,10 @@ export function PlayerCard({
   className?: string;
 }) {
   const cardRef = useRef<HTMLDivElement>(null);
-  const [tilt, setTilt] = useState({ rx: 0, ry: 0, glare: 50 });
   const [faceError, setFaceError] = useState(false);
-  const reducedMotion = usePrefersReducedMotion();
   const nearViewport = useNearViewport(cardRef, FACE_LOAD_MARGIN, priority);
   const cardColor = CARD_TYPE_COLOR_VAR[player.cardType];
   const typeLabel = CARD_TYPE_LABEL[player.cardType] ?? player.cardType;
-
-  const handleMove = useCallback(
-    (e: ReactPointerEvent<HTMLDivElement>) => {
-      if (reducedMotion) return;
-      const el = cardRef.current;
-      if (!el) return;
-      const rect = el.getBoundingClientRect();
-      if (rect.width === 0 || rect.height === 0) return;
-      const px = (e.clientX - rect.left) / rect.width;
-      const py = (e.clientY - rect.top) / rect.height;
-      const ry = (px - 0.5) * 16;
-      const rx = -(py - 0.5) * 16;
-      setTilt({ rx, ry, glare: px * 100 });
-    },
-    [reducedMotion],
-  );
-  const reset = useCallback(() => setTilt({ rx: 0, ry: 0, glare: 50 }), []);
 
   const pos = positionOf(player.registeredPosition);
   const faceUrl = playerCardDynamicUrl(player.id);
@@ -107,18 +98,11 @@ export function PlayerCard({
   const showMaxOvr = player.maxOvr != null && player.maxOvr > 0;
   const href = `/players/${player.baseId}/${player.id}` as const;
   const accessibleName = `${player.name}, ${typeLabel} ${player.ovr} OVR, ${pos}`;
-  const tiltActive = !reducedMotion && (tilt.rx !== 0 || tilt.ry !== 0);
 
   const cardEl = (
-    <div className={`perspective-card select-none ${SIZE_CLASS[size]} ${className}`}>
-      <div
-        ref={cardRef}
-        onPointerMove={reducedMotion ? undefined : handleMove}
-        onPointerLeave={reset}
-        onPointerCancel={reset}
-        className="pcb card-3d-surface preserve-3d"
-        style={tiltActive ? { transform: `rotateX(${tilt.rx}deg) rotateY(${tilt.ry}deg)` } : undefined}
-      >
+    // `.pcb-tile__card` is the element that scales on hover / focus.
+    <div className={`pcb-tile__card select-none ${SIZE_CLASS[size]} ${className}`}>
+      <div ref={cardRef} className="pcb">
         {faceError ? (
           // Face unavailable (R2 404 / offline): keep the geometry and render
           // OVR + position in-card on a card-type tinted gradient.
@@ -161,9 +145,9 @@ export function PlayerCard({
           </div>
         )}
 
-        {/* Condition badge (A–E, bottom-right). On the detail card efootbase
-            replaces this slot with the MAX OVR badge, so it is hidden when
-            showDetails is on. */}
+        {/* Condition badge (A–E, bottom-right) — also on the detail face. With
+            showDetails (compare) the MAX OVR badge takes this slot, so it is
+            hidden there. */}
         {condLetter && !faceError && !showDetails && (
           <div className="pcb__condition">
             {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -181,8 +165,8 @@ export function PlayerCard({
           </div>
         )}
 
-        {/* Detail-only overlays: nation flag (left-mid), MAX LEVEL (bottom-left),
-            MAX OVR (bottom-right). */}
+        {/* showDetails overlays (compare): nation flag (left-mid), MAX LEVEL
+            (bottom-left), MAX OVR (bottom-right). */}
         {showDetails && !faceError && (
           <>
             {player.flagUrl && (
@@ -217,19 +201,6 @@ export function PlayerCard({
             )}
           </>
         )}
-
-        {/* Glare overlay — pointer-driven; static under reduced motion. */}
-        <div
-          className="pcb__glare"
-          aria-hidden
-          style={
-            reducedMotion
-              ? undefined
-              : {
-                  background: `radial-gradient(circle at ${tilt.glare}% 0%, rgba(255,255,255,0.12) 0%, rgba(255,255,255,0) 60%)`,
-                }
-          }
-        />
       </div>
     </div>
   );
@@ -237,21 +208,27 @@ export function PlayerCard({
   const hasPlaystyle = player.playingStyleAttack != null || player.playingStyleDefense != null;
 
   return (
-    <Link href={href} className="card-link block" aria-label={accessibleName}>
+    <Link href={href} className="card-link pcb-tile" aria-label={accessibleName}>
       {cardEl}
-      {showName && (
-        <span className="mt-1 block text-center text-xs text-[var(--color-text-primary)]/80 transition-colors">
-          <span className="block truncate">{player.name}</span>
-          {/* Playing-style pills: attack (red border) / defence (cyan border). */}
+      {caption === "name" && <span className="pcb-caption pcb-caption--name">{player.name}</span>}
+      {caption === "styles" && (
+        <span className="pcb-caption pcb-caption--styles">
+          {/* The name stays in the tile's text for assistive technology; the
+              link's accessible name (aria-label) carries it too. */}
+          <span className="sr-only">{player.name}.</span>
           {hasPlaystyle && (
-            <span className="mt-1 flex flex-col items-center gap-1 leading-tight">
-              <span className="pcb__style-pill pcb__style-pill--attack">
-                {playingStyleName(player.playingStyleAttack)}
+            <>
+              <span className="pcb-caption__line">
+                <Swords className="pcb-caption__icon pcb-caption__icon--attack" aria-hidden />
+                <span className="sr-only">Attack: </span>
+                <span className="pcb-caption__text">{playingStyleName(player.playingStyleAttack)}</span>
               </span>
-              <span className="pcb__style-pill pcb__style-pill--defence">
-                {playingStyleName(player.playingStyleDefense)}
+              <span className="pcb-caption__line">
+                <Shield className="pcb-caption__icon pcb-caption__icon--defence" aria-hidden />
+                <span className="sr-only">Defence: </span>
+                <span className="pcb-caption__text">{playingStyleName(player.playingStyleDefense)}</span>
               </span>
-            </span>
+            </>
           )}
         </span>
       )}

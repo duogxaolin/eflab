@@ -1,4 +1,5 @@
 "use client";
+import { Check } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { PHYSIQUE_LABEL } from "@/lib/card-display";
 import { SKILL_GROUP_LABELS, compareSkills, skillGroup, skillLabel } from "@/lib/skill-labels";
@@ -20,7 +21,6 @@ import {
 import { Modal } from "./Modal";
 import { RangeFields } from "./RangeFields";
 import { PickerList, type PickerLoad } from "./PickerList";
-import { togglePill } from "./ToggleGroup";
 import { STAT_FILTER_GROUPS, statFilterLabel } from "./stat-filter-labels";
 import type { FilterDialogKind } from "./FiltersPanel";
 
@@ -70,25 +70,31 @@ export function FilterDialogs({
         open
         onClose={onClose}
         title="Stats"
-        panelClassName="max-w-4xl"
         headerExtra={
-          <label className="flex w-fit cursor-pointer items-center gap-2 text-xs text-white/85">
-            <input
-              type="checkbox"
-              role="switch"
-              aria-checked={state.statsAtMax}
-              checked={state.statsAtMax}
-              onChange={(e) => update({ statsAtMax: e.target.checked })}
-              className="accent-[var(--color-accent)]"
-            />
+          // The label is the switch's touch target: on coarse pointers its hit-44 area makes the
+          // whole row 44 px tall, and the span's hit-44 gives the 40 × 22 switch its own 44 × 44
+          // area centred on it (2 px past its left edge, where the label starts). Layout unchanged.
+          <label className="hit-44 flex w-fit cursor-pointer items-center gap-3 text-sm font-medium text-[var(--color-text-primary)]">
+            <span className="hit-44 inline-flex shrink-0">
+              <input
+                type="checkbox"
+                role="switch"
+                aria-checked={state.statsAtMax}
+                checked={state.statsAtMax}
+                onChange={(e) => update({ statsAtMax: e.target.checked })}
+                className="filter-switch"
+              />
+            </span>
             Max attribute potential
           </label>
         }
       >
-        <div className="grid gap-x-6 gap-y-5 sm:grid-cols-2 lg:grid-cols-3">
+        {/* Three columns (Attacking / Strength / Defending) of numeric
+            min / max pairs; a dual-handle slider is deliberately not used. */}
+        <div className="grid gap-x-6 gap-y-6 sm:grid-cols-3">
           {STAT_FILTER_GROUPS.map((g) => (
-            <section key={g.title} className="space-y-3" aria-label={g.title}>
-              <h3 className="text-[11px] font-semibold uppercase tracking-wider text-[var(--color-text-dim)]">{g.title}</h3>
+            <section key={g.title} className="min-w-0 space-y-4" aria-label={g.title}>
+              <h3 className="filter-label">{g.title}</h3>
               {g.stats.map((s) => (
                 <RangeFields key={s} compact label={statFilterLabel(s)} value={state.stats[s] ?? null} bounds={FILTER_RANGE_BOUNDS.stat} onChange={(r) => setStat(s, r)} />
               ))}
@@ -101,10 +107,10 @@ export function FilterDialogs({
 
   if (dialog === "body") {
     return (
-      <Modal open onClose={onClose} title="Body Model" panelClassName="max-w-2xl">
-        <div className="grid gap-x-6 gap-y-5 sm:grid-cols-2">
+      <Modal open onClose={onClose} title="Body Model">
+        <div className="grid gap-x-6 gap-y-4 sm:grid-cols-2">
           {BODY_COLUMNS.map((col, i) => (
-            <section key={i} className="space-y-3">
+            <section key={i} className="min-w-0 space-y-4">
               {col.map((f) => (
                 <RangeFields key={f} compact label={PHYSIQUE_LABEL[f]} value={state.body[f] ?? null} bounds={FILTER_RANGE_BOUNDS.physique} onChange={(r) => setBody(f, r)} />
               ))}
@@ -124,17 +130,18 @@ export function FilterDialogs({
     const toggleAi = (key: AiPlayingStyleKey) =>
       update({ ai: state.ai.includes(key) ? state.ai.filter((k) => k !== key) : [...state.ai, key] });
     return (
-      <Modal open onClose={onClose} title="Playing Style" panelClassName="max-w-2xl">
+      <Modal open onClose={onClose} title="Playing Style">
         <div className="space-y-5">
           {groups.map((g) => (
             <section key={g.title} className="space-y-2" aria-label={g.title}>
-              <h3 className="text-[11px] font-semibold uppercase tracking-wider text-[var(--color-text-dim)]">{g.title}</h3>
-              <div className="flex flex-wrap gap-1.5">
+              <h3 className="filter-label">{g.title}</h3>
+              <div className="filter-options">
                 {g.ids.map((id) => {
                   const on = state.style === id;
                   return (
-                    <button key={id} type="button" aria-pressed={on} onClick={() => update({ style: on ? undefined : id })} className={`px-3 py-1.5 ${togglePill(on)}`}>
-                      {PLAYING_STYLES[id]}
+                    <button key={id} type="button" aria-pressed={on} onClick={() => update({ style: on ? undefined : id })} title={PLAYING_STYLES[id]} className="filter-option">
+                      <span className="filter-option__label">{PLAYING_STYLES[id]}</span>
+                      {on && <Check className="size-4 shrink-0" aria-hidden />}
                     </button>
                   );
                 })}
@@ -143,27 +150,28 @@ export function FilterDialogs({
                     key={name}
                     aria-disabled="true"
                     title="No card in this database carries this style (it was added to the game after the data was taken)."
-                    className={`px-3 py-1.5 ${togglePill(false, true)}`}
+                    className="filter-option"
                   >
-                    {name}
+                    <span className="filter-option__label">{name}</span>
                   </span>
                 ))}
               </div>
             </section>
           ))}
           <section className="space-y-2" aria-label="AI Playing Styles">
-            <h3 className="text-[11px] font-semibold uppercase tracking-wider text-[var(--color-text-dim)]">AI Playing Styles</h3>
-            <div className="flex flex-wrap gap-1.5">
+            <h3 className="filter-label">AI Playing Styles</h3>
+            <div className="filter-options">
               {AI_PLAYING_STYLES.map((s) => {
                 const on = state.ai.includes(s.key);
                 return (
-                  <button key={s.key} type="button" aria-pressed={on} onClick={() => toggleAi(s.key)} className={`px-3 py-1.5 ${togglePill(on)}`}>
-                    {s.label}
+                  <button key={s.key} type="button" aria-pressed={on} onClick={() => toggleAi(s.key)} title={s.label} className="filter-option">
+                    <span className="filter-option__label">{s.label}</span>
+                    {on && <Check className="size-4 shrink-0" aria-hidden />}
                   </button>
                 );
               })}
             </div>
-            <p className="text-[11px] text-[var(--color-text-dim)]">Several AI styles narrow the list to cards that have all of them.</p>
+            <p className="text-xs text-[var(--color-text-secondary)]">Several AI styles narrow the list to cards that have all of them.</p>
           </section>
         </div>
       </Modal>
@@ -178,6 +186,9 @@ export function FilterDialogs({
 
 type DialogProps = { state: PlayersState; update: (patch: Partial<PlayersState>) => void; onClose: () => void };
 
+// One-line note under a picker: 12 px muted.
+const NOTE_CLASS = "mt-4 text-xs text-[var(--color-text-secondary)]";
+
 function SkillsDialog({ state, update, onClose }: DialogProps) {
   const q = trpc.skill.list.useQuery({}, { staleTime: 60 * 60_000 });
   // Only skills that cards actually carry are offered (the 17 zero-holder
@@ -187,9 +198,9 @@ function SkillsDialog({ state, update, onClose }: DialogProps) {
     .sort(compareSkills)
     .map((s) => ({ value: s.id, label: skillLabel(s), group: SKILL_GROUP_LABELS[skillGroup(s)], hint: `${s.playerCount.toLocaleString("en-US")} cards` }));
   return (
-    <Modal open onClose={onClose} title="Skills" panelClassName="max-w-2xl">
+    <Modal open onClose={onClose} title="Skills">
       <PickerList items={items} selected={state.skills} onChange={(skills) => update({ skills })} load={loadOf(q, "skills")} />
-      <p className="mt-3 text-[11px] text-[var(--color-text-dim)]">Several skills narrow the list to cards that have all of them.</p>
+      <p className={NOTE_CLASS}>Several skills narrow the list to cards that have all of them.</p>
     </Modal>
   );
 }
@@ -207,7 +218,7 @@ function NationDialog({ state, update, onClose }: DialogProps) {
   return (
     <Modal open onClose={onClose} title="Nation">
       <PickerList items={items} selected={state.nat} onChange={(nat) => update({ nat: sortIds(nat) })} max={MAX_FILTER_IDS} load={loadOf(q, "nations")} />
-      <p className="mt-3 text-[11px] text-[var(--color-text-dim)]">{OR_NOTE}</p>
+      <p className={NOTE_CLASS}>{OR_NOTE}</p>
     </Modal>
   );
 }
@@ -218,7 +229,7 @@ function LeagueDialog({ state, update, onClose }: DialogProps) {
   return (
     <Modal open onClose={onClose} title="League">
       <PickerList items={items} selected={state.league} onChange={(league) => update({ league: sortIds(league) })} max={MAX_FILTER_IDS} load={loadOf(q, "leagues")} />
-      <p className="mt-3 text-[11px] text-[var(--color-text-dim)]">{OR_NOTE}</p>
+      <p className={NOTE_CLASS}>{OR_NOTE}</p>
     </Modal>
   );
 }
@@ -247,7 +258,7 @@ function TeamDialog({ state, update, onClose }: DialogProps) {
         load={loadOf(teams, "teams")}
         emptyText={state.league.length > 0 ? `No team of the selected league${state.league.length > 1 ? "s" : ""} matches.` : "No team matches."}
       />
-      <p className="mt-3 text-[11px] text-[var(--color-text-dim)]">{OR_NOTE}</p>
+      <p className={NOTE_CLASS}>{OR_NOTE}</p>
     </Modal>
   );
 }

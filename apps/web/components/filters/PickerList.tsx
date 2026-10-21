@@ -1,7 +1,6 @@
 "use client";
 import { useId, useState } from "react";
-import { Search, X } from "lucide-react";
-import { togglePill } from "./ToggleGroup";
+import { Check, Search, X } from "lucide-react";
 
 export interface PickerItem<V extends string | number> {
   value: V;
@@ -22,8 +21,10 @@ export interface PickerLoad {
 
 /**
  * Searchable list of toggles for the Nation / League / Team / Skills dialogs:
- * a search field (prefix-insensitive substring on the label) over grouped
- * pressed/unpressed buttons. In multi-select mode (the default) the current
+ * a 36 px search field (prefix-insensitive substring on the label) over
+ * grouped pressed/unpressed option rows (`.filter-option`: 44 px, radius 12,
+ * one / two / three columns at < 640 / 640 / 768 px; a pressed row is the
+ * accent with a check mark). In multi-select mode (the default) the current
  * selection is summarised above the list — "N selected", a Clear control and
  * one removable chip per value (multi-select-filters) — so a choice made
  * behind a search term stays visible. `single` makes it an exclusive choice.
@@ -86,9 +87,9 @@ export function PickerList<V extends string | number>({
   }
 
   return (
-    <div className="space-y-3">
-      <div className="relative">
-        <Search className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-white/40" aria-hidden />
+    <div className="space-y-4">
+      <div className="field field--sm filter-search">
+        <Search className="size-4 shrink-0 text-[var(--color-text-secondary)]" aria-hidden />
         <input
           id={`${id}-search`}
           type="search"
@@ -97,16 +98,18 @@ export function PickerList<V extends string | number>({
           placeholder={searchLabel}
           aria-label={searchLabel}
           autoComplete="off"
-          className="h-9 w-full rounded-full border border-white/10 bg-white/[0.05] pl-8 pr-8 text-xs text-white placeholder-white/40 focus:border-[var(--color-accent)] focus:outline-none"
+          // The enclosing Modal focuses this after showModal().
+          data-autofocus
+          className="field__input no-native-clear"
         />
         {q && (
           <button
             type="button"
             onClick={() => setQ("")}
             aria-label="Clear search"
-            className="absolute right-2.5 top-1/2 -translate-y-1/2 text-white/40 hover:text-white"
+            className="hit-44 inline-flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-full bg-[var(--color-default)] text-[var(--color-text-secondary)] transition-colors hover:text-[var(--color-text-primary)]"
           >
-            <X className="size-3.5" aria-hidden />
+            <X className="size-3" aria-hidden />
           </button>
         )}
       </div>
@@ -115,17 +118,17 @@ export function PickerList<V extends string | number>({
           selected; it is a permanent live region (sr-only while empty) so
           reaching the limit is announced the moment it happens. */}
       {!single && max !== undefined && (
-        <p role="status" aria-live="polite" data-limit-message={full ? "true" : undefined} className={full ? "text-[11px] text-[var(--color-accent-warn)]" : "sr-only"}>
+        <p role="status" aria-live="polite" data-limit-message={full ? "true" : undefined} className={full ? "text-xs text-[var(--color-accent-warn)]" : "sr-only"}>
           {full ? `At most ${max} selections — remove one to pick another.` : ""}
         </p>
       )}
       {selected.length > 0 && (
-        <div className="space-y-1.5">
-          <div className="flex items-center justify-between gap-2 text-[11px]">
+        <div className="space-y-2">
+          <div className="flex items-center justify-between gap-2 text-xs">
             <span className="text-[var(--color-text-secondary)]" aria-live="polite">
               {selected.length} selected
             </span>
-            <button type="button" onClick={() => onChange([])} className="text-[var(--color-accent)] hover:underline">
+            <button type="button" onClick={() => onChange([])} className="hit-44 cursor-pointer font-medium text-[var(--color-accent)] hover:underline">
               Clear selection
             </button>
           </div>
@@ -135,13 +138,7 @@ export function PickerList<V extends string | number>({
                 const label = chipLabel(v);
                 return (
                   <li key={String(v)} className="max-w-full">
-                    <button
-                      type="button"
-                      onClick={() => toggle(v)}
-                      aria-label={`Remove ${label}`}
-                      title={`Remove ${label}`}
-                      className={`inline-flex max-w-full items-center gap-1 py-1 pl-2.5 pr-1.5 ${togglePill(true)}`}
-                    >
+                    <button type="button" onClick={() => toggle(v)} aria-label={`Remove ${label}`} title={`Remove ${label}`} className="filter-chip hit-44">
                       <span className="truncate">{label}</span>
                       <X className="size-3 shrink-0" aria-hidden />
                     </button>
@@ -152,17 +149,17 @@ export function PickerList<V extends string | number>({
           )}
         </div>
       )}
-      {loading &&<p className="py-3 text-center text-xs text-[var(--color-text-dim)]">Loading {load?.what}…</p>}
+      {loading && <p className="py-3 text-center text-xs text-[var(--color-text-secondary)]">Loading {load?.what}…</p>}
       {failed && (
-        <button type="button" onClick={() => void load?.refetch()} className="w-full py-3 text-center text-xs text-[var(--color-accent)] hover:underline">
+        <button type="button" onClick={() => void load?.refetch()} className="hit-44 w-full cursor-pointer py-3 text-center text-xs text-[var(--color-accent)] hover:underline">
           Could not load {load?.what} — retry
         </button>
       )}
-      {loaded && visible.length === 0 && <p className="py-4 text-center text-xs text-[var(--color-text-dim)]">{emptyText}</p>}
+      {loaded && visible.length === 0 && <p className="py-4 text-center text-xs text-[var(--color-text-secondary)]">{emptyText}</p>}
       {groups.map((g, gi) => (
-        <section key={g.name ?? `g${gi}`} className="space-y-1.5">
-          {g.name && <h3 className="text-[11px] font-semibold uppercase tracking-wider text-[var(--color-text-dim)]">{g.name}</h3>}
-          <div className="flex flex-wrap gap-1.5">
+        <section key={g.name ?? `g${gi}`} className="space-y-2">
+          {g.name && <h3 className="filter-label">{g.name}</h3>}
+          <div className="filter-options">
             {g.items.map((item) => {
               const on = selected.includes(item.value);
               const blocked = full && !on;
@@ -173,10 +170,11 @@ export function PickerList<V extends string | number>({
                   aria-pressed={on}
                   aria-disabled={blocked || undefined}
                   onClick={() => toggle(item.value)}
-                  title={blocked ? `At most ${max} selections` : item.hint}
-                  className={`max-w-full truncate px-3 py-1.5 ${togglePill(on, blocked)}`}
+                  title={blocked ? `At most ${max} selections` : item.hint ? `${item.label} · ${item.hint}` : item.label}
+                  className="filter-option"
                 >
-                  {item.label}
+                  <span className="filter-option__label">{item.label}</span>
+                  {on && <Check className="size-4 shrink-0" aria-hidden />}
                 </button>
               );
             })}

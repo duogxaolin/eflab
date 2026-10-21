@@ -93,16 +93,20 @@ export function PackCarousel({
       onTouchStart={() => setInteracting(true)}
       onTouchEnd={() => setInteracting(false)}
     >
-      <div className="flex min-w-0 items-baseline justify-between gap-2 border-b border-[var(--color-line-separator)]/60 pb-2">
-        <Link
-          href={`/packs/${bundle.slug}`}
-          className="min-w-0 truncate text-sm font-medium text-[var(--color-text-primary)] no-underline transition-colors hover:text-[var(--color-accent)]"
-        >
-          {bundle.name}
-        </Link>
+      {/* Row header (reference): title 14/20 500 at 90 % white on the left,
+          12/16 muted date on the right, baseline-aligned; our pause /
+          previous / next controls follow the date. */}
+      <div className="flex min-w-0 items-baseline justify-between gap-2">
+        {/* Same title look as /packs (14/500 at 90 % white); the ellipsis is
+            on the inner span so the link's touch area is not clipped. */}
+        <h3 className="efb-pack-title min-w-0">
+          <Link href={`/packs/${bundle.slug}`} className="efb-pack-title__link hit-44">
+            <span className="efb-pack-title__text">{bundle.name}</span>
+          </Link>
+        </h3>
 
         <div className="flex shrink-0 items-center gap-2.5">
-          <time dateTime={bundle.releaseDate} className="font-mono text-xs text-[var(--color-text-dim)]">
+          <time dateTime={bundle.releaseDate} className="text-xs text-[var(--color-text-secondary)]">
             {/* UTC so the calendar day never shifts with the viewer's timezone */}
             {formatUtcDate(bundle.releaseDate)}
           </time>
@@ -141,16 +145,19 @@ export function PackCarousel({
         </div>
       </div>
 
-      {/* Horizontal scroll row. Each slot sets the width; the card fills it
-          (size="full") so the art never overflows the slot on narrow screens. */}
+      {/* Horizontal scroll row. Each slot sets the width — 96 px below 768,
+          112 px from 768 (reference w-24 / w-28); the card fills it
+          (size="full") so the art never overflows the slot on narrow screens.
+          The px-1 / py-2 padding leaves room for the 1.05 hover scale inside
+          the scroller's clip. */}
       <div
         ref={scrollRef}
         className="hide-scrollbar flex gap-3 overflow-x-auto px-1 py-2"
         data-testid="carousel-track"
       >
         {bundle.cards.map((p, i) => (
-          <div key={p.id} className="w-24 shrink-0 sm:w-28">
-            <PlayerCard player={p} size="full" showName priority={i < priorityCards} />
+          <div key={p.id} className="w-24 shrink-0 md:w-28">
+            <PlayerCard player={p} size="full" caption="name" priority={i < priorityCards} />
           </div>
         ))}
       </div>

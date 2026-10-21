@@ -19,6 +19,7 @@ import {
   type PlayersState,
 } from "@/lib/filter-url";
 import { FiltersPanel, type FilterDialogKind } from "@/components/filters/FiltersPanel";
+import { PLAYERS_GRID } from "./players-grid";
 import { Modal } from "@/components/filters/Modal";
 import {
   SORT_FIELDS,
@@ -163,33 +164,23 @@ export function PlayersClient() {
   const chooseSort = (sort: PlayersSort) => update({ sort, order: DEFAULT_PLAYERS_STATE.order });
   const fieldSortActive = !isSortPreset(state.sort);
 
+  // Sort row: the five presets as a 32 px segmented radiogroup next to the
+  // field-sort select (our addition: "More sorts…") and, while a field sort
+  // is active, its direction. From 768 px the row sits right of the title and
+  // wraps right-aligned when it does not fit (one line from 1280 px); below
+  // 768 px it scrolls sideways edge to edge (-mx-4 matches the page gutter).
+  // The vertical padding keeps the focus rings inside the scroller; `relative`
+  // keeps any absolutely positioned descendant inside its clip.
   const sortControl = (
-    <div className="flex flex-wrap items-center gap-2">
-      <div
-        role="radiogroup"
-        aria-label="Sort"
-        className="flex max-w-full items-center gap-0.5 overflow-x-auto rounded-full border border-white/10 bg-white/[0.04] p-0.5 hide-scrollbar"
-      >
-        {SORT_PRESETS.map((p) => {
-          const checked = state.sort === p;
-          return (
-            <button
-              key={p}
-              type="button"
-              role="radio"
-              aria-checked={checked}
-              onClick={() => chooseSort(p)}
-              className={`shrink-0 whitespace-nowrap rounded-full px-3 py-1.5 text-xs font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--color-accent)] ${
-                checked ? "bg-white/[0.14] text-white shadow-sm" : "text-white/70 hover:text-white"
-              }`}
-            >
+    <div className="relative -mx-4 -my-1 overflow-x-auto px-4 py-1 hide-scrollbar md:mx-0 md:min-w-0 md:overflow-visible md:px-0">
+      <div className="flex w-max items-center gap-2 md:w-auto md:flex-wrap md:justify-end">
+        <div role="radiogroup" aria-label="Sort" className="segment shrink-0 p-1">
+          {SORT_PRESETS.map((p) => (
+            <button key={p} type="button" role="radio" aria-checked={state.sort === p} onClick={() => chooseSort(p)} className="segment__item hit-44">
               {SORT_PRESET_LABELS[p]}
             </button>
-          );
-        })}
-      </div>
-      <label className="flex items-center gap-1.5 text-[11px] text-[var(--color-text-secondary)]">
-        <span className="sr-only sm:not-sr-only">More</span>
+          ))}
+        </div>
         <select
           aria-label="Sort by field"
           value={fieldSortActive ? state.sort : ""}
@@ -197,83 +188,82 @@ export function PlayersClient() {
             const v = e.target.value;
             if (isSortField(v)) chooseSort(v);
           }}
-          className="h-7 max-w-[9rem] rounded-full border border-white/10 bg-white/[0.04] px-2 text-[11px] text-white focus:border-[var(--color-accent)] focus:outline-none"
+          className={`h-10 w-36 shrink-0 cursor-pointer rounded-full border border-transparent bg-[var(--color-panel)] px-3 text-sm font-medium transition-colors hover:border-[var(--color-field-border-hover)] focus:border-[var(--color-field-border-focus)] focus:outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-focus)] ${
+            fieldSortActive ? "text-[var(--color-text-primary)]" : "text-[var(--color-text-secondary)]"
+          }`}
         >
-          <option value="" disabled className="bg-[#18181b]">
-            Field…
+          <option value="" disabled className="bg-[var(--color-panel)]">
+            More sorts…
           </option>
           {FIELD_SORT_OPTIONS.map((o) => (
-            <option key={o.value} value={o.value} className="bg-[#18181b] text-white">
+            <option key={o.value} value={o.value} className="bg-[var(--color-panel)] text-[var(--color-text-primary)]">
               {o.label}
             </option>
           ))}
         </select>
-      </label>
-      {fieldSortActive && (
-        <div className="flex items-center gap-0.5 rounded-full border border-white/10 bg-white/[0.04] p-0.5" role="group" aria-label="Sort direction">
-          {([
-            ["desc", "High to low"],
-            ["asc", "Low to high"],
-          ] as const).map(([dir, label]) => (
-            <button
-              key={dir}
-              type="button"
-              aria-pressed={state.order === dir}
-              onClick={() => update({ order: dir })}
-              className={`rounded-full px-2.5 py-1 text-[11px] ${state.order === dir ? "bg-white/[0.14] text-white" : "text-white/70 hover:text-white"}`}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-      )}
+        {fieldSortActive && (
+          <div className="segment shrink-0 p-1" role="group" aria-label="Sort direction">
+            {([
+              ["desc", "High to low"],
+              ["asc", "Low to high"],
+            ] as const).map(([dir, label]) => (
+              <button key={dir} type="button" aria-pressed={state.order === dir} onClick={() => update({ order: dir })} className="segment__item hit-44">
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 
   const panel = <FiltersPanel state={state} update={update} openDialog={setDialog} />;
 
   return (
-    <div className="space-y-5">
-      {/* Breadcrumbs matching efootbase */}
-      <ol data-slot="breadcrumbs" aria-label="Breadcrumbs" className="breadcrumbs -ml-0.5 list-none p-0 m-0">
-        <li className="breadcrumbs__item">
-          <Link className="breadcrumbs__link text-xs" href="/">
-            Home
-          </Link>
-          <span className="breadcrumbs__separator text-xs">›</span>
-        </li>
-        <li className="breadcrumbs__item text-white text-xs font-medium">Players</li>
-      </ol>
+    <div className="lg:grid lg:grid-cols-[minmax(0,1fr)_17.5rem] lg:items-start lg:gap-6">
+      <div className="min-w-0">
+        <ol data-slot="breadcrumbs" aria-label="Breadcrumbs" className="breadcrumbs -ml-0.5 m-0 list-none p-0">
+          <li className="breadcrumbs__item">
+            <Link className="breadcrumbs__link hit-44" href="/">
+              Home
+            </Link>
+            <span className="breadcrumbs__separator" aria-hidden>
+              ›
+            </span>
+          </li>
+          <li className="breadcrumbs__item" aria-current="page">
+            Players
+          </li>
+        </ol>
 
-      <div className="lg:grid lg:grid-cols-[minmax(0,1fr)_17.5rem] lg:items-start lg:gap-6">
-        <div className="min-w-0 space-y-4">
-          {/* Header: title + Sort (efootbase radiogroup) */}
-          <header className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-            <div className="space-y-1">
-              <h1 className="text-3xl font-bold tracking-tight text-white sm:text-4xl">Players</h1>
-              <p className="text-xs text-[var(--color-text-secondary)] sm:text-sm">Browse and search the eFootball player database.</p>
-            </div>
-            {sortControl}
-          </header>
+        {/* Title (24/30) + sort row: side by side from 768 px (the title
+            centred on the first 40 px line of the sort row), stacked below. */}
+        <header className="mt-4 flex flex-col gap-3 md:flex-row md:items-start md:justify-between md:gap-4">
+          <div className="shrink-0 md:flex md:h-10 md:items-center">
+            <h1 className="efb-h1 efb-h1--compact text-[var(--color-text-primary)]">Players</h1>
+          </div>
+          {sortControl}
+        </header>
 
-          {/* Search + mobile Filters button */}
-          <div className="flex items-center gap-2">
-            <form
-              role="search"
-              onSubmit={(e) => {
-                e.preventDefault();
-                if (qInput.trim() !== state.q) update({ q: qInput.trim() });
-              }}
-              className="relative min-w-0 flex-1"
-            >
-              <Search className="pointer-events-none absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-white/40" aria-hidden />
+        {/* Search (44 px, radius 12) + the Filters button below 1024 px */}
+        <div className="mt-4 flex items-center gap-2">
+          <form
+            role="search"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (qInput.trim() !== state.q) update({ q: qInput.trim() });
+            }}
+            className="min-w-0 flex-1"
+          >
+            <div className="field field--lg">
+              <Search className="size-4 shrink-0 text-[var(--color-text-secondary)]" aria-hidden />
               <input
                 type="search"
                 value={qInput}
                 onChange={(e) => setQInput(e.target.value)}
                 placeholder="Search players by name…"
                 aria-label="Search players by name…"
-                className="h-10 w-full rounded-full border border-white/10 bg-white/[0.04] pl-10 pr-9 text-sm text-white placeholder-white/40 transition-colors focus:border-[var(--color-accent)] focus:outline-none"
+                className="field__input no-native-clear"
               />
               {qInput && (
                 <button
@@ -282,95 +272,95 @@ export function PlayersClient() {
                     setQInput("");
                     update({ q: "" });
                   }}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 cursor-pointer text-white/40 transition-colors hover:text-white"
+                  className="hit-44 inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-full bg-[var(--color-default)] text-[var(--color-text-secondary)] transition-colors hover:text-[var(--color-text-primary)]"
                   aria-label="Clear search"
                 >
-                  <X className="size-4" aria-hidden />
+                  <X className="size-3.5" aria-hidden />
                 </button>
               )}
-            </form>
-            <button
-              type="button"
-              onClick={() => setMobileFilters(true)}
-              aria-haspopup="dialog"
-              className="inline-flex h-10 shrink-0 items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.06] px-3.5 text-xs font-semibold text-white hover:bg-white/[0.1] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-accent)] lg:hidden"
-            >
-              <SlidersHorizontal className="size-4 text-[var(--color-accent)]" aria-hidden />
-              Filters
-              {activeFilters > 0 && (
-                <span className="rounded-full bg-[var(--color-accent)] px-1.5 text-[10px] font-bold text-black" aria-label={`${activeFilters} active`}>
-                  {activeFilters}
-                </span>
-              )}
-            </button>
-          </div>
-
-          {/* Counter + reset. One unit ("cards") throughout; while a new query is
-              in flight the grid still shows the previous result (placeholderData),
-              so the counter says "Updating…" instead of a stale total. */}
-          <p ref={gridTopRef} className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs tabular-nums text-[var(--color-text-secondary)]">
-            <span aria-live="polite" aria-busy={listQuery.isPlaceholderData || undefined}>
-              {listQuery.isError
-                ? "—"
-                : listQuery.isPending
-                  ? "Loading…"
-                  : listQuery.isPlaceholderData
-                    ? "Updating…"
-                    : `${total.toLocaleString("en-US")} cards · page ${state.page.toLocaleString("en-US")} of ${totalPages.toLocaleString("en-US")}`}
-            </span>
-            {hasAnyState(state) && (
-              <button
-                type="button"
-                onClick={resetAll}
-                className="ml-auto inline-flex cursor-pointer items-center gap-1 rounded-full border border-transparent px-2.5 py-1 text-xs font-medium text-white/60 transition-colors hover:border-white/10 hover:bg-white/[0.06] hover:text-[var(--color-accent-danger)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-accent)]"
-                title="Reset search, filters and sort"
+            </div>
+          </form>
+          <button
+            type="button"
+            onClick={() => setMobileFilters(true)}
+            aria-haspopup="dialog"
+            className="button button--md button--secondary h-11 shrink-0 text-[var(--color-accent-soft-foreground)] lg:hidden"
+          >
+            <SlidersHorizontal className="size-4" aria-hidden />
+            Filters
+            {activeFilters > 0 && (
+              <span
+                className="rounded-full bg-[var(--color-accent)] px-1.5 text-[10px] font-bold leading-4 text-[var(--color-accent-foreground)]"
+                aria-label={`${activeFilters} active`}
               >
-                <RotateCcw className="size-3" aria-hidden />
-                <span>Reset</span>
-              </button>
+                {activeFilters}
+              </span>
             )}
-          </p>
-
-          {/* Card grid */}
-          {listQuery.isError ? (
-            <QueryErrorState error={listQuery.error} onRetry={() => void listQuery.refetch()} title="Could not load players" />
-          ) : listQuery.isPending ? (
-            <CardGridSkeleton className="grid grid-cols-3 gap-3 px-1 py-2 sm:grid-cols-4 md:grid-cols-5 xl:grid-cols-6" />
-          ) : players.length === 0 ? (
-            <div className="space-y-2 rounded-2xl border border-[var(--color-line)] bg-[var(--color-panel)] p-12 text-center text-xs text-[var(--color-text-dim)]">
-              <p>No players match your search and filter criteria.</p>
-              {activeFilters > 0 && (
-                <button type="button" onClick={resetAll} className="cursor-pointer text-[var(--color-accent)] hover:underline">
-                  Reset all filters
-                </button>
-              )}
-            </div>
-          ) : (
-            <div
-              className={`grid grid-cols-3 gap-3 px-1 py-2 sm:grid-cols-4 md:grid-cols-5 xl:grid-cols-6 ${listQuery.isPlaceholderData ? "opacity-60" : ""}`}
-              aria-busy={listQuery.isPlaceholderData}
-            >
-              {players.map((p) => (
-                <PlayerCard key={p.id} player={p} showName />
-              ))}
-            </div>
-          )}
-
-          <Pagination page={state.page} totalPages={totalPages} onChange={(p) => update({ page: p })} />
+          </button>
         </div>
 
-        {/* Desktop sidebar (efootbase "Filters" panel) */}
-        <aside
-          aria-label="Filters"
-          className="sticky top-20 hidden max-h-[calc(100dvh-6rem)] overflow-y-auto rounded-2xl border border-[var(--color-line)] bg-[var(--color-panel)] p-4 lg:block"
-        >
-          <h2 className="mb-3 text-base font-semibold text-white">Filters</h2>
-          {panel}
-        </aside>
+        {/* Counter (12 px muted) + reset. One unit ("cards") throughout; while
+            a new query is in flight the grid still shows the previous result
+            (placeholderData), so the counter says "Updating…" instead of a
+            stale total. */}
+        <div ref={gridTopRef} className="mt-3 flex min-h-8 flex-wrap items-center gap-x-3 gap-y-2 text-xs tabular-nums text-[var(--color-text-secondary)]">
+          <span className="mr-auto" aria-live="polite" aria-busy={listQuery.isPlaceholderData || undefined}>
+            {listQuery.isError
+              ? "—"
+              : listQuery.isPending
+                ? "Loading…"
+                : listQuery.isPlaceholderData
+                  ? "Updating…"
+                  : `${total.toLocaleString("en-US")} cards · page ${state.page.toLocaleString("en-US")} of ${totalPages.toLocaleString("en-US")}`}
+          </span>
+          {hasAnyState(state) && (
+            <button
+              type="button"
+              onClick={resetAll}
+              className="hit-44 inline-flex h-8 cursor-pointer items-center gap-1 rounded-full px-2.5 text-xs font-medium text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-default)] hover:text-[var(--color-text-primary)]"
+              title="Reset search, filters and sort"
+            >
+              <RotateCcw className="size-3" aria-hidden />
+              <span>Reset</span>
+            </button>
+          )}
+        </div>
+
+        {/* Card grid: 4 columns, 6 from 768, 5 beside the rail from 1024, 6 from 1280 */}
+        {listQuery.isError ? (
+          <div className="mt-2">
+            <QueryErrorState error={listQuery.error} onRetry={() => void listQuery.refetch()} title="Could not load players" />
+          </div>
+        ) : listQuery.isPending ? (
+          <CardGridSkeleton className={`mt-1 ${PLAYERS_GRID}`} />
+        ) : players.length === 0 ? (
+          <div className="mt-2 space-y-2 rounded-[var(--radius-panel)] bg-[var(--color-panel)] p-12 text-center text-sm text-[var(--color-text-secondary)]">
+            <p>No players match your search and filter criteria.</p>
+            {activeFilters > 0 && (
+              <button type="button" onClick={resetAll} className="hit-44 cursor-pointer font-medium text-[var(--color-accent)] hover:underline">
+                Reset all filters
+              </button>
+            )}
+          </div>
+        ) : (
+          <div className={`mt-1 ${PLAYERS_GRID} ${listQuery.isPlaceholderData ? "opacity-60" : ""}`} aria-busy={listQuery.isPlaceholderData}>
+            {players.map((p) => (
+              <PlayerCard key={p.id} player={p} caption="styles" />
+            ))}
+          </div>
+        )}
+
+        <Pagination className="mt-4" page={state.page} totalPages={totalPages} onChange={(p) => update({ page: p })} />
       </div>
 
-      {/* Mobile: the same panel in a dialog */}
-      <Modal open={mobileFilters} onClose={() => setMobileFilters(false)} title="Filters">
+      {/* Desktop rail (≥ 1024): sticky, 280 px, #181818, radius 24, padding 16 */}
+      <aside aria-label="Filters" className="filter-rail sticky top-24 hidden max-h-[calc(100dvh-6rem)] overflow-y-auto lg:block">
+        <h2 className="filter-rail__title">Filters</h2>
+        {panel}
+      </aside>
+
+      {/* Below 1024: the same panel in a bottom sheet */}
+      <Modal variant="sheet" open={mobileFilters} onClose={() => setMobileFilters(false)} title="Filters">
         {panel}
       </Modal>
 

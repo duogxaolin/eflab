@@ -1,11 +1,16 @@
 "use client";
 import Link from "next/link";
+import { CalendarDays, Layers, Users } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { PlayerCard } from "@/components/cards/PlayerCard";
 import { QueryErrorState } from "@/lib/query-state";
 import { formatUtcDate } from "@/lib/format-date";
 import type { FeaturedBundleDTO } from "@eflab/shared";
+import { PACK_GRID } from "../pack-grid";
 
+// One featured bundle (not in the reference capture): the /packs header and
+// grid — H1 36/40, stat chips with our counts (cards, distinct players, the
+// UTC release date), the 4 / 5 / 6 / 7 / 8 column grid with "styles" captions.
 export function PackClient({ slug, initialData }: { slug: string; initialData: FeaturedBundleDTO }) {
   const q = trpc.featured.bySlug.useQuery({ slug }, { initialData });
 
@@ -13,43 +18,55 @@ export function PackClient({ slug, initialData }: { slug: string; initialData: F
     return <QueryErrorState error={q.error} onRetry={() => void q.refetch()} title="Could not load this pack" />;
   }
   const bundle = q.data ?? initialData;
+  const players = new Set(bundle.cards.map((c) => c.baseId)).size;
 
   return (
-    <div className="space-y-6">
-      {/* Breadcrumbs matching efootbase */}
-      <ol data-slot="breadcrumbs" aria-label="Breadcrumbs" className="breadcrumbs -ml-0.5 list-none p-0 m-0">
+    <div>
+      <ol data-slot="breadcrumbs" aria-label="Breadcrumbs" className="breadcrumbs -ml-0.5 mb-3 list-none p-0">
         <li className="breadcrumbs__item">
-          <Link className="breadcrumbs__link text-xs" href="/">
+          <Link className="breadcrumbs__link hit-44" href="/">
             Home
           </Link>
-          <span className="breadcrumbs__separator text-xs">›</span>
+          <span className="breadcrumbs__separator" aria-hidden>
+            ›
+          </span>
         </li>
         <li className="breadcrumbs__item">
-          <Link className="breadcrumbs__link text-xs" href="/packs">
+          <Link className="breadcrumbs__link hit-44" href="/packs">
             Packs
           </Link>
-          <span className="breadcrumbs__separator text-xs">›</span>
+          <span className="breadcrumbs__separator" aria-hidden>
+            ›
+          </span>
         </li>
-        <li className="breadcrumbs__item text-white text-xs font-medium">{bundle.name}</li>
+        <li className="breadcrumbs__item" aria-current="page">
+          {bundle.name}
+        </li>
       </ol>
 
-      <div className="space-y-1">
-        <h1 className="text-3xl font-bold sm:text-4xl text-white tracking-tight">{bundle.name}</h1>
-        <p className="text-xs sm:text-sm text-[var(--color-text-secondary)]">
-          {bundle.cards.length} player cards · Released{" "}
-          <time dateTime={bundle.releaseDate}>{formatUtcDate(bundle.releaseDate)}</time>
-        </p>
-      </div>
+      <h1 className="efb-h1 text-[var(--color-text-primary)]">{bundle.name}</h1>
+      <ul className="mt-3 flex list-none flex-wrap items-center gap-2 p-0" aria-label="Pack details">
+        <li className="efb-stat-chip">
+          <Layers className="size-4 text-[var(--color-text-secondary)]" aria-hidden />
+          {bundle.cards.length} {bundle.cards.length === 1 ? "card" : "cards"}
+        </li>
+        <li className="efb-stat-chip">
+          <Users className="size-4 text-[var(--color-text-secondary)]" aria-hidden />
+          {players} {players === 1 ? "player" : "players"}
+        </li>
+        <li className="efb-stat-chip">
+          <CalendarDays className="size-4 text-[var(--color-text-secondary)]" aria-hidden />
+          Released <time dateTime={bundle.releaseDate}>{formatUtcDate(bundle.releaseDate)}</time>
+        </li>
+      </ul>
 
       {bundle.cards.length === 0 ? (
-        <div className="p-12 text-center rounded-2xl bg-[var(--color-panel)] border border-[var(--color-line)] text-xs text-[var(--color-text-dim)]">
-          This pack has no cards.
-        </div>
+        <div className="mt-8 rounded-2xl bg-[var(--color-panel)] p-12 text-center text-xs text-[var(--color-text-secondary)]">This pack has no cards.</div>
       ) : (
-        // Cards in efootbase display order (FeaturedBundleCard.ordinal).
-        <div className="grid grid-cols-4 gap-3 px-1 py-2 sm:grid-cols-5 md:grid-cols-6 lg:grid-cols-7 xl:grid-cols-8">
+        // Cards in the source's display order (FeaturedBundleCard.ordinal).
+        <div className={`mt-6 ${PACK_GRID}`}>
           {bundle.cards.map((c) => (
-            <PlayerCard key={c.id} player={c} showName />
+            <PlayerCard key={c.id} player={c} caption="styles" />
           ))}
         </div>
       )}

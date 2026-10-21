@@ -2,9 +2,6 @@
 import { useEffect, useId, useState } from "react";
 import type { IntRange } from "@eflab/shared";
 
-const inputClass =
-  "h-8 w-full min-w-0 rounded-lg border border-white/10 bg-white/[0.06] px-2 text-center font-mono text-xs text-white placeholder-white/40 focus:border-[var(--color-accent)] focus:outline-none";
-
 /**
  * Min – Max pair for an integer range filter (efootbase "Base Overall Rating:
  * Min / Max" inputs; also used where efootbase draws range sliders). Values
@@ -28,7 +25,8 @@ export function RangeFields({
   bounds: readonly [number, number];
   onChange: (next: IntRange | null) => void;
   unit?: string;
-  /** Tighter layout for the long stat / body-model lists. */
+  /** Dialog layout for the long stat / body-model lists: the label is a
+   *  14 px white field name instead of the rail's 12 px muted section label. */
   compact?: boolean;
 }) {
   const id = useId();
@@ -80,14 +78,21 @@ export function RangeFields({
           : `≤ ${value.max}${unit ?? ""}`;
 
   return (
-    <div role="group" aria-labelledby={`${id}-label`} className={compact ? "space-y-1" : "space-y-1.5"}>
-      <div className="flex items-center justify-between gap-2 text-xs">
-        <span id={`${id}-label`} className={`font-medium ${compact ? "text-white/85" : "text-white"}`}>
+    <div role="group" aria-labelledby={`${id}-label`} className="space-y-2">
+      <div className="flex items-baseline justify-between gap-2">
+        <span
+          id={`${id}-label`}
+          className={compact ? "min-w-0 text-sm font-semibold leading-5 text-[var(--color-text-primary)]" : "filter-label min-w-0"}
+        >
           {label}
         </span>
-        <span className={`font-mono tabular-nums ${value === null ? "text-[var(--color-text-dim)]" : "text-[var(--color-accent)]"}`}>{summary}</span>
+        <span
+          className={`shrink-0 text-xs font-semibold tabular-nums ${value === null ? "text-[var(--color-text-secondary)]" : "text-[var(--color-accent)]"}`}
+        >
+          {summary}
+        </span>
       </div>
-      <div className="flex items-center gap-1.5">
+      <div className="flex items-center gap-2">
         <input
           type="number"
           inputMode="numeric"
@@ -99,11 +104,8 @@ export function RangeFields({
           onChange={(e) => setMinDraft(e.target.value)}
           onBlur={() => commit(minDraft, maxDraft)}
           onKeyDown={onKey}
-          className={inputClass}
+          className="filter-number"
         />
-        <span className="text-xs text-[var(--color-text-dim)]" aria-hidden>
-          –
-        </span>
         <input
           type="number"
           inputMode="numeric"
@@ -115,7 +117,7 @@ export function RangeFields({
           onChange={(e) => setMaxDraft(e.target.value)}
           onBlur={() => commit(minDraft, maxDraft)}
           onKeyDown={onKey}
-          className={inputClass}
+          className="filter-number"
         />
       </div>
     </div>
