@@ -2,12 +2,13 @@
 import type { Route } from "next";
 import { useRouter } from "next/navigation";
 import { useState, useRef, useEffect, useId } from "react";
+import { SEARCH_MIN_LENGTH, type CardPreview } from "@eflab/shared";
 import { trpc } from "@/lib/trpc";
 import { PlayerCard } from "@/components/cards/PlayerCard";
 import { PackCarousel } from "@/components/packs/PackCarousel";
 import { PlayerSearchRow } from "@/components/search/PlayerSearchRow";
 import { QueryErrorState } from "@/lib/query-state";
-import { useDebouncedValue, SEARCH_MIN_LENGTH } from "@/lib/use-debounced-value";
+import { useDebouncedValue } from "@/lib/use-debounced-value";
 import { Search, Sparkles, Package, X } from "lucide-react";
 import { SectionHeader } from "@/components/layout/SectionHeader";
 
@@ -15,6 +16,12 @@ import { SectionHeader } from "@/components/layout/SectionHeader";
 // live results, "Latest Players" (12 cards) and "Latest Packs". No hero, no
 // quick filters, no "Latest card" aside — the card-type and overall lists stay
 // reachable from /players (`card=5`, `base=90-`, …).
+//
+// The search is an APG combobox (efootbase-behaviour-parity "Home Search
+// Combobox", B7): DOM focus stays in the input, ArrowDown / ArrowUp move the
+// active option (`aria-activedescendant` over `role="option"` rows, wrapping),
+// Enter opens the active card or, with none, the full list on /players; the
+// first Escape closes the list and keeps the text, a second one clears it.
 
 /** Cards in the "Latest Players" grid (2 rows of 6, 4 rows of 3 below 768 px). */
 const LATEST_COUNT = 12;
@@ -30,10 +37,15 @@ function isTypingTarget(target: EventTarget | null): boolean {
 export default function HomePage() {
   const router = useRouter();
   const [q, setQ] = useState("");
-  const [isFocused, setIsFocused] = useState(false);
+  // Whether the results list may show (it also needs a non-empty query).
+  const [listOpen, setListOpen] = useState(false);
+  // The active option, by card id: an id that is no longer among the results
+  // (a new query answered) simply reads as "no active option".
+  const [activeId, setActiveId] = useState<string | null>(null);
   const searchRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const listboxId = useId();
+  const optionId = (i: number) => `${listboxId}-opt-${i}`;
 
   // `/` focuses the search box when the user is not already typing in a field
   // (and no modal, e.g. the ⌘K palette, is open).
@@ -52,19 +64,11 @@ export default function HomePage() {
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
       if (searchRef.current && !searchRef.current.contains(event.target as Node)) {
-        setIsFocused(false);
+        setListOpen(false);
       }
     }
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, []);
-
-  useEffect(() => {
-    function onKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape") setIsFocused(false);
-    }
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
   // Newest distinct base players by releaseDate DESC (newest card of each).
@@ -77,14 +81,70 @@ export default function HomePage() {
   const search = trpc.player.search.useQuery({ q: debouncedQ, limit: 8 }, { enabled: canSearch });
 
   const latestCards = (latest.data ?? []).slice(0, LATEST_COUNT);
-  const searchResults = canSearch ? (search.data ?? []).slice(0, 6) : [];
-  const showDropdown = isFocused && q.trim().length > 0;
+  const searchResults = canSearch && !search.isError ? (search.data ?? []).slice(0, 6) : [];
+  const showDropdown = listOpen && q.trim().length > 0;
+  const activeIndex = showDropdown && activeId !== null ? searchResults.findIndex((p) => p.id === activeId) : -1;
+
+  // Keep the active option visible inside the scrolling list.
+  useEffect(() => {
+    if (activeIndex < 0) return;
+    document.getElementById(optionId(activeIndex))?.scrollIntoView({ block: "nearest" });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeIndex]);
+
+  const closeList = () => {
+    setListOpen(false);
+    setActiveId(null);
+  };
+
+  const openCard = (p: CardPreview) => {
+    closeList();
+    router.push(`/players/${p.baseId}/${p.id}`);
+  };
 
   const submitSearch = (e: React.FormEvent) => {
     e.preventDefault();
-    setIsFocused(false);
+    const active = activeIndex >= 0 ? searchResults[activeIndex] : undefined;
+    if (active) {
+      openCard(active);
+      return;
+    }
+    closeList();
     if (q.trim()) router.push(`/players?search=${encodeURIComponent(q.trim())}`);
     else router.push("/players");
+  };
+
+  const onInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    // Never act in the middle of an IME composition (CJK names).
+    if (e.nativeEvent.isComposing) return;
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      if (!showDropdown) {
+        // A closed list with text opens again (no option active yet).
+        if (q.trim()) {
+          e.preventDefault();
+          setListOpen(true);
+        }
+        return;
+      }
+      const n = searchResults.length;
+      if (n === 0) return;
+      e.preventDefault();
+      const next = e.key === "ArrowDown" ? (activeIndex + 1) % n : activeIndex <= 0 ? n - 1 : activeIndex - 1;
+      setActiveId(searchResults[next]!.id);
+      return;
+    }
+    if (e.key === "Escape") {
+      // preventDefault also stops the native `type="search"` clear, which
+      // would otherwise wipe the text on the first press.
+      if (showDropdown) {
+        e.preventDefault();
+        closeList();
+      } else if (q) {
+        e.preventDefault();
+        setQ("");
+        setActiveId(null);
+      }
+    }
   };
 
   const bundles = [...(featuredBundles.data ?? [])]
@@ -98,7 +158,23 @@ export default function HomePage() {
       <h1 className="sr-only">eFootLab — eFootball player database</h1>
 
       {/* Search: 44 px, radius 12, `/` chip; live results below it. */}
-      <div ref={searchRef} className="relative">
+      <div
+        ref={searchRef}
+        className="relative"
+        onKeyDown={(e) => {
+          // Escape on a control inside the open list (Retry, "View all"):
+          // close it and return to the input. The input handles its own.
+          if (e.key !== "Escape" || e.defaultPrevented || e.target === inputRef.current || !showDropdown) return;
+          e.preventDefault();
+          closeList();
+          inputRef.current?.focus();
+        }}
+        onBlur={(e) => {
+          // Tabbing out of the search closes the list (a click outside is
+          // handled by the mousedown listener).
+          if (e.relatedTarget instanceof Node && !e.currentTarget.contains(e.relatedTarget)) closeList();
+        }}
+      >
         <form onSubmit={submitSearch} role="search">
           <div className="field field--lg field--outlined">
             <Search className="size-4 shrink-0 text-[var(--color-text-secondary)]" aria-hidden />
@@ -106,17 +182,21 @@ export default function HomePage() {
               ref={inputRef}
               type="search"
               value={q}
-              onFocus={() => setIsFocused(true)}
+              onFocus={() => setListOpen(true)}
               onChange={(e) => {
                 setQ(e.target.value);
-                setIsFocused(true);
+                setActiveId(null);
+                setListOpen(true);
               }}
+              onKeyDown={onInputKeyDown}
               placeholder="Search players by name…"
               aria-label="Search players"
               role="combobox"
               aria-expanded={showDropdown}
               aria-controls={listboxId}
               aria-autocomplete="list"
+              aria-activedescendant={activeIndex >= 0 ? optionId(activeIndex) : undefined}
+              autoComplete="off"
               enterKeyHint="search"
               className="field__input no-native-clear"
             />
@@ -125,6 +205,7 @@ export default function HomePage() {
                 type="button"
                 onClick={() => {
                   setQ("");
+                  setActiveId(null);
                   inputRef.current?.focus();
                 }}
                 className="hit-44 inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-full bg-[var(--color-default)] text-[var(--color-text-secondary)] transition-colors hover:text-[var(--color-text-primary)]"
@@ -140,7 +221,7 @@ export default function HomePage() {
 
           {/* Live results */}
           {showDropdown && (
-            <div id={listboxId} className="efb-home-results">
+            <div className="efb-home-results">
               <div className="flex items-center justify-between gap-3 px-3 py-1.5 text-xs text-[var(--color-text-secondary)]" aria-live="polite">
                 <span>
                   {!canSearch
@@ -160,17 +241,20 @@ export default function HomePage() {
                   </button>
                 </div>
               ) : searchResults.length > 0 ? (
-                <div className="max-h-80 overflow-y-auto" role="listbox" aria-label="Search results">
-                  {searchResults.map((p) => (
+                <div id={listboxId} className="max-h-80 overflow-y-auto" role="listbox" aria-label="Search results">
+                  {searchResults.map((p, i) => (
                     <PlayerSearchRow
                       key={p.id}
+                      id={optionId(i)}
                       player={p}
                       role="option"
-                      aria-selected={false}
-                      onClick={() => {
-                        setIsFocused(false);
-                        router.push(`/players/${p.baseId}/${p.id}`);
-                      }}
+                      aria-selected={i === activeIndex}
+                      // Options are not tab stops (focus stays in the input,
+                      // aria-activedescendant points at them); a mouse press
+                      // must not blur the input before the click opens the card.
+                      tabIndex={-1}
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => openCard(p)}
                     />
                   ))}
                 </div>
@@ -182,7 +266,7 @@ export default function HomePage() {
                 <button
                   type="button"
                   onClick={() => {
-                    setIsFocused(false);
+                    closeList();
                     router.push(`/players?search=${encodeURIComponent(q.trim())}`);
                   }}
                   className="flex w-full cursor-pointer items-center justify-center rounded-xl py-2 text-xs font-semibold text-[var(--color-accent)] transition-colors hover:bg-[var(--color-default)]"
@@ -223,7 +307,7 @@ export default function HomePage() {
         ) : (
           <div className="space-y-6">
             {bundles.map((bundle) => (
-              <PackCarousel key={bundle.id} bundle={bundle} autoScroll={true} />
+              <PackCarousel key={bundle.id} bundle={bundle} />
             ))}
 
             {featuredBundles.isPending &&

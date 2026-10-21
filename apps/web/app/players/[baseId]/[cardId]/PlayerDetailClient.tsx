@@ -1,7 +1,8 @@
 "use client";
-import { useEffect, useId, useMemo, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { CalendarDays, ChevronDown, Footprints, MoveVertical, Sparkles, Weight } from "lucide-react";
+import type { Route } from "next";
+import { CalendarDays, ChevronDown, Circle, CircleCheck, Footprints, MoveVertical, Sparkles, Swords, Weight } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { PlayerCard } from "@/components/cards/PlayerCard";
 import { PitchMap } from "@/components/players/PitchMap";
@@ -23,21 +24,28 @@ import {
   type SkillDTO,
   type TrainingCategory,
 } from "@eflab/shared";
-import { Modal } from "@/components/filters/Modal";
+import { DeferredModal, prefetchModal } from "@/components/build-simulator/deferred";
 import {
+  BuildSettings,
+  CategoryAdjust,
   ProgressionDock,
   ProgressionPanel,
   boosterSummary,
   defaultProgressionState,
   isCustomBuild,
+  progressionIds,
   type ProgressionState,
 } from "@/components/build-simulator/ProgressionPanel";
+// Type only: the static copy is passed in by the server page (`notes`).
+import type { BuildNotes } from "@/components/build-simulator/build-notes";
 import { CardInfo } from "@/components/detail/CardInfo";
 import { BodyModel } from "@/components/detail/BodyModel";
 import { StarRating } from "@/components/detail/StarRating";
-import { CategoryRow, KeyStats, StatGrid, type StatHighlight } from "@/components/detail/StatGrid";
+import { CategoryRow, KeyStats, STAT_CATEGORIES, StatGrid, type StatHighlight } from "@/components/detail/StatGrid";
 import { isShowtimeSkill, orderSkills, skillDisplayName } from "@/components/detail/skill-display";
 import { SkillChip } from "@/components/detail/SkillChip";
+import { PlaystyleTrigger } from "@/components/detail/PlaystyleTrigger";
+import { Tooltip } from "@/components/ui/Tooltip";
 import { POSITION_LABEL, conditionLabel, positionOf, playingStyleLabel, statTierClass } from "@/lib/card-display";
 
 // Player detail page body (layout of change efootbase-ui-redesign, measured
@@ -45,26 +53,39 @@ import { POSITION_LABEL, conditionLabel, positionOf, playingStyleLabel, statTier
 //   header   breadcrumb (14/20); H1 36/40 (30/36 below md) + ONE accent pill
 //            "{maxOvr} OVR" (the dump's max-level overall) + a muted 12 px
 //            "dump max · no proficiency bonus" note; a line with position ·
-//            attack style · defence style · condition (12 px icons);
+//            attack style · defence style · condition (12 px icons; the two
+//            styles are description triggers, PlaystyleTrigger);
 //   left     (280 px from lg) 180 px card face (condition letter, no MAX
-//            badges; its OVR block prints the live build overall), three
-//            28 px round marks (nation, club, league), Progression (sticky:
-//            the face, marks and panel sit in the grid's flexible first row,
-//            which grows to the main column's height minus Card Info and
-//            Other Versions, so the panel stays in view while the main column
-//            scrolls and never covers the two cards below it), Card Info,
-//            Other Versions (56 px thumbnails, "+N" tile);
+//            badges; its OVR block prints the live build overall at the
+//            selected position, with that position's label), three 28 px
+//            round marks (nation, club, league), the Progression card
+//            (pinned at 64 px: the face, marks and card sit in a flexible
+//            wrapper that fills the column — as tall as the main column —
+//            minus the Build settings card at its end, so the card stays in
+//            view while the main column scrolls and never covers anything),
+//            then the non-sticky Build settings card (Max Level, Position,
+//            the overall there, "About this build") — efootbase-behaviour-
+//            parity;
+//   row      under both columns, full width: Card Info and Other Versions
+//            (56 px thumbnails, "+N" tile), side by side from lg;
 //   phone    (< lg) no panel in the column: a floating category strip and a
-//            dock above the tab bar (ProgressionDock) open the bottom sheet
-//            holding the same panel; one state source (`build`) for both;
-//   main     one "Overview" content card — description, spec line, category
-//            strip (build's points per category), booster buttons (the only
-//            booster toggles, `build.boosters`), stat view switch, stat
-//            grid (3 columns from lg, 2 below; five tier colours, filled "+N"
-//            booster / "+1" manager chips, click-to-highlight), skills
-//            (Showtime first) — then Body Model and Position & Playstyle
-//            (Best Fit / At POS / "N Full · N Half", pitch, style panel, WF /
-//            Form / Injury Resistance stars).
+//            dock above the tab bar (ProgressionDock) — its proficiency chip
+//            and avatar open a small non-modal manager / proficiency popover,
+//            the strip, points and Progression button open the bottom sheet
+//            holding the same panel and the Build settings, scrolled to the
+//            category rows; one state source (`build`) for all;
+//   main     one "Overview" content card — a Compare shortcut in its heading,
+//            description (playstyle triggers, up to two skill links, "and
+//            other N player skills"), spec line, category strip (build's
+//            points per category), booster buttons (the only booster
+//            toggles, `build.boosters`; readable stat names), stat view
+//            switch, stat grid (3 columns from lg, 2 below; five tier
+//            colours, filled "+N" booster / "+1" manager chips; a row opens
+//            its Adjust popover with the category steppers and the
+//            breakdown), skills (Showtime first, links with a preview) —
+//            then Body Model and Position & Playstyle (Best Fit / At POS /
+//            "N Full · N Half", pitch, style panel, WF / Form / Injury
+//            Resistance stars).
 // The root carries `data-card-tint` (the card type) for the backdrop's static
 // tint (globals.css `.efb-backdrop__tint`).
 // The Progression state lives here because the stat grid, the card face, the
@@ -83,7 +104,8 @@ const DEFENCE_KEY_STATS: readonly BaseStat[] = ["defensiveAwareness", "ballWinni
 const WEAK_FOOT_MAX = 4;
 /** Form / injury resistance are stored 0–2 and shown as value + 1 stars of 3 (efootbase). */
 const THREE_STAR_MAX = 3;
-const SKILLS_PREVIEW = 3;
+/** Skills linked in the Overview paragraph (Showtime first), as the reference. */
+const OVERVIEW_SKILL_LINKS = 2;
 /** Other Versions slots before the "+N" tile (4 × 2 grid of 56 px cards). */
 const VERSIONS_PREVIEW = 8;
 
@@ -115,15 +137,30 @@ export function PlayerDetailClient({
   baseId,
   cardId,
   initialData,
+  notes,
 }: {
   baseId: string;
   cardId: string;
   initialData: PlayerCardDTO;
+  /** Static explanatory copy of the Progression controls and the stat grid
+   *  (build-notes.ts): sent with the server render, not in this bundle. */
+  notes: BuildNotes;
 }) {
   const hasProgressionInitial = initialData.levelCap > 1;
   const [statView, setStatView] = useState<StatView>(hasProgressionInitial ? "build" : "max");
   const [highlight, setHighlight] = useState<StatHighlight>(null);
   const [allVersions, setAllVersions] = useState(false);
+  // "+N" in Other Versions: index of the version link to focus once the rest
+  // is shown, and the polite announcement of it.
+  const versionsListRef = useRef<HTMLUListElement>(null);
+  const focusVersionRef = useRef<number | null>(null);
+  const [versionsNotice, setVersionsNotice] = useState("");
+  useLayoutEffect(() => {
+    const index = focusVersionRef.current;
+    if (!allVersions || index === null) return;
+    focusVersionRef.current = null;
+    versionsListRef.current?.querySelectorAll<HTMLElement>("a.pcb-tile")[index]?.focus();
+  }, [allVersions]);
   // Below lg the long "how the build stats are made" explanation is behind a
   // small disclosure, so the stat grid starts right under the stat view
   // (always shown from lg).
@@ -132,14 +169,37 @@ export function PlayerDetailClient({
   // Progression build (player-progression-simulator): max level, position,
   // stat points per category, booster toggles. Kept in React state, not the URL.
   const [build, setBuildState] = useState<ProgressionState>(() => defaultProgressionState(initialData));
-  const setBuild = (next: ProgressionState) => {
+  // Max Level reset notice of the last change (the panel shows and announces
+  // it); every other change clears it.
+  const [buildNotice, setBuildNotice] = useState<string | null>(null);
+  const setBuild = (next: ProgressionState, notice: string | null = null) => {
     setBuildState(next);
+    setBuildNotice(notice);
     setStatView("build");
   };
+  // Ids shared by the Progression card and the Build settings card, and the
+  // prefix of the stat-row Adjust steppers.
+  const progressionIdBase = useId().replace(/:/g, "");
   const desktop = useDesktopLayout();
   // Mobile Progression sheet. It can only be open below lg: crossing to lg
   // closes it (the Modal's `open` turns false and its close event resets this).
   const [sheetOpen, setSheetOpen] = useState(false);
+  const sheetShown = sheetOpen && desktop === false;
+  // The dock opens the sheet scrolled to the category rows (the manager and
+  // the proficiency have their own popover in the dock). Called by the
+  // Modal once the dialog is shown and laid out (`onShown` — the sheet's
+  // code is loaded on first use, components/build-simulator/deferred.tsx, so
+  // an effect here could run before the dialog exists); the offset is taken
+  // between two rects of the same translated panel, so the slide-in does not
+  // skew it, and only the sheet's scrolling body moves (scrollIntoView could
+  // also scroll the page behind).
+  const scrollSheetToCategories = (dialog: HTMLDialogElement) => {
+    const cats = document.getElementById(progressionIds(progressionIdBase).cats);
+    const body = cats?.closest<HTMLElement>(".efb-modal__body");
+    if (!cats || !body || !dialog.contains(body)) return;
+    const padTop = parseFloat(getComputedStyle(body).paddingTop) || 0;
+    body.scrollTop = Math.max(0, body.scrollTop + cats.getBoundingClientRect().top - body.getBoundingClientRect().top - padTop);
+  };
 
   const q = trpc.player.byId.useQuery({ baseId, cardId }, { initialData });
   const p = q.data ?? initialData;
@@ -206,6 +266,10 @@ export function PlayerDetailClient({
   const orderedSkills = orderSkills(p.skills, skillBySlug);
   const skillLabels = orderedSkills.map((slug) => skillDisplayName(slug, skillBySlug.get(slug)));
   const showtimeCount = orderedSkills.filter((slug) => isShowtimeSkill(skillBySlug.get(slug))).length;
+  // Overview paragraph: up to two skill links, Showtime first — only once the
+  // skill list is loaded (before that the groups and names are unknown).
+  const overviewSkills = skillsQ.data ? orderedSkills.slice(0, OVERVIEW_SKILL_LINKS) : [];
+  const otherSkills = orderedSkills.length - overviewSkills.length;
 
   const regPos: Position = POSITIONS[p.registeredPosition] ?? "GK";
   const fullPositions = POSITIONS.filter((k) => p.positionAptitudes[k] === 0);
@@ -229,11 +293,12 @@ export function PlayerDetailClient({
   const bestPos = bestFitPosition(tiles, regPos);
   // Without a panel the card's level cap is 1: "Max" = base + Booster 1 (dump).
   const tilesSource = hasProgression ? "current build" : view === "max" ? "max-level stats (Booster 1 on)" : "level-1 stats";
-  // The card face prints the build's overall (as the reference prints its
-  // build overall there); the header pill is the dump's max overall with its
-  // visible "dump max · no proficiency bonus" note, so the two are never
-  // confused.
-  const cardPlayer = hasProgression ? { ...p, ovr: buildOvr } : p;
+  // The card face prints the build's overall at the selected position with
+  // that position's label (as the reference prints "108 RWF" there; B2 —
+  // the face and its accessible name name the same position); the header
+  // pill is the dump's max overall with its visible "dump max · no
+  // proficiency bonus" note, so the two are never confused.
+  const cardPlayer = hasProgression ? { ...p, ovr: buildOvr, registeredPosition: POSITIONS.indexOf(build.position) } : p;
   const atkDesc = PLAYING_STYLE_DESCRIPTIONS[playstyleAtk];
   const defDesc = PLAYING_STYLE_DESCRIPTIONS[playstyleDef];
   const onHighlight = (next: TrainingCategory | null) => setHighlight(next);
@@ -346,7 +411,9 @@ export function PlayerDetailClient({
             dump max · no proficiency bonus
           </span>
         </div>
-        <p className="mt-1 flex flex-wrap items-center justify-center gap-x-1.5 gap-y-1 text-sm text-[var(--color-text-on-backdrop)] lg:justify-start">
+        {/* A <div>, not a <p>: the playstyle triggers render their tooltip
+            and popover (<div>s) next to the button. */}
+        <div className="mt-1 flex flex-wrap items-center justify-center gap-x-1.5 gap-y-1 text-sm text-[var(--color-text-on-backdrop)] lg:justify-start" data-testid="hero-line">
           {/* Each item after the first carries its own "·", so a wrapped line
               never ends on a dangling separator. */}
           <span>{posLabel}</span>
@@ -354,19 +421,13 @@ export function PlayerDetailClient({
             <span aria-hidden>·</span>
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src="/icons/playstyle_attack.svg" alt="" width={12} height={12} className="size-3" />
-            <span>
-              <span className="sr-only">Attack style: </span>
-              {playstyleAtk}
-            </span>
+            <PlaystyleTrigger style={playstyleAtk} kind="attack" />
           </span>
           <span className="inline-flex items-center gap-1.5">
             <span aria-hidden>·</span>
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src="/icons/playstyle_defence.svg" alt="" width={12} height={12} className="size-3" />
-            <span>
-              <span className="sr-only">Defence style: </span>
-              {playstyleDef}
-            </span>
+            <PlaystyleTrigger style={playstyleDef} kind="defence" />
           </span>
           {condLetter && (
             <span className="inline-flex items-center gap-1.5">
@@ -379,15 +440,19 @@ export function PlayerDetailClient({
               </span>
             </span>
           )}
-        </p>
+        </div>
       </header>
 
-      {/* ================= TWO COLUMNS (DOM order = phone order) ================= */}
-      <div className="flex flex-col gap-6 lg:grid lg:grid-cols-[280px_minmax(0,1fr)] lg:grid-rows-[1fr_auto_auto]">
-        {/* Card face + marks + Progression. From lg this block fills the
-            grid's flexible first row (stretched to the row height), which is
-            the sticky panel's travel range. */}
-        <div className="flex flex-col gap-6 lg:col-start-1 lg:row-start-1">
+      {/* ======= TWO COLUMNS, then the full-width row (DOM order = phone order) ======= */}
+      <div className="flex flex-col gap-6">
+      <div className="flex flex-col gap-6 lg:grid lg:grid-cols-[280px_minmax(0,1fr)]">
+        {/* Left column (from lg as tall as the main column): the flexible
+            wrapper with the face, the marks and the pinned Progression card —
+            the card's travel range — then the Build settings card at the
+            column's end, outside that range, so the pinned card never covers
+            it. */}
+        <div className="flex flex-col gap-6 lg:col-start-1">
+        <div className="flex flex-col gap-6 lg:flex-1">
         <div className="flex flex-col items-center gap-3">
           <div className="w-[180px]">
             <PlayerCard player={cardPlayer} size="full" caption="none" priority />
@@ -424,14 +489,25 @@ export function PlayerDetailClient({
         </div>
 
         {/* Progression — none for level-cap-1 cards (no training points).
-            From lg: the sticky card (max height = the viewport below the
-            sticky header, scrolling inside). Below lg it is not rendered here
-            (the dock and the sheet below take over); before the first client
-            measurement CSS hides it on a phone. */}
+            From lg: the card pinned at 64 px (it fits a 900 px viewport; a
+            max height of the viewport below the header, scrolling inside, is
+            only a safety net). Below lg it is not rendered here (the dock and
+            the sheet below take over); before the first client measurement
+            CSS hides it on a phone. */}
         {hasProgression ? (
           desktop !== false && (
             <div className="efb-progression-sticky hidden lg:block">
-              <ProgressionPanel player={p} state={build} result={buildResult} onChange={setBuild} highlight={highlight} onHighlight={onHighlight} />
+              <ProgressionPanel
+                player={p}
+                state={build}
+                result={buildResult}
+                onChange={setBuild}
+                notice={buildNotice}
+                idBase={progressionIdBase}
+                highlight={highlight}
+                onHighlight={onHighlight}
+                notes={notes}
+              />
             </div>
           )
         ) : (
@@ -440,29 +516,66 @@ export function PlayerDetailClient({
           </p>
         )}
         </div>
+        {hasProgression && desktop !== false && (
+          <div className="hidden lg:block">
+            <BuildSettings player={p} state={build} result={buildResult} onChange={setBuild} idBase={progressionIdBase} notes={notes} />
+          </div>
+        )}
+        </div>
 
         {/* ================= MAIN COLUMN ================= */}
-        <div className="flex min-w-0 flex-col gap-6 lg:col-start-2 lg:row-span-3 lg:row-start-1 lg:self-start">
+        <div className="flex min-w-0 flex-col gap-6 lg:col-start-2 lg:self-start">
           {/* Overview */}
           <section aria-labelledby="overview-title" className="efb-card space-y-4">
-            <div className="-mx-4 border-b border-[var(--color-line-separator)] px-4">
+            <div className="-mx-4 flex items-end justify-between gap-3 border-b border-[var(--color-line-separator)] px-4">
               <h2 id="overview-title" className="efb-card__title inline-block border-b-2 border-[var(--color-accent)] pb-1.5">
                 Overview
               </h2>
+              {/* Compare shortcut (the reference's 32 × 32 ghost icon link at
+                  the right of its tab row): this card in the first slot. */}
+              <Link
+                href={`/compare?ids=${p.id}` as Route}
+                aria-label={`Compare ${p.name}`}
+                className="button button--sm button--ghost button--icon-only mb-1 shrink-0"
+                data-testid="overview-compare"
+              >
+                <Swords className="size-4" aria-hidden />
+              </Link>
             </div>
-            <p className="text-sm leading-6 text-white/85">
+            {/* Description built from parts (a <div>, not a <p>: the inline
+                triggers render their tooltip and popover <div>s next to them):
+                the playing styles are description triggers, up to two skills
+                (Showtime first) are skill links with the preview, then "and
+                other N player skills". */}
+            <div className="text-sm leading-6 text-white/85" data-testid="overview-text">
               {p.name}&apos;s {CARD_TYPE_LABELS[p.cardType]} card{p.pack ? ` from "${p.pack.name}"` : ""} is rated {p.ovr}
               {p.maxOvr > p.ovr ? `, peaking at ${p.maxOvr} at level ${p.levelCap}` : ""}. A {p.height} cm ({heightImperial}) {posLabel} with the{" "}
-              {playstyleAtk} playing style
+              <PlaystyleTrigger style={playstyleAtk} kind="attack" /> playing style
+              {playstyleDef !== "Basic" && (
+                <>
+                  {" "}
+                  and the <PlaystyleTrigger style={playstyleDef} kind="defence" /> defensive style
+                </>
+              )}
               {p.countryName ? `, from ${p.countryName}` : ""}
-              {p.teamName ? `, playing for ${p.teamName}` : ""}.
-              {skillLabels.length > 0
-                ? ` Features ${skillLabels.length} skill${skillLabels.length === 1 ? "" : "s"}: ${skillLabels.slice(0, SKILLS_PREVIEW).join(", ")}${
-                    skillLabels.length > SKILLS_PREVIEW ? ` and ${skillLabels.length - SKILLS_PREVIEW} more` : ""
-                  }.`
-                : " Has no skills."}
-              {p.releaseDate ? ` Released ${formatUtcDate(p.releaseDate)}.` : ""}
-            </p>
+              {p.teamName ? `, playing for ${p.teamName}` : ""}.{p.releaseDate ? ` Released ${formatUtcDate(p.releaseDate)}.` : ""}{" "}
+              {orderedSkills.length === 0 ? (
+                "Has no skills."
+              ) : overviewSkills.length === 0 ? (
+                `Features ${orderedSkills.length} skill${orderedSkills.length === 1 ? "" : "s"}.`
+              ) : (
+                <>
+                  Features{" "}
+                  {overviewSkills.map((slug, i) => (
+                    <span key={slug}>
+                      {i > 0 && (otherSkills > 0 ? ", " : " and ")}
+                      <SkillChip slug={slug} label={skillLabels[i]!} skill={skillBySlug.get(slug)} variant="inline" />
+                    </span>
+                  ))}
+                  {otherSkills > 0 ? ` and other ${otherSkills} player skill${otherSkills === 1 ? "" : "s"}` : ""}.
+                </>
+              )}
+            </div>
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-sm text-white/85" data-testid="spec-line">
               <span className="inline-flex items-center gap-1.5">
                 <MoveVertical className="size-4 text-[var(--color-text-secondary)]" aria-hidden />
@@ -499,50 +612,57 @@ export function PlayerDetailClient({
                 {boosterSlots.map(({ slot, info }) => {
                   const on = hasProgression && info.usable && build.boosters[slot];
                   if (!hasProgression || !info.usable) {
+                    // Static label (no toggle): a slot without stat data, or
+                    // any slot of a level-cap-1 card, whose Booster 1 is
+                    // already inside the dump's max-level stats (said in
+                    // visible text, not only in a title).
                     return (
                       <div
                         key={slot}
                         className="efb-booster-button"
                         data-testid={`progression-booster-${slot + 1}`}
                         data-usable={info.usable ? "true" : "false"}
-                        title={
-                          info.usable
-                            ? `Booster ${slot + 1}: ${info.label}${slot === 0 ? " (inside the dump's max-level stats)" : ""}`
-                            : `Booster ${slot + 1}: ${info.label}`
-                        }
                       >
                         <Sparkles className="size-4 shrink-0" aria-hidden />
-                        <span className="efb-booster-button__label min-w-0 break-words">
+                        <span className="efb-booster-button__label efb-booster-button__label--wrap min-w-0 break-words">
                           <span className="sr-only">Booster {slot + 1}: </span>
                           {info.label}
+                          {info.usable && slot === 0 && <span className="text-[var(--color-text-secondary)]"> (in the max-level stats)</span>}
                         </span>
                       </div>
                     );
                   }
+                  // Toggle: the readable label ("+5 · Dribbling, Tight
+                  // Possession, Speed, Balance"), truncated on a wide
+                  // mouse layout with the full list in a tooltip (wrapped on
+                  // phones and touch devices); on / off = a check / an empty
+                  // circle icon plus the cyan colour, and aria-pressed.
+                  const StateIcon = on ? CircleCheck : Circle;
                   return (
-                    <button
-                      key={slot}
-                      type="button"
-                      aria-pressed={on}
-                      onClick={() => toggleBooster(slot)}
-                      className="efb-booster-button hit-44"
-                      data-testid={`progression-booster-${slot + 1}`}
-                      data-usable="true"
-                      title={`Booster ${slot + 1}: ${info.label} — ${on ? "on, click to turn it off" : "off, click to turn it on"}`}
-                    >
-                      <Sparkles className="size-4 shrink-0" aria-hidden />
-                      <span className="efb-booster-button__label min-w-0 break-words">
-                        <span className="sr-only">Booster {slot + 1}: </span>
-                        {/* The stored names read "Booster +5 · Dribble, …"; the
-                            button drops the repeated word (full name in the
-                            title and the accessible name). */}
-                        <span className="sr-only">Booster </span>
-                        {info.label.replace(/^Booster\s+/, "")}
-                      </span>
-                      <span aria-hidden className={`shrink-0 text-xs ${on ? "" : "text-[var(--color-text-secondary)]"}`}>
-                        {on ? "On" : "Off"}
-                      </span>
-                    </button>
+                    <Tooltip key={slot} content={<p className="text-sm text-white">Booster {slot + 1}: {info.label}</p>} className="efb-booster-tip">
+                      {(tp) => (
+                        <button
+                          {...tp}
+                          // The tooltip repeats the accessible name; do not announce it twice.
+                          aria-describedby={undefined}
+                          type="button"
+                          aria-pressed={on}
+                          onClick={(e) => {
+                            tp.onClick(e);
+                            toggleBooster(slot);
+                          }}
+                          className="efb-booster-button hit-44"
+                          data-testid={`progression-booster-${slot + 1}`}
+                          data-usable="true"
+                        >
+                          <StateIcon className="size-4 shrink-0" aria-hidden data-testid="booster-state-icon" data-state={on ? "on" : "off"} />
+                          <span className="efb-booster-button__label min-w-0">
+                            <span className="sr-only">Booster {slot + 1}: </span>
+                            {info.label}
+                          </span>
+                        </button>
+                      )}
+                    </Tooltip>
                   );
                 })}
               </div>
@@ -585,8 +705,8 @@ export function PlayerDetailClient({
             )}
             {view === "build" && (
               <p id={statsHelpId} className={`text-xs text-[var(--color-text-secondary)] ${statsHelpOpen ? "" : "max-lg:hidden"}`}>
-                Base stats + training + the Manager Proficiency bonus, limited to 99, then active boosters + the manager&apos;s +1 (cyan chips are booster bumps, lime chips the manager; the training lift and the bonus are inside the value, a stat&apos;s tooltip splits it — &quot;Max&quot; shows the dump&apos;s own max-level values, without the bonus, instead).
-                {highlight ? " Click the highlighted stat or category again to clear the highlight." : " Click a stat or a category to highlight the stats it trains."}
+                {notes.statsHelp}
+                {highlight ?" click the highlighted category again to clear the highlight." : " a category highlights the stats it trains."}
               </p>
             )}
             <StatGrid
@@ -596,12 +716,20 @@ export function PlayerDetailClient({
               capDeltas={capDeltas}
               proficiencyDeltas={proficiencyDeltas}
               managerDeltas={managerDeltas}
+              source={view}
               highlight={highlight}
-              onHighlight={onHighlight}
+              renderAdjust={
+                hasProgression
+                  ? (stat) => (
+                      <CategoryAdjust cats={STAT_CATEGORIES[stat]} state={build} result={buildResult} onChange={setBuild} idBase={`${progressionIdBase}-adjust-${stat}`} />
+                    )
+                  : undefined
+              }
             />
 
-            {/* Skills — Showtime first (gold), classic after; each chip opens a
-                popover with the skill's artwork, description and boosts. */}
+            {/* Skills — Showtime first (gold), classic after; each chip links
+                to the skill's page with a preview of its artwork,
+                description and boosts (a popover with the link on touch). */}
             <div className="pt-1">
               <h3 className="mb-2 text-sm font-medium text-[var(--color-text-secondary)]">
                 Skills · {skillLabels.length}
@@ -713,13 +841,15 @@ export function PlayerDetailClient({
                   <div className="text-sm text-[var(--color-text-secondary)]">Compatible positions</div>
                   <div className="flex flex-wrap gap-1.5">
                     {fullPositions.map((role) => (
-                      <span key={role} className="rounded-md bg-[#5cbf2a] px-2 py-0.5 text-sm font-semibold text-black" title="Full proficiency">
+                      <span key={role} className="rounded-md bg-[#5cbf2a] px-2 py-0.5 text-sm font-semibold text-black">
                         {role}
+                        <span className="sr-only"> (fully proficient)</span>
                       </span>
                     ))}
                     {halfPositions.map((role) => (
-                      <span key={role} className="rounded-md bg-[#3d6b25] px-2 py-0.5 text-sm font-semibold text-white" title="Half proficiency">
+                      <span key={role} className="rounded-md bg-[#3d6b25] px-2 py-0.5 text-sm font-semibold text-white">
                         {role}
+                        <span className="sr-only"> (half proficient)</span>
                       </span>
                     ))}
                   </div>
@@ -792,21 +922,23 @@ export function PlayerDetailClient({
             </div>
           </section>
         </div>
+      </div>
 
-        {/* Card Info (left column, after the main column on a phone) */}
-        <div className="lg:col-start-1 lg:row-start-2">
-          <CardInfo player={p} />
-        </div>
+      {/* Full-width row under both columns: Card Info and Other Versions,
+          side by side from lg (after the main column on a phone, as before).
+          The pinned Progression card ends above it, so it never covers them. */}
+      <div className="flex flex-col gap-6 lg:grid lg:grid-cols-2 lg:items-start" data-testid="detail-info-row">
+        <CardInfo player={p} />
 
-        {/* Other Versions */}
-        <section aria-labelledby="versions-title" data-testid="other-versions" className="efb-card lg:col-start-1 lg:row-start-3 lg:self-start">
+        {/* Other Versions: 56 px thumbnails from lg, four columns below. */}
+        <section aria-labelledby="versions-title" data-testid="other-versions" className="efb-card">
           <h2 id="versions-title" className="efb-card__title">
             Other Versions <span className="text-[var(--color-text-secondary)]">· {versionPreviews.length}</span>
           </h2>
           {versionPreviews.length === 0 ? (
             <p className="mt-2 text-sm text-[var(--color-text-secondary)]">This is the only card of {p.name}.</p>
           ) : (
-            <ul className="mt-3 grid grid-cols-4 gap-2">
+            <ul ref={versionsListRef} className="mt-3 grid grid-cols-4 gap-2 lg:grid-cols-[repeat(auto-fill,56px)]">
               {shownVersions.map((v) => (
                 <li key={v.id} className="min-w-0">
                   <PlayerCard player={v} size="full" caption="none" />
@@ -816,7 +948,13 @@ export function PlayerDetailClient({
                 <li className="min-w-0">
                   <button
                     type="button"
-                    onClick={() => setAllVersions(true)}
+                    onClick={() => {
+                      // The button unmounts: focus moves to the first newly
+                      // shown version (B5), announced politely.
+                      focusVersionRef.current = shownVersions.length;
+                      setVersionsNotice(`${hiddenVersions} more version${hiddenVersions === 1 ? "" : "s"} shown`);
+                      setAllVersions(true);
+                    }}
                     aria-label={`Show ${hiddenVersions} more versions`}
                     className="flex aspect-[240/339] w-full items-center justify-center rounded-lg bg-[var(--color-default)] text-sm font-semibold text-white transition-colors hover:bg-[var(--color-default-hover)] cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-focus)]"
                   >
@@ -826,20 +964,45 @@ export function PlayerDetailClient({
               )}
             </ul>
           )}
+          {/* Always rendered (empty until "+N"), so the text is announced. */}
+          <p role="status" aria-live="polite" className="sr-only">
+            {versionsNotice}
+          </p>
         </section>
+      </div>
       </div>
 
       {/* Phone (< lg): category strip + dock above the tab bar, opening the
           bottom sheet with the full panel (same `build` state). */}
       {hasProgression && (
         <>
-          {desktop !== true && <ProgressionDock state={build} result={buildResult} onChange={setBuild} onOpen={() => setSheetOpen(true)} />}
-          {/* Mounted whenever the card has a panel; its content exists only
-              while open, so there is never a second panel instance next to
-              the column's. */}
-          <Modal open={sheetOpen && desktop === false} onClose={() => setSheetOpen(false)} title="Progression" variant="sheet">
-            <ProgressionPanel player={p} state={build} result={buildResult} onChange={setBuild} highlight={highlight} onHighlight={onHighlight} embedded />
-          </Modal>
+          {desktop !== true && (
+            <ProgressionDock
+              state={build}
+              result={buildResult}
+              onChange={setBuild}
+              onOpen={() => setSheetOpen(true)}
+              onOpenIntent={prefetchModal}
+              expanded={sheetShown}
+            />
+          )}
+          {/* Loaded and mounted on the first opening (deferred.tsx), then kept
+              for the slide-out; its content exists only while open, so there
+              is never a second panel instance next to the column's. */}
+          <DeferredModal open={sheetShown} onClose={() => setSheetOpen(false)} title="Progression" variant="sheet" onShown={scrollSheetToCategories}>
+            <ProgressionPanel
+              player={p}
+              state={build}
+              result={buildResult}
+              onChange={setBuild}
+              notice={buildNotice}
+              idBase={progressionIdBase}
+              highlight={highlight}
+              onHighlight={onHighlight}
+              notes={notes}
+              embedded
+            />
+          </DeferredModal>
         </>
       )}
     </div>

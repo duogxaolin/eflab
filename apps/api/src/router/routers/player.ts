@@ -8,6 +8,7 @@ import {
   MAX_FILTER_IDS,
   PHYSIQUE_FIELDS,
   POSITIONS,
+  SEARCH_MIN_LENGTH,
   escapeLike,
   hasNonAscii,
   isSortPreset,
@@ -280,7 +281,11 @@ function primaryOrder(sort: string, direction: Dir): OrderBy {
   const nullsLast = { sort: direction, nulls: "last" } as const;
   if (sort === "releaseDate" || sort === "recentlyAdded") return { releaseDate: nullsLast };
   if (sort === "playerId") return { id: direction };
-  if (sort === "name" || sort === "namePrint") return { name: direction };
+  // Name: the accent-free lower-case ASCII column (dump `name_normalized`), so
+  // "Ödegaard" sorts with the O's and case never splits the list; `id` is the
+  // tiebreaker added by orderByFor. `namePrint` keeps the printed name.
+  if (sort === "name") return { nameNormalized: nullsLast };
+  if (sort === "namePrint") return { name: direction };
   if (sort === "japName") return { japName: nullsLast };
   if (sort === "chineseName") return { chineseName: nullsLast };
   if (sort === "nationality") return { nationalityId: direction };
@@ -382,6 +387,12 @@ const AI_STYLE_DB: ReadonlySet<string> = new Set(["earlyCross", "incisiveRun", "
 //     characters, and a `WHERE id IN (…)` with tens of thousands of ids would
 //     exceed the 32,767 bind-variable limit of a prepared statement.
 const LIKE_WILDCARDS = /[\\%_]/;
+
+// Backslash-escape every character that is special in a PostgreSQL advanced
+// regular expression, so a query is matched literally after the `\m` anchor.
+function escapeRegex(s: string): string {
+  return s.replace(/[\\.^$*+?()[\]{}|]/g, (ch) => `\\${ch}`);
+}
 
 async function nameFilter(q: string): Promise<Prisma.PlayerWhereInput | null> {
   const normalized = normalizeSearchQuery(q);
@@ -577,17 +588,36 @@ export const playerRouter = router({
   }),
 
   // Name search for the home palette, header and compare picker.
-  // Tiers (design decision 6):
-  //   0 = substring of the normalised name   ("schar" ⊆ "fabian schar")
-  //   1 = substring of the Japanese/Chinese name (non-ASCII queries only)
-  //   2 = pg_trgm fuzzy match on the normalised name ("scharr", "mbapp")
-  // Inside a tier: similarity DESC, ovr DESC, id DESC. Both the LIKE and the `%`
-  // predicates use the GIN trigram index on nameNormalized. Wildcards in the
-  // query are escaped so "%" only matches a literal percent sign.
+  // Tiers (design decision 6; whole-word ranking: efootbase-behaviour-parity
+  // design decision 7):
+  //   0 = the query is a whole word (or whole words) of the normalised name
+  //       ("ronald" in "ronald koeman", "ronaldo" in "cristiano ronaldo") —
+  //       a regex `\m<q>\M`
+  //   1 = the query starts a word but does not end one ("ronald" in
+  //       "ronaldinho gaucho", "cristiano ronaldo") — a regex `\m<q>`
+  //   2 = any other substring of the normalised name ("aldo" ⊆ "ronaldo")
+  //   3 = substring of the Japanese/Chinese name (non-ASCII queries only)
+  //   4 = pg_trgm fuzzy match on the normalised name ("scharr", "mbapp")
+  // `\m` / `\M` need a word character (letter, digit, "_") next to them, so a
+  // query that starts or ends with another character ("jr.", "-") cannot
+  // reach tier 0 / tiers 0–1 and is ranked as a partial match (tier 2).
+  // Inside tiers 0–3: maxOvr DESC, id DESC (the best card of a famous name
+  // first — "ronaldo" lists Cristiano Ronaldo before a 73-rated "Ronaldo").
+  // Inside the fuzzy tier similarity DESC comes first (a near-miss spelling is
+  // only useful when it is close), then maxOvr DESC, id DESC.
+  // Only the WHERE filters rows, and it is unchanged: both the LIKE and the `%`
+  // predicates use the GIN trigram index on nameNormalized; the regexes are
+  // evaluated on the matched rows only, inside ORDER BY. Wildcards in the query
+  // are escaped (LIKE and regex) so "%" or "." only match themselves.
   search: publicProcedure.input(playerSearchInput).query(async ({ input }): Promise<CardPreview[]> => {
     const normalized = normalizeSearchQuery(input.q);
-    if (normalized.length < 2) return [];
+    if (normalized.length < SEARCH_MIN_LENGTH) return [];
     const like = `%${escapeLike(normalized)}%`;
+    // Bound as parameters: `\m` / `\M` (start / end of a word) cannot be
+    // written into the Prisma.sql template itself, whose cooked strings would
+    // drop the backslash.
+    const wordStart = `\\m${escapeRegex(normalized)}`;
+    const wholeWord = `${wordStart}\\M`;
     // CJK columns only when the *normalised* query is still non-ASCII ("Schär"
     // normalises to ASCII and must not pay for two extra ILIKE scans).
     const cjk = hasNonAscii(normalized);
@@ -596,24 +626,33 @@ export const playerRouter = router({
       ? Prisma.sql`OR "japName" ILIKE ${rawLike} ESCAPE '\\' OR "chineseName" ILIKE ${rawLike} ESCAPE '\\'`
       : Prisma.empty;
     const cjkTier = cjk
-      ? Prisma.sql`WHEN "japName" ILIKE ${rawLike} ESCAPE '\\' OR "chineseName" ILIKE ${rawLike} ESCAPE '\\' THEN 1`
+      ? Prisma.sql`WHEN "japName" ILIKE ${rawLike} ESCAPE '\\' OR "chineseName" ILIKE ${rawLike} ESCAPE '\\' THEN 3`
       : Prisma.empty;
     const rows = await prisma.$queryRaw<PreviewRow[]>(Prisma.sql`
-      SELECT id, "baseId", name, "cardType"::text AS "cardType", ovr, "maxOvr",
+      SELECT id, "baseId", name, "cardType", ovr, "maxOvr",
              "registeredPosition", condition, "nationalityId",
              "playingStyleAttack", "playingStyleDefense"
-      FROM "Player"
-      WHERE "nameNormalized" LIKE ${like} ESCAPE '\\'
-         OR "nameNormalized" % ${normalized}
-         ${cjkWhere}
+      FROM (
+        SELECT id, "baseId", name, "cardType"::text AS "cardType", ovr, "maxOvr",
+               "registeredPosition", condition, "nationalityId",
+               "playingStyleAttack", "playingStyleDefense",
+               CASE
+                 WHEN "nameNormalized" ~ ${wholeWord} THEN 0
+                 WHEN "nameNormalized" ~ ${wordStart} THEN 1
+                 WHEN "nameNormalized" LIKE ${like} ESCAPE '\\' THEN 2
+                 ${cjkTier}
+                 ELSE 4
+               END AS tier,
+               similarity("nameNormalized", ${normalized}) AS sim
+        FROM "Player"
+        WHERE "nameNormalized" LIKE ${like} ESCAPE '\\'
+           OR "nameNormalized" % ${normalized}
+           ${cjkWhere}
+      ) matched
       ORDER BY
-        CASE
-          WHEN "nameNormalized" LIKE ${like} ESCAPE '\\' THEN 0
-          ${cjkTier}
-          ELSE 2
-        END ASC,
-        similarity("nameNormalized", ${normalized}) DESC,
-        ovr DESC,
+        tier ASC,
+        CASE WHEN tier = 4 THEN sim ELSE 0 END DESC,
+        "maxOvr" DESC,
         id DESC
       LIMIT ${input.limit}
     `);
@@ -652,13 +691,20 @@ export const playerRouter = router({
     return ordered.map(toCardDTO);
   }),
 
-  // All countries for the Nation filter (flag URLs rebased onto R2_PUBLIC_BASE).
+  // All countries for the Nation filter (flag URLs rebased onto R2_PUBLIC_BASE),
+  // A–Z, each with its number of cards (`playerCount`) — the picker's "Popular"
+  // group is the ten nations with the most cards. One grouped count over the
+  // Player nationality index (one row per nation, ≤ 185).
   countries: publicProcedure.query(async () => {
-    const rows = await prisma.country.findMany({
-      select: { id: true, name: true, flagUrl: true },
-      orderBy: [{ name: "asc" }, { id: "asc" }],
-    });
-    return rows.map((c) => ({ id: c.id, name: c.name, flagUrl: rebaseR2Url(c.flagUrl) }));
+    const [rows, counts] = await Promise.all([
+      prisma.country.findMany({
+        select: { id: true, name: true, flagUrl: true },
+        orderBy: [{ name: "asc" }, { id: "asc" }],
+      }),
+      prisma.player.groupBy({ by: ["nationalityId"], _count: { _all: true } }),
+    ]);
+    const countOf = new Map(counts.map((c) => [c.nationalityId, c._count._all]));
+    return rows.map((c) => ({ id: c.id, name: c.name, flagUrl: rebaseR2Url(c.flagUrl), playerCount: countOf.get(c.id) ?? 0 }));
   }),
 
   // All leagues for the League filter (34 rows; `leagueId` on player.list).

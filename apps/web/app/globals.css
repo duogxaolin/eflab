@@ -146,6 +146,9 @@
   --radius-panel: 1.5rem;    /* 24: content cards, rail, modal dialogs */
   --radius-pill: 1.5rem;     /* 24: buttons, segmented controls */
 
+  /* ---- Easing (reference `--ease-out-fluid`: sheet / drawer slide) ---- */
+  --ease-out-fluid: cubic-bezier(0.32, 0.72, 0, 1);
+
   /* ---- Type scale (Inter, no negative tracking; utilities text-display …) ---- */
   --text-display: 2.25rem;             /* page H1 36/40 */
   --text-display--line-height: 2.5rem;
@@ -251,7 +254,7 @@
 
   /* Reduced motion: no smooth scrolling (the card tile's hover scale drops
      its transition in `.pcb-tile*`; the JS side, usePrefersReducedMotion,
-     stops the carousel auto-advance). */
+     makes the pack-row arrows scroll instantly). */
   @media (prefers-reduced-motion: reduce) {
     .scroll-smooth,
     html {
@@ -662,32 +665,69 @@
     transform: translateY(-0.625cqw);
   }
 
-  /* ── Pack carousel controls ────────────────────────────────────────────── */
-  .pack-carousel__btn {
+  /* ── Pack rows (PackCarousel): no auto-advance; 28 px previous / next
+     arrows over the row's edges, shown while the row is hovered or holds
+     focus and always on devices without hover. Hidden arrows keep their
+     place in the Tab order (opacity, never visibility / display), so a
+     keyboard user reaches them and :focus-within reveals them. At an end
+     the arrow is aria-disabled (dimmed glyph), not `disabled`, so the
+     focused arrow keeps focus. ─────────────────────────────────────────── */
+  .pack-row {
+    position: relative;
+  }
+  /* Two classes: must beat `.hit-44 { position: relative }` (the 44 px
+     coarse-pointer hit area), which comes later in this layer. */
+  .pack-row .pack-row__arrow {
+    position: absolute;
+  }
+  .pack-row__arrow {
+    top: 50%;
+    z-index: 20; /* above a hovered card tile (z 10) */
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 1.5rem;
-    height: 1.5rem;
+    width: 1.75rem;
+    height: 1.75rem;
+    margin-top: -0.875rem;
     border-radius: 9999px;
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    background: rgba(255, 255, 255, 0.06);
-    color: rgba(255, 255, 255, 0.8);
+    border: 0;
+    background-color: color-mix(in srgb, var(--color-panel) 92%, transparent);
+    box-shadow: inset 0 0 0 1px var(--color-overlay-hairline), 0 4px 12px #00000080;
+    color: var(--color-text-primary);
     cursor: pointer;
-    transition: background-color 0.15s, border-color 0.15s, color 0.15s;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.15s, background-color 0.15s;
   }
-  .pack-carousel__btn:hover {
-    background: rgba(255, 255, 255, 0.14);
-    border-color: rgba(255, 255, 255, 0.2);
-    color: #fff;
+  .pack-row__arrow--prev { left: 0.25rem; }
+  .pack-row__arrow--next { right: 0.25rem; }
+  .pack-row:hover .pack-row__arrow,
+  .pack-row:focus-within .pack-row__arrow {
+    opacity: 1;
+    pointer-events: auto;
   }
-  .pack-carousel__btn:focus-visible {
-    outline: 2px solid var(--color-accent);
+  @media (hover: none) {
+    .pack-row__arrow {
+      opacity: 1;
+      pointer-events: auto;
+    }
+  }
+  .pack-row__arrow:hover {
+    background-color: var(--color-default);
+  }
+  .pack-row__arrow:focus-visible {
+    outline: 2px solid var(--color-focus);
     outline-offset: 2px;
   }
-  .pack-carousel__btn[aria-pressed="true"] {
-    color: var(--color-accent);
-    border-color: color-mix(in srgb, var(--color-accent) 50%, transparent);
+  .pack-row__arrow[aria-disabled="true"] {
+    color: color-mix(in srgb, var(--color-text-primary) 30%, transparent);
+    cursor: default;
+  }
+  .pack-row__arrow[aria-disabled="true"]:hover {
+    background-color: color-mix(in srgb, var(--color-panel) 92%, transparent);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .pack-row__arrow { transition: none; }
   }
 
   /* ── Navigation & shell ────────────────────────────────────────────────── */
@@ -1012,6 +1052,36 @@
     outline: 2px solid var(--color-focus);
     outline-offset: -2px;
   }
+  /* Home combobox: the active option (aria-activedescendant) — DOM focus
+     stays in the input, so the row shows the focus look itself. */
+  .efb-result-row[aria-selected="true"] {
+    background-color: var(--color-default);
+    outline: 2px solid var(--color-accent);
+    outline-offset: -2px;
+  }
+  /* Compare picker: the card already in the other slot ("In slot N"). */
+  .efb-result-row[aria-disabled="true"] {
+    cursor: not-allowed;
+  }
+  .efb-result-row[aria-disabled="true"]:hover {
+    background-color: transparent;
+  }
+  .efb-result-row[aria-disabled="true"] .efb-result-row__thumb,
+  .efb-result-row[aria-disabled="true"] .efb-result-row__body,
+  .efb-result-row[aria-disabled="true"] .efb-result-row__ovr {
+    opacity: 0.45;
+  }
+  .efb-result-row__note {
+    flex-shrink: 0;
+    padding: 0 0.5rem;
+    border-radius: 0.5rem;
+    background-color: var(--color-default);
+    color: var(--color-text-primary);
+    font-size: 0.75rem;
+    line-height: 1.5rem;
+    font-weight: 500;
+    white-space: nowrap;
+  }
   .efb-result-row__thumb {
     width: 2.5rem;
     height: 3.5rem;
@@ -1044,6 +1114,8 @@
     font-size: 0.75rem;
     line-height: 1.25rem;
     white-space: nowrap;
+    /* Never paints under the "In slot N" note or the badge on a narrow row. */
+    overflow: hidden;
   }
   .efb-result-row__sep { color: var(--color-text-dim); }
   .efb-result-row__style {
@@ -1060,7 +1132,11 @@
   .efb-result-row__icon--attack { color: var(--color-style-attack); }
   .efb-result-row__icon--defence { color: var(--color-style-defence); }
   .efb-result-row__type {
-    flex-shrink: 0;
+    /* Shrinks (ellipsis) only when the line is too long — e.g. a 320 px
+       picker row that also carries the "In slot N" note. */
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
     margin-left: 0.125rem;
     padding: 0 0.375rem;
     border-radius: 0.5rem;
@@ -1754,8 +1830,47 @@
     from { transform: translateY(1.5rem); opacity: 0; }
     to { transform: none; opacity: 1; }
   }
+  /* Sheet and drawer motion (reference `drawer__dialog--bottom`: translate
+     .25s cubic-bezier(.32,.72,0,1)): the panel slides up from fully below
+     the viewport on open and back down on close, the backdrop fades with it.
+     `Modal` closes the <dialog> at once (focus returns, the page is live
+     again); the `display` / `overlay` transitions keep the closed dialog
+     painted in the top layer for the slide-out, click-through, and `Modal`
+     unmounts the panel when its transition ends. The dialog variant keeps
+     its short rise-in. */
+  .efb-modal--sheet,
+  .efb-modal--drawer {
+    transition:
+      background-color 0.25s var(--ease-out-fluid),
+      display 0.25s allow-discrete,
+      overlay 0.25s allow-discrete;
+  }
+  .efb-modal--sheet:not([open]),
+  .efb-modal--drawer:not([open]) {
+    background-color: transparent;
+    pointer-events: none;
+  }
+  .efb-modal--sheet .efb-modal__panel,
+  .efb-modal--drawer .efb-modal__panel {
+    animation: none;
+    transition: translate 0.25s var(--ease-out-fluid);
+  }
+  .efb-modal--sheet:not([open]) .efb-modal__panel,
+  .efb-modal--drawer:not([open]) .efb-modal__panel {
+    translate: 0 100%;
+  }
+  @starting-style {
+    .efb-modal--sheet[open],
+    .efb-modal--drawer[open] { background-color: transparent; }
+    .efb-modal--sheet[open] .efb-modal__panel,
+    .efb-modal--drawer[open] .efb-modal__panel { translate: 0 100%; }
+  }
   @media (prefers-reduced-motion: reduce) {
     .efb-modal__panel { animation: none; }
+    .efb-modal--sheet,
+    .efb-modal--drawer,
+    .efb-modal--sheet .efb-modal__panel,
+    .efb-modal--drawer .efb-modal__panel { transition: none; }
   }
 
   /* Filter trigger pills */
@@ -1805,19 +1920,23 @@
   }
 
   /* ── Progression panel (ProgressionPanel.tsx; GAP §2.4) ───────────────────
-     Card in the left column, sticky from lg below the 65 px header (top 96
-     px like the /players rail; at most the viewport below that, scrolling
-     inside so the last row and the disclosure stay reachable). Header: title
-     14/500, "used/total pts" 14 muted, 32 px Max OVR and reset; 48 px Select
-     Manager pill; proficiency row (label 14/400 muted, value 14/500 #01fec5,
-     16 px track); 42 px category rows (label 14/400, 18 × 18 −/+ with a 44 px
-     touch area, value, 16 px track) at a 50 px pitch; compact Max Level /
-     Position fields; the overall; notes behind a disclosure. */
+     Card in the left column, pinned from lg at 64 px under the 65 px header
+     (the reference's `lg:top-16 lg:z-10`) through the whole main column (its
+     travel range is the column minus the Build settings card at the column's
+     end). Header: title 14/500, "used/total pts" 14 muted, 32 px Max OVR and
+     reset; 48 px Select Manager pill; proficiency row (label 14/400 muted,
+     value 14/500 #01fec5, 16 px track); 42 px category rows (label 14/400,
+     next cost, 18 × 18 −/+ with a 44 px touch area, value, 16 px track) at a
+     50 px pitch. The Build settings card (.efb-build-settings, not sticky)
+     holds the compact Max Level / Position fields, the overall and the notes
+     behind a disclosure (efootbase-behaviour-parity). */
   .efb-progression-sticky {
     position: sticky;
-    top: 6rem;
+    top: 4rem;
     z-index: 10;
-    max-height: calc(100dvh - 7rem);
+    /* Safety net only: the card (~690 px) fits a 900 px viewport without
+       scrolling; on a shorter one it scrolls inside. */
+    max-height: calc(100dvh - 5rem);
     overflow-y: auto;
     overscroll-behavior: contain;
     border-radius: var(--radius-panel);
@@ -2078,6 +2197,15 @@
     font-variant-numeric: tabular-nums;
     text-align: right;
   }
+  /* The category's stats on a full-width line under its name and costs (no
+     information only in a title). */
+  .efb-progression__costs dd.efb-progression__cost-stats {
+    grid-column: 1 / -1;
+    margin-bottom: 0.25rem;
+    color: var(--color-text-dim);
+    font-variant-numeric: normal;
+    text-align: left;
+  }
   @media (prefers-reduced-motion: reduce) {
     .efb-progression__about-icon { transition: none; }
   }
@@ -2326,6 +2454,46 @@
   }
   .efb-dock__reset:hover,
   .efb-dock__manager:hover { background-color: var(--color-default-hover); }
+  /* Manager / proficiency popover of the dock (reference
+     detail-mobile-progression-sheet.png: a ≈ 358 × 128 panel over the page,
+     not dimmed): the dock's width (placed in JS, `matchWidth` on the strip),
+     radius 16, #181818 (.efb-popover), 12 px padding — room for the 44 px
+     touch areas of the 36 px buttons and of the slider, so nothing clips and
+     no inner scrollbar appears. */
+  .efb-popover.efb-dock-popover { border-radius: var(--radius-tile); }
+  .efb-dock-popover__body {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    padding: 0.75rem;
+  }
+  .efb-proficiency-steps {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-top: 0.375rem;
+  }
+  .efb-proficiency-steps > .efb-range { min-width: 0; flex: 1 1 0%; }
+  .efb-proficiency-step {
+    display: inline-flex;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+    width: 2.25rem;
+    height: 2.25rem;
+    border: 0;
+    border-radius: 9999px;
+    background-color: var(--color-default);
+    color: var(--color-text-primary);
+    cursor: pointer;
+    transition: background-color 0.1s;
+  }
+  .efb-proficiency-step:hover:not([aria-disabled="true"]) { background-color: var(--color-default-hover); }
+  .efb-proficiency-step[aria-disabled="true"] { opacity: 0.35; cursor: not-allowed; }
+  .efb-proficiency-step:focus-visible {
+    outline: 2px solid var(--color-focus);
+    outline-offset: 2px;
+  }
 
   /* ── Manager drawer (ManagerPicker.tsx, Modal variant "drawer") ───────────
      Padding 24, title 16/500, subtitle 14 muted, 36 px search; rows 74 px
@@ -2473,7 +2641,8 @@
     font-weight: 500;
     line-height: 1.25rem;
   }
-  /* Click-to-highlight: rows outside the selected category / stat dim. */
+  /* Highlight (a category from the strip / panel, or the open Adjust
+     popover's categories): rows outside it dim. */
   .efb-stat-row[data-dim="true"] {
     opacity: 0.4;
   }
@@ -2636,24 +2805,29 @@
     text-align: center;
   }
   /* Two columns at every width (reference: side by side on phones too). The
-     stored names are long ("+4 · LowPass, LoftPass, Finish, KickPow"), so
-     below 640 px a button stacks: the sparkle and "On" / "Off" on the first
-     line, the name across the full width under them, 13/18 left-aligned. */
+     label is the readable stat list ("+5 · Dribbling, Tight Possession,
+     Speed, Balance"): from 640 px on a hover-capable mouse layout a toggle's
+     label stays on one line, truncated, with the full list in a tooltip;
+     below 640 px and on touch devices (no tooltip there) it wraps, 13/18
+     left-aligned next to the state icon, so the whole list is visible. */
+  .efb-booster-button__label { text-align: left; }
+  @media (width >= 40rem) and (hover: hover) and (pointer: fine) {
+    button.efb-booster-button .efb-booster-button__label {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+  }
   @media (width < 40rem) {
     .efb-booster-button {
-      flex-wrap: wrap;
-      align-items: center;
-      justify-content: space-between;
-      gap: 0.25rem 0.375rem;
+      align-items: flex-start;
+      justify-content: flex-start;
+      gap: 0.375rem;
       padding: 0.375rem 0.625rem;
       font-size: 0.8125rem;
       line-height: 1.125rem;
-      text-align: left;
     }
-    .efb-booster-button__label {
-      order: 3;
-      flex-basis: 100%;
-    }
+    .efb-booster-button > svg { margin-top: 0.0625rem; }
   }
   button.efb-booster-button { cursor: pointer; transition: background-color 0.15s, color 0.15s; }
   /* Small text disclosure (detail page, below lg: "How these stats are
@@ -2706,12 +2880,192 @@
     outline: 2px solid var(--color-focus);
     outline-offset: 2px;
   }
-  /* Skill popover: 288 wide, radius 12, #181818 with the hairline ring; the
-     artwork runs edge to edge at the top (letterboxed by SkillIcon). */
-  .efb-skill-popover {
+  /* Skill preview (tooltip on hover / focus) and its touch popover: 288 wide
+     (never wider than the viewport − 16 px), no padding around the artwork,
+     which runs edge to edge at the top (letterboxed by SkillIcon); the
+     surface, radius and hairline come from .efb-tooltip / .efb-popover. */
+  .efb-skill-tip { width: min(18rem, calc(100vw - 1rem)); }
+  .efb-tooltip.efb-skill-tip { padding: 0; }
+  /* Playing-style description (tooltip and click popover) and the booster
+     list tooltip. */
+  .efb-style-tip { width: min(18rem, calc(100vw - 1rem)); }
+  .efb-booster-tip { max-width: min(20rem, calc(100vw - 1rem)); }
+  /* Inline skill link of the Overview paragraph: underlined, gold for
+     Showtime (reference: #FFD700, underline offset 2, decoration at 35 %,
+     full on hover); white for a classic skill. */
+  .efb-inline-link {
+    color: var(--color-text-primary);
+    font-weight: 600;
+    text-decoration: underline;
+    text-decoration-color: color-mix(in srgb, currentColor 35%, transparent);
+    text-underline-offset: 2px;
+    border-radius: 0.25rem;
+    transition: text-decoration-color 0.15s;
+  }
+  .efb-inline-link[data-showtime="true"] { color: var(--color-showtime); }
+  .efb-inline-link:hover { text-decoration-color: currentColor; }
+  .efb-inline-link:focus-visible,
+  .efb-inline-trigger:focus-visible {
+    outline: 2px solid var(--color-focus);
+    outline-offset: 2px;
+  }
+  /* Inline playing-style trigger (hero line, Overview paragraph): a button
+     that reads as text with a dotted underline (it shows a description, it
+     does not navigate). */
+  .efb-inline-trigger {
+    display: inline;
+    border: 0;
+    border-radius: 0.25rem;
+    background: transparent;
+    padding: 0;
+    color: inherit;
+    font: inherit;
+    text-align: inherit;
+    text-decoration: underline dotted;
+    text-decoration-color: color-mix(in srgb, currentColor 55%, transparent);
+    text-underline-offset: 3px;
+    cursor: pointer;
+  }
+  .efb-inline-trigger:hover,
+  .efb-inline-trigger[aria-expanded="true"] { text-decoration-color: currentColor; color: var(--color-text-primary); }
+
+  /* Stat-row Adjust popover (StatGrid): 280 wide, a 14/600 title (the
+     category), the steppers of the row's categories (label, next cost,
+     − value +), the points left and the value's breakdown. 14 px padding so
+     the 44 px touch areas of the 18 px stepper buttons are not clipped by
+     the popover's scroll box. */
+  .efb-adjust-popover { width: min(17.5rem, calc(100vw - 1rem)); }
+  .efb-adjust {
+    display: flex;
+    flex-direction: column;
+    gap: 0.625rem;
+    padding: 0.875rem;
+    font-size: 0.875rem;
+    line-height: 1.25rem;
+  }
+  .efb-adjust__title {
+    font-size: 0.875rem;
+    line-height: 1.25rem;
+    font-weight: 600;
+    color: var(--color-text-primary);
+  }
+  .efb-adjust__cats {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+  .efb-adjust__cat {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    min-height: 2rem;
+    padding: 0.25rem 0.5rem;
+    border-radius: 0.5rem;
+    background-color: var(--color-default);
+  }
+  .efb-adjust__cat-label {
+    min-width: 0;
+    flex: 1;
+    color: var(--color-text-secondary);
+  }
+  .efb-adjust__cat[data-active="true"] .efb-adjust__cat-label { color: var(--color-text-primary); }
+  .efb-adjust__cat[data-active="true"] .efb-stepper__value { color: var(--color-accent); }
+  .efb-adjust__cat .efb-progression-row__next { margin-left: 0; }
+  .efb-adjust__left {
+    color: var(--color-text-secondary);
+    font-size: 0.75rem;
+    line-height: 1rem;
+    font-variant-numeric: tabular-nums;
+  }
+  .efb-adjust__breakdown {
+    border-top: 1px solid var(--color-line-separator);
+    padding-top: 0.5rem;
+  }
+  .efb-adjust__parts {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 0.125rem 0.75rem;
+    color: var(--color-text-secondary);
+    font-size: 0.75rem;
+    line-height: 1.125rem;
+  }
+  .efb-adjust__parts dd {
+    color: var(--color-text-primary);
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+  }
+  .efb-adjust__total dt,
+  .efb-adjust__total dd {
+    color: var(--color-text-primary);
+    font-weight: 600;
+    font-size: 0.875rem;
+    line-height: 1.25rem;
+  }
+  .efb-adjust__note {
+    margin-top: 0.375rem;
+    color: var(--color-text-secondary);
+    font-size: 0.75rem;
+    line-height: 1rem;
+  }
+
+  /* ── Overlay primitives (components/ui/Tooltip.tsx, Popover.tsx) ─────────
+     Both are native popovers in the top layer, placed in JS (floating.ts:
+     next to the anchor, ≥ 8 px inside the visible viewport, height capped at
+     the viewport − 16 px). Look of the reference skill tooltip: radius 12,
+     #181818, inset 1 px #ffffff4d hairline. The tooltip accepts the pointer
+     (WCAG 1.4.13 hoverable — the reference has pointer-events: none) and
+     holds no interactive content; the popover is a non-modal dialog that
+     scrolls inside when taller than the viewport. Width comes from the
+     consumer (`className`), never wider than the viewport − 16 px. */
+  .efb-tooltip,
+  .efb-popover {
+    position: fixed;
+    inset: auto;
+    margin: 0;
+    border: 0;
+    max-width: calc(100vw - 1rem);
+    max-height: calc(100vh - 1rem);
     border-radius: 0.75rem;
     background-color: var(--color-panel);
-    box-shadow: inset 0 0 1px #ffffff4d, 0 16px 40px rgb(0 0 0 / 0.55);
+    color: var(--color-text-primary);
+    text-align: left;
+    box-shadow: inset 0 0 1px var(--color-overlay-hairline), 0 16px 40px rgb(0 0 0 / 0.55);
+  }
+  @supports (height: 100dvh) {
+    .efb-tooltip,
+    .efb-popover { max-height: calc(100dvh - 1rem); }
+  }
+  .efb-tooltip {
+    padding: 0.75rem;
+    overflow: hidden;
+    font-size: 0.75rem;
+    line-height: 1rem;
+    pointer-events: auto;
+  }
+  .efb-popover {
+    padding: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+  .efb-popover:focus { outline: none; }
+  .efb-popover:focus-visible {
+    outline: 2px solid var(--color-focus);
+    outline-offset: 2px;
+  }
+  /* Sheet form of a popover (floating.ts "Sheet form": the stat-row Adjust
+     popover below 640 px when taller than half the viewport): pinned to the
+     bottom edge at full width (size and position set in JS), top radius 16
+     like the Modal sheet, rising in over 250 ms (none under reduced
+     motion); still non-modal (light dismiss, Escape). */
+  .efb-popover[data-sheet] {
+    max-width: none;
+    border-radius: var(--radius-tile) var(--radius-tile) 0 0;
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    box-shadow: inset 0 0 1px 0 var(--color-overlay-hairline), 0 -8px 28px #00000066;
+    animation: efb-sheet-in 0.25s var(--ease-out-fluid);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .efb-popover[data-sheet] { animation: none; }
   }
 
   /* ── /players filters (FiltersPanel, ToggleGroup, RangeFields, PickerList,
@@ -2935,6 +3289,25 @@
   /* Dialog search: the shared .field at 36 px on #232323. */
   .filter-search { background-color: var(--color-elevated); }
   .filter-search:hover { background-color: var(--color-elevated); }
+  /* Pinned dialog search (reference `.pb-dialog__search`: sticky, z 1, at the
+     top of the scrolling body): the search field and the selection-limit
+     message stay at the top of the dialog body while the options scroll
+     under them. The bar's panel-coloured 4 px frame fills the body's 4 px
+     focus-ring padding (negative margin; the sticky offset is measured from
+     the body's content edge, hence top −4 px, so the bar never moves), so
+     nothing shows through around the field or its focus ring; the body keeps
+     a matching scroll padding so a focused option is never hidden under the
+     bar. */
+  .filter-search-bar {
+    position: sticky;
+    top: -4px;
+    z-index: 1;
+    margin: -4px -4px 0;
+    padding: 4px;
+    background-color: var(--color-panel);
+  }
+  .filter-search-bar > * + * { margin-top: 0.5rem; }
+  .efb-modal__body:has(.filter-search-bar) { scroll-padding-top: 4.5rem; }
   /* Search inputs that draw their own clear button. */
   .no-native-clear::-webkit-search-cancel-button { -webkit-appearance: none; appearance: none; }
 

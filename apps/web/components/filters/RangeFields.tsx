@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import type { IntRange } from "@eflab/shared";
 
 /**
@@ -7,10 +7,18 @@ import type { IntRange } from "@eflab/shared";
  * Min / Max" inputs; also used where efootbase draws range sliders). Values
  * are drafts while typing and are committed on blur / Enter, clamped to
  * `bounds`; an unparsable draft reverts. The committed range is `null` when
- * both fields are empty ("All"). An inverted pair (min > max) is handed to
- * `onChange` as typed, but `parseRangeParam` drops it when the URL is read back
- * (`readPlayersState`), so the filter reverts to "All" and the fields clear —
- * the API never sees an impossible range.
+ * both fields are empty ("All").
+ *
+ * A commit writes the clamped drafts itself; a change of `value` from outside
+ * (the URL after a commit, Reset, Back) re-syncs only the field that does not
+ * have focus, so a value being typed into the other field is never overwritten
+ * (QA bug B1: typing 20 → Tab → 25 at once kept "25").
+ *
+ * An inverted pair (min above max, after clamping) is not committed: the
+ * drafts stay, both fields get `aria-invalid` and an inline "Min is above Max"
+ * message (referenced by `aria-describedby`, announced politely) until a
+ * valid pair is committed or the value changes from outside. Equal values are
+ * a valid one-value range.
  */
 export function RangeFields({
   label,
@@ -30,11 +38,17 @@ export function RangeFields({
   compact?: boolean;
 }) {
   const id = useId();
+  const errorId = `${id}-error`;
+  const minRef = useRef<HTMLInputElement>(null);
+  const maxRef = useRef<HTMLInputElement>(null);
   const [minDraft, setMinDraft] = useState(value?.min?.toString() ?? "");
   const [maxDraft, setMaxDraft] = useState(value?.max?.toString() ?? "");
+  const [inverted, setInverted] = useState(false);
   useEffect(() => {
-    setMinDraft(value?.min?.toString() ?? "");
-    setMaxDraft(value?.max?.toString() ?? "");
+    const focused = typeof document === "undefined" ? null : document.activeElement;
+    if (focused !== minRef.current) setMinDraft(value?.min?.toString() ?? "");
+    if (focused !== maxRef.current) setMaxDraft(value?.max?.toString() ?? "");
+    setInverted(false);
   }, [value?.min, value?.max]);
 
   const parse = (s: string): number | undefined | false => {
@@ -49,17 +63,21 @@ export function RangeFields({
     if (min === false || max === false) {
       setMinDraft(value?.min?.toString() ?? "");
       setMaxDraft(value?.max?.toString() ?? "");
+      setInverted(false);
       return;
     }
+    if (min !== undefined && max !== undefined && min > max) {
+      setInverted(true);
+      return;
+    }
+    setInverted(false);
+    setMinDraft(min?.toString() ?? "");
+    setMaxDraft(max?.toString() ?? "");
     const next: IntRange = {};
     if (min !== undefined) next.min = min;
     if (max !== undefined) next.max = max;
     const unchanged = (value?.min ?? undefined) === next.min && (value?.max ?? undefined) === next.max;
-    if (unchanged) {
-      setMinDraft(next.min?.toString() ?? "");
-      setMaxDraft(next.max?.toString() ?? "");
-      return;
-    }
+    if (unchanged) return;
     onChange(next.min === undefined && next.max === undefined ? null : next);
   };
   const onKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -76,6 +94,8 @@ export function RangeFields({
         : value.min !== undefined
           ? `≥ ${value.min}${unit ?? ""}`
           : `≤ ${value.max}${unit ?? ""}`;
+  // Invalid fields: the danger border (utilities win over `.filter-number`).
+  const invalidClass = "aria-invalid:border-[var(--color-accent-danger)] aria-invalid:hover:border-[var(--color-accent-danger)]";
 
   return (
     <div role="group" aria-labelledby={`${id}-label`} className="space-y-2">
@@ -94,32 +114,42 @@ export function RangeFields({
       </div>
       <div className="flex items-center gap-2">
         <input
+          ref={minRef}
           type="number"
           inputMode="numeric"
           min={bounds[0]}
           max={bounds[1]}
           placeholder="Min"
           aria-label={`${label}: Min`}
+          aria-invalid={inverted || undefined}
+          aria-describedby={inverted ? errorId : undefined}
           value={minDraft}
           onChange={(e) => setMinDraft(e.target.value)}
           onBlur={() => commit(minDraft, maxDraft)}
           onKeyDown={onKey}
-          className="filter-number"
+          className={`filter-number ${invalidClass}`}
         />
         <input
+          ref={maxRef}
           type="number"
           inputMode="numeric"
           min={bounds[0]}
           max={bounds[1]}
           placeholder="Max"
           aria-label={`${label}: Max`}
+          aria-invalid={inverted || undefined}
+          aria-describedby={inverted ? errorId : undefined}
           value={maxDraft}
           onChange={(e) => setMaxDraft(e.target.value)}
           onBlur={() => commit(minDraft, maxDraft)}
           onKeyDown={onKey}
-          className="filter-number"
+          className={`filter-number ${invalidClass}`}
         />
       </div>
+      {/* Always mounted (polite live region); takes no room while empty. */}
+      <p id={errorId} role="status" className={inverted ? "text-xs text-[var(--color-danger-soft-foreground)]" : "sr-only"}>
+        {inverted ? "Min is above Max" : ""}
+      </p>
     </div>
   );
 }

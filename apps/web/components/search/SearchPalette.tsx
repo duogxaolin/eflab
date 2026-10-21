@@ -1,9 +1,9 @@
 "use client";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { Search, X } from "lucide-react";
-import type { CardPreview } from "@eflab/shared";
+import { SEARCH_MIN_LENGTH, type CardPreview } from "@eflab/shared";
 import { trpc } from "@/lib/trpc";
-import { useDebouncedValue, SEARCH_MIN_LENGTH } from "@/lib/use-debounced-value";
+import { useDebouncedValue } from "@/lib/use-debounced-value";
 import { PlayerSearchRow } from "./PlayerSearchRow";
 
 /**
@@ -23,7 +23,10 @@ import { PlayerSearchRow } from "./PlayerSearchRow";
  * runs `onSubmitQuery` (header: the full list) or, without it, picks the
  * first result (compare picker). With an empty field it lists the newest
  * cards ("Latest Players", `player.trending` — real data, not a trending
- * ranking).
+ * ranking). `excludeIds` (compare picker) marks cards that cannot be chosen:
+ * their rows stay listed but are `aria-disabled` with the given reason
+ * ("In slot 1"), a click or Enter on them does nothing, and Enter on the
+ * input picks the first other result.
  */
 export function SearchPalette({
   open,
@@ -32,6 +35,7 @@ export function SearchPalette({
   onSelect,
   onSubmitQuery,
   returnFocusTo,
+  excludeIds,
 }: {
   open: boolean;
   /** Called after the dialog closed (any way). */
@@ -44,6 +48,8 @@ export function SearchPalette({
   /** Focus target after closing; `null` (or omitted) = the element that had
    *  focus when the palette opened. */
   returnFocusTo?: () => HTMLElement | null;
+  /** Card id → the visible reason its row cannot be chosen ("In slot 1"). */
+  excludeIds?: Readonly<Record<string, string>>;
 }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -96,7 +102,11 @@ export function SearchPalette({
   const results = search.data ?? [];
   const waiting = typedEnough && (!canSearch || debounced !== trimmed || search.isLoading);
 
+  // Card ids are digit strings, so a plain lookup never hits an inherited key.
+  const excludedNote = (p: CardPreview): string | undefined => excludeIds?.[p.id];
+
   const choose = (p: CardPreview) => {
+    if (excludedNote(p) !== undefined) return; // aria-disabled row
     onSelect(p);
     close();
   };
@@ -107,8 +117,9 @@ export function SearchPalette({
     if (onSubmitQuery) {
       onSubmitQuery(trimmed);
       close();
-    } else if (!waiting && !search.isError && results[0]) {
-      choose(results[0]);
+    } else if (!waiting && !search.isError) {
+      const first = results.find((p) => excludedNote(p) === undefined);
+      if (first) choose(first);
     }
   };
 
@@ -150,7 +161,7 @@ export function SearchPalette({
     <ul className="m-0 list-none p-0">
       {list.map((p) => (
         <li key={p.id}>
-          <PlayerSearchRow player={p} data-palette-option="" onClick={() => choose(p)} />
+          <PlayerSearchRow player={p} data-palette-option="" disabledNote={excludedNote(p)} onClick={() => choose(p)} />
         </li>
       ))}
     </ul>
@@ -173,7 +184,7 @@ export function SearchPalette({
           {title}
         </h2>
         <p id={hintId} className="sr-only">
-          {onSubmitQuery ? "Enter shows every matching card. " : "Enter picks the first result. "}
+          {onSubmitQuery ? "Enter shows every matching card. " : excludeIds && Object.keys(excludeIds).length > 0 ? "Enter picks the first available result. " : "Enter picks the first result. "}
           Arrow keys move through the results; Escape closes.
         </p>
         <form onSubmit={submit} role="search" className="efb-palette__input-row">

@@ -13,19 +13,24 @@ import { playerCardDynamicUrl } from "@/lib/r2-images";
  * and the max-level overall at the right as a 40 × 24 badge filled with its
  * tier colour (black text). The badge is the card's overall at max level from
  * the dump (Booster 1 on), so its accessible text says "max overall".
- * Extra button props (role="option", data attributes) pass through.
+ * Extra button props (role="option", id, aria-selected, data attributes) pass
+ * through. `disabledNote` marks a row that cannot be chosen (the compare
+ * picker's card already in the other slot): the row is `aria-disabled` and
+ * shows the reason as visible text before the badge ("In slot 1"); the caller
+ * still has to ignore its activation.
  */
 export function PlayerSearchRow({
   player,
+  disabledNote,
   className = "",
   ...rest
-}: { player: CardPreview } & Omit<ButtonHTMLAttributes<HTMLButtonElement>, "children" | "type">) {
+}: { player: CardPreview; disabledNote?: string } & Omit<ButtonHTMLAttributes<HTMLButtonElement>, "children" | "type">) {
   const pos = positionOf(player.registeredPosition);
   const attack = player.playingStyleAttack != null ? playingStyleName(player.playingStyleAttack) : null;
   const defence = player.playingStyleDefense != null ? playingStyleName(player.playingStyleDefense) : null;
   const typeLabel = CARD_TYPE_LABEL[player.cardType] ?? player.cardType;
   return (
-    <button type="button" className={`efb-result-row ${className}`} {...rest}>
+    <button type="button" className={`efb-result-row ${className}`} aria-disabled={disabledNote ? true : undefined} {...rest}>
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
         src={playerCardDynamicUrl(player.id)}
@@ -67,6 +72,7 @@ export function PlayerSearchRow({
           <span className="efb-result-row__type">{typeLabel}</span>
         </span>
       </span>
+      {disabledNote && <span className="efb-result-row__note">{disabledNote}</span>}
       <span className={`efb-result-row__ovr ${statTierBg(player.maxOvr)} ${statTierForeground(player.maxOvr)}`} title={`Max overall ${player.maxOvr} (max level, from the dump)`}>
         <span className="sr-only">Max overall </span>
         {player.maxOvr}

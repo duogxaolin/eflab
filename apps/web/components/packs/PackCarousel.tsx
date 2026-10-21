@@ -1,7 +1,7 @@
 "use client";
-import { useRef, useEffect, useCallback, useState } from "react";
+import { useRef, useEffect, useCallback, useId, useState } from "react";
 import Link from "next/link";
-import { ChevronLeft, ChevronRight, Pause, Play } from "lucide-react";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 import { PlayerCard } from "@/components/cards/PlayerCard";
 import { usePrefersReducedMotion } from "@/components/cards/usePrefersReducedMotion";
 import { formatUtcDate } from "@/lib/format-date";
@@ -16,86 +16,79 @@ export interface PackBundleData {
   cards: CardPreview[];
 }
 
-/** Auto-advance interval and step. */
-const AUTO_ADVANCE_MS = 3200;
-const AUTO_STEP_PX = 140;
-const BUTTON_STEP_PX = 260; // ≈ 2 cards
+/** One arrow press scrolls a "page": the visible width minus about one card,
+ *  so the last card in view stays in view as context. */
+const KEEP_IN_VIEW_PX = 128;
+const MIN_STEP_PX = 120;
+/** Slack for sub-pixel scroll positions when testing the ends. */
+const END_SLACK_PX = 2;
 
+type Ends = { overflow: boolean; atStart: boolean; atEnd: boolean };
+
+/**
+ * One pack row on the home page (efootbase-behaviour-parity, design decision
+ * 8): the title (link to `/packs/[slug]`) and date, then a horizontal row of
+ * cards that never scrolls by itself — the reference row has no auto-advance,
+ * and without one there is nothing to pause (WCAG 2.2.2; the old pause
+ * control and its stuck-after-Resume bug B3 are gone). Previous / next 28 px
+ * arrows sit over the row's edges: shown on hover and while focus is inside
+ * the row, always shown on devices without hover, `aria-disabled` at either
+ * end, and rendered only when the row overflows. The row also scrolls with
+ * the trackpad, Shift + wheel, touch and Tab through its cards.
+ */
 export function PackCarousel({
   bundle,
-  autoScroll = true,
   priorityCards = 0,
 }: {
   bundle: PackBundleData;
-  /** Auto-advance the row (pauses on hover/focus/touch, hidden tab, reduced
-   *  motion, and via the explicit pause button). */
-  autoScroll?: boolean;
   /** Number of leading cards to eager-load (above-the-fold carousels). */
   priorityCards?: number;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
-  const [interacting, setInteracting] = useState(false);
-  const [userPaused, setUserPaused] = useState(false);
-  const [tabHidden, setTabHidden] = useState(false);
+  const trackId = useId();
+  const [ends, setEnds] = useState<Ends>({ overflow: false, atStart: true, atEnd: true });
   const reducedMotion = usePrefersReducedMotion();
   const behavior: ScrollBehavior = reducedMotion ? "auto" : "smooth";
 
+  // Which ends the row is at, from its scroll position (on scroll and on
+  // every size change of the row — a breakpoint changes the card width).
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const measure = () => {
+      const max = el.scrollWidth - el.clientWidth;
+      const next: Ends = {
+        overflow: max > END_SLACK_PX,
+        atStart: el.scrollLeft <= END_SLACK_PX,
+        atEnd: el.scrollLeft >= max - END_SLACK_PX,
+      };
+      setEnds((prev) => (prev.overflow === next.overflow && prev.atStart === next.atStart && prev.atEnd === next.atEnd ? prev : next));
+    };
+    measure();
+    el.addEventListener("scroll", measure, { passive: true });
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => {
+      el.removeEventListener("scroll", measure);
+      ro.disconnect();
+    };
+  }, [bundle.cards.length]);
+
   const scrollBy = useCallback(
     (direction: "left" | "right") => {
-      scrollRef.current?.scrollBy({
-        left: direction === "right" ? BUTTON_STEP_PX : -BUTTON_STEP_PX,
-        behavior,
-      });
-    },
-    [behavior],
-  );
-
-  // Pause while the tab is hidden.
-  useEffect(() => {
-    const onVisibility = () => setTabHidden(document.visibilityState === "hidden");
-    onVisibility();
-    document.addEventListener("visibilitychange", onVisibility);
-    return () => document.removeEventListener("visibilitychange", onVisibility);
-  }, []);
-
-  const autoActive = autoScroll && !userPaused && !reducedMotion && !tabHidden && !interacting;
-
-  useEffect(() => {
-    if (!autoActive) return;
-    const interval = setInterval(() => {
       const el = scrollRef.current;
       if (!el) return;
-      const { scrollLeft, scrollWidth, clientWidth } = el;
-      if (scrollWidth <= clientWidth) return;
-      if (scrollLeft + clientWidth >= scrollWidth - 10) {
-        el.scrollTo({ left: 0, behavior: "smooth" });
-      } else {
-        el.scrollBy({ left: AUTO_STEP_PX, behavior: "smooth" });
-      }
-    }, AUTO_ADVANCE_MS);
-    return () => clearInterval(interval);
-  }, [autoActive]);
-
-  const showPauseControl = autoScroll && !reducedMotion;
-  const paused = !autoActive;
+      if (direction === "left" ? ends.atStart : ends.atEnd) return; // aria-disabled
+      const step = Math.max(MIN_STEP_PX, el.clientWidth - KEEP_IN_VIEW_PX);
+      el.scrollBy({ left: direction === "right" ? step : -step, behavior });
+    },
+    [behavior, ends.atStart, ends.atEnd],
+  );
 
   return (
-    <section
-      className="min-w-0 space-y-2"
-      aria-roledescription="carousel"
-      aria-label={bundle.name}
-      onMouseEnter={() => setInteracting(true)}
-      onMouseLeave={() => setInteracting(false)}
-      onFocus={() => setInteracting(true)}
-      onBlur={(e) => {
-        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setInteracting(false);
-      }}
-      onTouchStart={() => setInteracting(true)}
-      onTouchEnd={() => setInteracting(false)}
-    >
+    <section className="min-w-0 space-y-2" aria-roledescription="carousel" aria-label={bundle.name}>
       {/* Row header (reference): title 14/20 500 at 90 % white on the left,
-          12/16 muted date on the right, baseline-aligned; our pause /
-          previous / next controls follow the date. */}
+          12/16 muted date on the right, baseline-aligned. */}
       <div className="flex min-w-0 items-baseline justify-between gap-2">
         {/* Same title look as /packs (14/500 at 90 % white); the ellipsis is
             on the inner span so the link's touch area is not clipped. */}
@@ -105,61 +98,50 @@ export function PackCarousel({
           </Link>
         </h3>
 
-        <div className="flex shrink-0 items-center gap-2.5">
-          <time dateTime={bundle.releaseDate} className="text-xs text-[var(--color-text-secondary)]">
-            {/* UTC so the calendar day never shifts with the viewer's timezone */}
-            {formatUtcDate(bundle.releaseDate)}
-          </time>
-
-          <div className="flex items-center gap-1">
-            {showPauseControl && (
-              <button
-                type="button"
-                onClick={() => setUserPaused((v) => !v)}
-                aria-pressed={userPaused}
-                aria-label={userPaused ? `Resume auto-scroll of ${bundle.name}` : `Pause auto-scroll of ${bundle.name}`}
-                className="pack-carousel__btn"
-                data-testid="carousel-pause"
-                data-paused={paused ? "true" : "false"}
-              >
-                {userPaused ? <Play className="size-3.5" aria-hidden /> : <Pause className="size-3.5" aria-hidden />}
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={() => scrollBy("left")}
-              aria-label={`Scroll ${bundle.name} left`}
-              className="pack-carousel__btn"
-            >
-              <ChevronLeft className="size-3.5" aria-hidden />
-            </button>
-            <button
-              type="button"
-              onClick={() => scrollBy("right")}
-              aria-label={`Scroll ${bundle.name} right`}
-              className="pack-carousel__btn"
-            >
-              <ChevronRight className="size-3.5" aria-hidden />
-            </button>
-          </div>
-        </div>
+        <time dateTime={bundle.releaseDate} className="shrink-0 text-xs text-[var(--color-text-secondary)]">
+          {/* UTC so the calendar day never shifts with the viewer's timezone */}
+          {formatUtcDate(bundle.releaseDate)}
+        </time>
       </div>
 
       {/* Horizontal scroll row. Each slot sets the width — 96 px below 768,
           112 px from 768 (reference w-24 / w-28); the card fills it
           (size="full") so the art never overflows the slot on narrow screens.
           The px-1 / py-2 padding leaves room for the 1.05 hover scale inside
-          the scroller's clip. */}
-      <div
-        ref={scrollRef}
-        className="hide-scrollbar flex gap-3 overflow-x-auto px-1 py-2"
-        data-testid="carousel-track"
-      >
-        {bundle.cards.map((p, i) => (
-          <div key={p.id} className="w-24 shrink-0 md:w-28">
-            <PlayerCard player={p} size="full" caption="name" priority={i < priorityCards} />
-          </div>
-        ))}
+          the scroller's clip. The arrows come first in the Tab order, so the
+          row can be paged without tabbing through every card. */}
+      <div className="pack-row">
+        {ends.overflow && (
+          <>
+            <button
+              type="button"
+              onClick={() => scrollBy("left")}
+              aria-label={`Scroll ${bundle.name} left`}
+              aria-controls={trackId}
+              aria-disabled={ends.atStart}
+              className="pack-row__arrow pack-row__arrow--prev hit-44"
+            >
+              <ChevronLeft className="size-4" aria-hidden />
+            </button>
+            <button
+              type="button"
+              onClick={() => scrollBy("right")}
+              aria-label={`Scroll ${bundle.name} right`}
+              aria-controls={trackId}
+              aria-disabled={ends.atEnd}
+              className="pack-row__arrow pack-row__arrow--next hit-44"
+            >
+              <ChevronRight className="size-4" aria-hidden />
+            </button>
+          </>
+        )}
+        <div id={trackId} ref={scrollRef} className="hide-scrollbar flex gap-3 overflow-x-auto px-1 py-2" data-testid="carousel-track">
+          {bundle.cards.map((p, i) => (
+            <div key={p.id} className="w-24 shrink-0 md:w-28">
+              <PlayerCard player={p} size="full" caption="name" priority={i < priorityCards} />
+            </div>
+          ))}
+        </div>
       </div>
     </section>
   );

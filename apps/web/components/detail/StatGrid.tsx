@@ -1,4 +1,5 @@
 "use client";
+import { useId, useState, type ReactNode } from "react";
 import { ChevronsUp, Crosshair, Footprints, Hand, Send, Shield, Volleyball, Zap, type LucideIcon } from "lucide-react";
 import {
   PROGRESSION_CATEGORY_LABELS,
@@ -17,16 +18,30 @@ import {
   statTierClass,
   statTierForeground,
 } from "@/lib/card-display";
+import { Popover } from "@/components/ui/Popover";
 
 // Three-column stat grid of the player detail page (efootbase layout):
 // Attacking / Defending / Strength, one row per stat with the tier colour of
 // the value (five tiers, ≥ 100 magenta — reached only through boosters or the
-// manager, training stops at 99), a cyan "+N" chip for a booster bump, a lime
-// "+1" chip for the selected manager, a tooltip that splits the value into
-// base, training, the cut at 99, Manager Proficiency, booster and manager
-// parts, and
-// click-to-highlight — a stat row or a category chip selects the training
-// category it belongs to and dims every other row.
+// manager, training stops at 99), a cyan "+N" chip for a booster bump and a
+// lime "+1" chip for the selected manager.
+// Activating a row (click, Enter, Space, tap) opens its Adjust popover
+// (efootbase-behaviour-parity; the reference's stat rows are popover
+// triggers named "Adjust Dexterity — Offensive Awareness"): a non-modal
+// dialog titled with the row's training category ("Dexterity"; Jumping:
+// "Aerial Strength & Goalkeeper 1") holding the category steppers the caller
+// renders (`renderAdjust`, the Progression panel's own CategoryStepper — one
+// state) and the value's breakdown into base, training, the cut at 99,
+// Manager Proficiency, booster and manager parts. A card without Progression
+// (level cap 1) gets the breakdown only, titled with the stat. While a
+// popover is open the stats of its categories are highlighted; otherwise the
+// highlight follows the category strip / the panel's category labels.
+// Below 640 px a popover taller than half the viewport (e.g. Jumping's two
+// steppers on a 568 px tall phone) is shown as a bottom sheet — the same
+// popover element, state and focus handling (Popover `sheetBelow`).
+
+/** Viewport width below which a tall Adjust popover becomes a bottom sheet. */
+const ADJUST_SHEET_BELOW = 640;
 
 /** Stat → the training categories that raise it, in TRAINING_CATEGORIES
  *  order. Every stat is in at least one; Jump is in two (Aerial Strength and
@@ -39,100 +54,176 @@ export const STAT_CATEGORIES: Readonly<Record<BaseStat, readonly TrainingCategor
 
 export type StatHighlight = TrainingCategory | null;
 
-/** Next highlight after clicking a stat row: a stat in several categories
- *  cycles through them (Jump: Aerial Strength → Goalkeeper 1 → clear), a
- *  stat in one toggles it. */
-export function nextStatHighlight(stat: BaseStat, current: StatHighlight): StatHighlight {
-  const cats = STAT_CATEGORIES[stat];
-  const i = current === null ? -1 : cats.indexOf(current);
-  if (i === -1) return cats[0] ?? null;
-  return cats[i + 1] ?? null;
-}
-
 /** "+N" chip for a stat raised by an active booster (cyan) or by the selected
- *  manager (lime, "+1"). */
-export function DeltaChip({ delta, title, kind = "booster" }: { delta: number | undefined; title?: string; kind?: "booster" | "manager" }) {
+ *  manager (lime, "+1"); what it is is said in screen-reader text. */
+export function DeltaChip({ delta, kind = "booster" }: { delta: number | undefined; kind?: "booster" | "manager" }) {
   if (!delta) return null;
   return (
     <span
       className={`efb-stat-row__boost ${kind === "manager" ? "efb-stat-row__boost--lime" : "efb-stat-row__boost--cyan"}`}
       data-testid={kind === "manager" ? "stat-manager-delta" : "stat-delta"}
-      title={title}
     >
       {delta > 0 ? `+${delta}` : delta}
+      <span className="sr-only"> {kind === "manager" ? "manager" : "booster"}</span>
     </span>
   );
 }
 
-interface SectionProps {
-  title: string;
-  statKeys: readonly BaseStat[];
+/** What the grid's values are: the Progression build's projection (with its
+ *  parts), the dump's max-level values, or the level-1 values. */
+export type StatSource = "build" | "max" | "base";
+
+interface GridProps {
   values: Record<BaseStat, number>;
   /** Booster bump per stat (shown as the "+N" chip). */
   boosterDeltas?: Record<BaseStat, number>;
-  /** Training lift per stat (tooltip only — it is already inside the value). */
+  /** Training lift per stat (breakdown only — it is already inside the value). */
   trainingDeltas?: Record<BaseStat, number>;
-  /** Cut to 99 per stat, 0 or negative (tooltip only — inside the value). */
+  /** Cut to 99 per stat, 0 or negative (breakdown only — inside the value). */
   capDeltas?: Record<BaseStat, number>;
-  /** Manager Proficiency bonus per stat (tooltip only — inside the value too). */
+  /** Manager Proficiency bonus per stat (breakdown only — inside the value too). */
   proficiencyDeltas?: Record<BaseStat, number>;
   /** +1 of the selected manager per stat (shown as the lime "+1" chip). */
   managerDeltas?: Record<BaseStat, number>;
+  source: StatSource;
   highlight: StatHighlight;
-  onHighlight: (next: StatHighlight) => void;
+  /** The steppers of a stat's categories for its Adjust popover; omitted for
+   *  a card without Progression (the popover then holds the breakdown only). */
+  renderAdjust?: (stat: BaseStat) => ReactNode;
 }
 
-function StatSection({ title, statKeys, values, boosterDeltas, trainingDeltas, capDeltas, proficiencyDeltas, managerDeltas, highlight, onHighlight }: SectionProps) {
+interface SectionProps extends GridProps {
+  title: string;
+  statKeys: readonly BaseStat[];
+  openStat: BaseStat | null;
+  setOpen: (stat: BaseStat, open: boolean) => void;
+  idBase: string;
+}
+
+const signed = (v: number): string => (v > 0 ? `+${v}` : v < 0 ? `−${-v}` : "0");
+
+/** The value's parts, one line each (no line for a part that is 0). */
+function Breakdown({ stat, value, source, lift, cut, bonus, boost, mgr }: { stat: BaseStat; value: number; source: StatSource; lift: number; cut: number; bonus: number; boost: number; mgr: number }) {
+  const cats = STAT_CATEGORIES[stat].map((c) => PROGRESSION_CATEGORY_LABELS[c]).join(" / ");
+  const rows: Array<[string, string]> =
+    source === "build"
+      ? [
+          ["Base", String(value - lift - cut - bonus - boost - mgr)],
+          ...(lift ? [[`${cats} training`, signed(lift)] as [string, string]] : []),
+          ...(cut ? [["Cut at 99 (training above 99 is not counted)", signed(cut)] as [string, string]] : []),
+          ...(bonus ? [["Manager Proficiency", signed(bonus)] as [string, string]] : []),
+          ...(boost ? [["Boosters", signed(boost)] as [string, string]] : []),
+          ...(mgr ? [["Manager", signed(mgr)] as [string, string]] : []),
+        ]
+      : [];
+  return (
+    <div className="efb-adjust__breakdown" data-testid="stat-breakdown">
+      <dl className="efb-adjust__parts">
+        {rows.map(([label, v]) => (
+          <div key={label} className="contents">
+            <dt>{label}</dt>
+            <dd>{v}</dd>
+          </div>
+        ))}
+        <div className="contents efb-adjust__total">
+          <dt>{source === "build" ? statLabel(stat) : source === "max" ? `${statLabel(stat)} at max level (dump)` : `${statLabel(stat)} at level 1`}</dt>
+          <dd>{value}</dd>
+        </div>
+      </dl>
+      {source !== "build" && (
+        <p className="efb-adjust__note">
+          {source === "max" ? "The dump's own max-level value; the Build view splits a value into its parts." : "The card's level-1 value."}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function StatSection({
+  title,
+  statKeys,
+  values,
+  boosterDeltas,
+  trainingDeltas,
+  capDeltas,
+  proficiencyDeltas,
+  managerDeltas,
+  source,
+  highlight,
+  renderAdjust,
+  openStat,
+  setOpen,
+  idBase,
+}: SectionProps) {
+  // While a row's popover is open its categories are highlighted.
+  const active: readonly TrainingCategory[] | null = openStat ? STAT_CATEGORIES[openStat] : highlight ? [highlight] : null;
   return (
     <div className="min-w-0">
       <h3 className="efb-group-head">{title}</h3>
-      <div className="space-y-1">
+      {/* flex + gap, not space-y: each row is followed by its (hidden) popover. */}
+      <div className="flex flex-col gap-1">
         {statKeys.map((st) => {
           const val = values[st];
           const cats = STAT_CATEGORIES[st];
-          const catLabels = cats.map((c) => PROGRESSION_CATEGORY_LABELS[c]).join(" / ");
-          const hit = highlight !== null && cats.includes(highlight);
-          const dim = highlight !== null && !hit;
+          const catNames = cats.map((c) => PROGRESSION_CATEGORY_LABELS[c]);
+          const hit = active !== null && cats.some((c) => active.includes(c));
+          const dim = active !== null && !hit;
           const lift = trainingDeltas?.[st] ?? 0;
           const cut = capDeltas?.[st] ?? 0;
           const bonus = proficiencyDeltas?.[st] ?? 0;
           const boost = boosterDeltas?.[st] ?? 0;
           const mgr = managerDeltas?.[st] ?? 0;
-          const tipParts = [
-            lift ? `+${lift} from ${catLabels} training` : null,
-            cut ? `−${-cut} cut at 99 (training above 99 is not counted)` : null,
-            bonus ? `+${bonus} Manager Proficiency` : null,
-            boost ? `+${boost} booster` : null,
-            mgr ? `+${mgr} manager` : null,
-          ].filter(Boolean);
-          const tip = tipParts.length > 0 ? `${statLabel(st)} ${val}: base ${val - lift - cut - bonus - boost - mgr}, ${tipParts.join(", ")}` : undefined;
+          const headingId = `${idBase}-${st}-adjust`;
+          const heading = renderAdjust ? catNames.join(" & ") : statLabel(st);
+          const name = renderAdjust ? `Adjust ${catNames.join(" and ")} — ${statLabel(st)} ${val}` : `${statLabel(st)} ${val} — show its breakdown`;
           return (
-            <button
+            <Popover
               key={st}
-              type="button"
-              className="efb-stat-row hit-44 cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-focus)]"
-              data-stat={st}
-              data-category={cats.join(" ")}
-              data-hit={hit ? "true" : undefined}
-              data-dim={dim ? "true" : undefined}
-              aria-pressed={hit}
-              aria-label={`${statLabel(st)} ${val} — highlight ${catLabels} stats`}
-              title={tip}
-              onClick={() => onHighlight(nextStatHighlight(st, highlight))}
-            >
-              <span className={`efb-stat-row__label ${statTierClass(val)}`} data-testid="stat-name">
-                {statLabel(st)}
-              </span>
-              <span className="efb-stat-row__end">
-                {(boost !== 0 || mgr !== 0) && (
-                  <span className="efb-stat-row__chips">
-                    <DeltaChip delta={boosterDeltas?.[st]} title="Booster" />
-                    <DeltaChip delta={managerDeltas?.[st]} title="Manager" kind="manager" />
+              open={openStat === st}
+              onOpenChange={(o) => setOpen(st, o)}
+              labelledBy={headingId}
+              sheetBelow={ADJUST_SHEET_BELOW}
+              className="efb-adjust-popover"
+              data-testid="stat-adjust"
+              trigger={(tp) => (
+                <button
+                  {...tp}
+                  type="button"
+                  className="efb-stat-row hit-44 cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-focus)]"
+                  data-stat={st}
+                  data-category={cats.join(" ")}
+                  data-hit={hit ? "true" : undefined}
+                  data-dim={dim ? "true" : undefined}
+                  // No aria-pressed: the row is a popup trigger (aria-haspopup
+                  // / aria-expanded from the Popover), not a toggle. The
+                  // highlight is `data-hit` / `data-dim` (accent ring, dimmed
+                  // others); screen readers get the categories from the
+                  // row's name and the open popover's heading.
+                  aria-label={name}
+                >
+                  <span className={`efb-stat-row__label ${statTierClass(val)}`} data-testid="stat-name">
+                    {statLabel(st)}
                   </span>
-                )}
-                <span className={`efb-stat-row__value ${statTierBg(val)} ${statTierForeground(val)}`}>{val}</span>
-              </span>
-            </button>
+                  <span className="efb-stat-row__end">
+                    {(boost !== 0 || mgr !== 0) && (
+                      <span className="efb-stat-row__chips">
+                        <DeltaChip delta={boosterDeltas?.[st]} />
+                        <DeltaChip delta={managerDeltas?.[st]} kind="manager" />
+                      </span>
+                    )}
+                    <span className={`efb-stat-row__value ${statTierBg(val)} ${statTierForeground(val)}`}>{val}</span>
+                  </span>
+                </button>
+              )}
+            >
+              <div className="efb-adjust">
+                <h3 id={headingId} className="efb-adjust__title">
+                  {heading}
+                </h3>
+                {renderAdjust?.(st)}
+                <Breakdown stat={st} value={val} source={source} lift={lift} cut={cut} bonus={bonus} boost={boost} mgr={mgr} />
+              </div>
+            </Popover>
           );
         })}
       </div>
@@ -142,13 +233,20 @@ function StatSection({ title, statKeys, values, boosterDeltas, trainingDeltas, c
 
 /** Three groups side by side from `lg`, two columns below (Attacking and
  *  Defending, then Strength — DOM order, so the Tab order follows the eye),
- *  one column under 360 px where two would leave a name ~55 px of room. */
-export function StatGrid(props: Omit<SectionProps, "title" | "statKeys">) {
+ *  one column under 360 px where two would leave a name ~55 px of room. At
+ *  most one Adjust popover is open; it owns the highlight while open. */
+export function StatGrid(props: GridProps) {
+  const idBase = useId().replace(/:/g, "");
+  const [openStat, setOpenStat] = useState<BaseStat | null>(null);
+  // A closing row clears the state only while it still owns it: opening
+  // another row light-dismisses this one after the new one opened.
+  const setOpen = (stat: BaseStat, open: boolean) => setOpenStat((cur) => (open ? stat : cur === stat ? null : cur));
+  const section = { ...props, openStat, setOpen, idBase };
   return (
     <div className="grid grid-cols-1 gap-x-3 gap-y-4 min-[360px]:grid-cols-2 lg:grid-cols-3 lg:gap-6" data-testid="stat-grid">
-      <StatSection title="Attacking" statKeys={ATTACKING_STATS} {...props} />
-      <StatSection title="Defending" statKeys={DEFENDING_STATS} {...props} />
-      <StatSection title="Strength" statKeys={STRENGTH_STATS} {...props} />
+      <StatSection title="Attacking" statKeys={ATTACKING_STATS} {...section} />
+      <StatSection title="Defending" statKeys={DEFENDING_STATS} {...section} />
+      <StatSection title="Strength" statKeys={STRENGTH_STATS} {...section} />
     </div>
   );
 }
@@ -197,7 +295,6 @@ export function CategoryRow({
             type="button"
             aria-pressed={hit}
             aria-label={`${label}: ${v}`}
-            title={`${label}: ${v} stat point${v === 1 ? "" : "s"} — highlight its stats`}
             data-testid={`category-chip-${cat}`}
             data-spent={v > 0 ? "true" : undefined}
             onClick={() => onHighlight(hit ? null : cat)}
@@ -232,7 +329,7 @@ export function KeyStats({
             <dt className="text-xs leading-4 text-[var(--color-text-secondary)] [hyphens:auto] break-words" data-testid="stat-name">{statLabel(st)}</dt>
             <dd className={`mt-0.5 flex items-center gap-1.5 text-sm font-bold tabular-nums ${statTierClass(v)}`}>
               {v}
-              <DeltaChip delta={boosterDeltas?.[st]} title="Booster" />
+              <DeltaChip delta={boosterDeltas?.[st]} />
             </dd>
           </div>
         );

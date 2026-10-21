@@ -1,10 +1,13 @@
 "use client";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { Route } from "next";
 import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
 import { CircleDashed, ListChecks, Search, Sparkles, X, Zap, type LucideIcon } from "lucide-react";
 import { normalizeSearchQuery, type SkillDTO } from "@eflab/shared";
 import { trpc } from "@/lib/trpc";
 import { QueryErrorState } from "@/lib/query-state";
+import { useDebouncedValue } from "@/lib/use-debounced-value";
 import { SectionHeader, type SectionTone } from "@/components/layout/SectionHeader";
 import { SKILL_GROUP_LABELS, SKILL_GROUP_ORDER, compareSkills, skillDescription, skillGroup, skillLabel, type SkillSection } from "@/lib/skill-labels";
 
@@ -13,11 +16,66 @@ import { SKILL_GROUP_LABELS, SKILL_GROUP_ORDER, compareSkills, skillDescription,
 // stored group, in the stored wiki order (`sortOrder`); the 5 unreleased
 // skills never reach this page (the API hides them). Every number comes from
 // the API — `playerCount` is the grouped PlayerSkill count. A search field
-// filters the tiles by name (accent- and case-insensitive, the shared
-// `normalizeSearchQuery`), a segmented control narrows to one group. The
-// artwork, stat boosts, activation, share and top cards live on
+// filters the tiles by name (accent-, case- and separator-insensitive, see
+// `skillSearchKey`), a segmented control narrows to one group. Both live in
+// the URL (`group`, `q`; written with replace, the defaults omitted) and come
+// back on reload (efootbase-behaviour-parity "Skills Search And URL State").
+// The artwork, stat boosts, activation, share and top cards live on
 // /skills/[slug]. Nothing is synthesised — no rarity, rank, leader or tier label.
 const ALL = "ALL";
+type GroupFilter = SkillSection | typeof ALL;
+
+/** `?group=` value → the segment (anything else = All). */
+function parseGroup(raw: string | null): GroupFilter {
+  return raw !== null && (SKILL_GROUP_ORDER as readonly string[]).includes(raw) ? (raw as SkillSection) : ALL;
+}
+
+/** Hyphens, dashes (‐ ‑ ‒ – — ― and the minus sign), slashes and underscores
+ *  read as spaces, so "one touch" finds "One-touch Pass"; then the shared
+ *  accent- and case-folding normaliser (which also collapses the spaces). The
+ *  same key is built for the query and for each name. */
+const SEPARATORS = /[-‐-―−_/]/g;
+function skillSearchKey(s: string): string {
+  return normalizeSearchQuery(s.replace(SEPARATORS, " "));
+}
+
+/** Breadcrumbs, H1 and intro — also the server-rendered fallback while the
+ *  URL state is read (`app/skills/page.tsx`). */
+export function SkillsIntro() {
+  return (
+    <>
+      <ol data-slot="breadcrumbs" aria-label="Breadcrumbs" className="breadcrumbs -ml-0.5 mb-3 list-none p-0">
+        <li className="breadcrumbs__item">
+          <Link className="breadcrumbs__link hit-44" href="/">
+            Home
+          </Link>
+          <span className="breadcrumbs__separator" aria-hidden>
+            ›
+          </span>
+        </li>
+        <li className="breadcrumbs__item" aria-current="page">
+          Skills
+        </li>
+      </ol>
+
+      <h1 className="efb-h1 text-[var(--color-text-primary)]">Skills</h1>
+      <p className="efb-subtitle mt-2">
+        Every eFootball skill in one place — Showtime and classic skills with the number of cards that carry each one. Open a skill for its artwork, stat boosts and top cards.
+      </p>
+    </>
+  );
+}
+
+/** The loading grid (also the Suspense fallback's body). */
+export function SkillsSkeleton() {
+  return (
+    <div className="mt-6 grid gap-3 md:grid-cols-2 xl:grid-cols-3" aria-busy="true" aria-label="Loading skills">
+      {[...Array(12)].map((_, i) => (
+        <div key={i} className="h-32 animate-pulse rounded-2xl bg-[var(--color-panel)]" />
+      ))}
+    </div>
+  );
+}
 
 const GROUP_HEAD: Readonly<Record<SkillSection, { icon: LucideIcon; tone: SectionTone }>> = {
   showtime: { icon: Sparkles, tone: "gold" },
@@ -61,17 +119,69 @@ function SkillTile({ skill, group }: { skill: SkillDTO; group: SkillSection }) {
 }
 
 export function SkillsClient() {
-  const [activeGroup, setActiveGroup] = useState<SkillSection | typeof ALL>(ALL);
-  const [query, setQuery] = useState("");
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const rawGroup = searchParams.get("group");
+  const urlGroup = parseGroup(rawGroup);
+  const urlQ = (searchParams.get("q") ?? "").trim();
+
+  // Local state answers at once; the URL follows with replace (the search
+  // text debounced). An outside URL change (a link to /skills?group=…) is
+  // copied back into the state.
+  const [activeGroup, setActiveGroup] = useState<GroupFilter>(urlGroup);
+  const [query, setQuery] = useState(urlQ);
+  const lastWritten = useRef<{ group: GroupFilter; q: string }>({ group: urlGroup, q: urlQ });
+
+  const writeUrl = (group: GroupFilter, q: string) => {
+    lastWritten.current = { group, q };
+    const sp = new URLSearchParams();
+    if (group !== ALL) sp.set("group", group);
+    if (q) sp.set("q", q);
+    const qs = sp.toString();
+    router.replace((qs ? `/skills?${qs}` : "/skills") as Route, { scroll: false });
+  };
+
+  useEffect(() => {
+    if (urlGroup !== lastWritten.current.group) {
+      lastWritten.current.group = urlGroup;
+      setActiveGroup(urlGroup);
+    }
+    if (urlQ !== lastWritten.current.q) {
+      lastWritten.current.q = urlQ;
+      setQuery(urlQ);
+    }
+  }, [urlGroup, urlQ]);
+
+  // An unknown `group` value reads as All: rewrite the link without it.
+  useEffect(() => {
+    if (rawGroup !== null && urlGroup === ALL) writeUrl(ALL, urlQ);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rawGroup, urlGroup]);
+
+  const debouncedQ = useDebouncedValue(query.trim(), 250);
+  useEffect(() => {
+    if (debouncedQ !== lastWritten.current.q) writeUrl(activeGroup, debouncedQ);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [debouncedQ]);
+
+  const chooseGroup = (group: GroupFilter) => {
+    setActiveGroup(group);
+    writeUrl(group, query.trim());
+  };
+  const clearQuery = () => {
+    setQuery("");
+    writeUrl(activeGroup, "");
+  };
+
   const skillsQuery = trpc.skill.list.useQuery({}, { staleTime: 60 * 60_000 });
 
-  const needle = normalizeSearchQuery(query);
+  const needle = skillSearchKey(query);
   // Showtime first, then Classic, both in the stored order; the entries
   // without a group (all with 0 holders) come last under "Other". The name
   // filter applies before grouping, so counts follow it.
   const groups = useMemo(() => {
     const sorted = [...(skillsQuery.data ?? [])].sort(compareSkills);
-    const matching = needle ? sorted.filter((s) => normalizeSearchQuery(skillLabel(s)).includes(needle)) : sorted;
+    const matching = needle ? sorted.filter((s) => skillSearchKey(skillLabel(s)).includes(needle)) : sorted;
     return SKILL_GROUP_ORDER.map((group) => ({ group, skills: matching.filter((s) => skillGroup(s) === group) }));
   }, [skillsQuery.data, needle]);
   const nonEmpty = groups.filter((g) => g.skills.length > 0);
@@ -88,33 +198,12 @@ export function SkillsClient() {
 
   return (
     <div>
-      <ol data-slot="breadcrumbs" aria-label="Breadcrumbs" className="breadcrumbs -ml-0.5 mb-3 list-none p-0">
-        <li className="breadcrumbs__item">
-          <Link className="breadcrumbs__link hit-44" href="/">
-            Home
-          </Link>
-          <span className="breadcrumbs__separator" aria-hidden>
-            ›
-          </span>
-        </li>
-        <li className="breadcrumbs__item" aria-current="page">
-          Skills
-        </li>
-      </ol>
-
-      <h1 className="efb-h1 text-[var(--color-text-primary)]">Skills</h1>
-      <p className="efb-subtitle mt-2">
-        Every eFootball skill in one place — Showtime and classic skills with the number of cards that carry each one. Open a skill for its artwork, stat boosts and top cards.
-      </p>
+      <SkillsIntro />
 
       {skillsQuery.isError ? (
         <QueryErrorState error={skillsQuery.error} onRetry={() => void skillsQuery.refetch()} title="Could not load skills" className="mt-6" />
       ) : skillsQuery.isPending ? (
-        <div className="mt-6 grid gap-3 md:grid-cols-2 xl:grid-cols-3" aria-busy="true" aria-label="Loading skills">
-          {[...Array(12)].map((_, i) => (
-            <div key={i} className="h-32 animate-pulse rounded-2xl bg-[var(--color-panel)]" />
-          ))}
-        </div>
+        <SkillsSkeleton />
       ) : (
         <>
           {/* Name search + group filter (one row from 768 px). */}
@@ -135,7 +224,7 @@ export function SkillsClient() {
                 {query && (
                   <button
                     type="button"
-                    onClick={() => setQuery("")}
+                    onClick={clearQuery}
                     className="hit-44 inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-full bg-[var(--color-default)] text-[var(--color-text-secondary)] transition-colors hover:text-[var(--color-text-primary)]"
                     aria-label="Clear search"
                   >
@@ -146,11 +235,11 @@ export function SkillsClient() {
             </form>
             <div className="hide-scrollbar -mx-4 overflow-x-auto px-4 py-1.5 md:mx-0 md:px-0">
               <div role="group" aria-label="Skill group" className="segment p-1">
-                <button type="button" aria-pressed={activeGroup === ALL} onClick={() => setActiveGroup(ALL)} className="segment__item hit-44">
+                <button type="button" aria-pressed={activeGroup === ALL} onClick={() => chooseGroup(ALL)} className="segment__item hit-44">
                   All <span className="tabular-nums">{matchCount}</span>
                 </button>
                 {presentGroups.map((group) => (
-                  <button key={group} type="button" aria-pressed={activeGroup === group} onClick={() => setActiveGroup(group)} className="segment__item hit-44">
+                  <button key={group} type="button" aria-pressed={activeGroup === group} onClick={() => chooseGroup(group)} className="segment__item hit-44">
                     {SEGMENT_LABELS[group]}{" "}
                     <span className="tabular-nums">{countOf(group)}</span>
                   </button>
@@ -170,7 +259,7 @@ export function SkillsClient() {
                   <>
                     No skill name matches &quot;{query.trim()}&quot;
                     {activeGroup !== ALL ? ` in ${SKILL_GROUP_LABELS[activeGroup]}` : ""}.{" "}
-                    <button type="button" onClick={() => setQuery("")} className="cursor-pointer text-[var(--color-accent)] hover:underline">
+                    <button type="button" onClick={clearQuery} className="cursor-pointer text-[var(--color-accent)] hover:underline">
                       Clear search
                     </button>
                   </>
