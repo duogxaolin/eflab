@@ -7,11 +7,21 @@ import { statTierClass } from "@/lib/card-display";
 // change efootbase-exact-model-managers) from the stats on display, so every
 // card has a value at every position — the stored eFHUB ratings are not shown.
 //
-// Look (efootbase-ui-redesign): the pitch sits on its #181818 tile (the
-// caller's), cells radius 8 with a 3–4 px gap — full proficiency solid green,
-// half a darker green, none the surface grey with a hairline — position
-// 12/500 and the overall in a black pill in its tier colour; the legend
-// (None / Half / Full) is under the pitch.
+// Geometry and colours (pitch-hover-1023, measured on the 2026-10-20
+// reference capture of the detail page, our own markup and class names):
+// a #272727 box (radius 12, padding 16) holding only the pitch, 350 × 320 at
+// most — one CSS grid of 1fr / 2fr / 1fr columns (86 / 172 / 86 px) and seven
+// equal rows, 3 px apart. The centre column is seven full-width "row" cells
+// (CF, SS, AMF, CMF, DMF, CB, GK: label and badge side by side); each side
+// column is three "stack" cells (label above badge) spanning 2 / 3 / 2 rows
+// (LWF LMF LB, RWF RMF RB). Cells radius 6 with a 1 px #ffffff14 inner edge;
+// fills: full #7DFF1F at 70 %, half #7DFF1F at 30 % (derived from the
+// capture's pixels — it has no colour token for it), none #262626 at 80 %.
+// The overall sits in a dark badge (#181818 at 90 %, 1 px #ffffff21 edge,
+// radius 4) in its tier colour. The legend (None / Half / Full) is under the
+// box. Deviations, for contrast: the position label is dark on a full cell
+// and white on a half one (the reference's muted label reads ~1.6:1 on the
+// lime), and the registered position carries an inset 2 px ring.
 export interface PitchMapProps {
   positionAptitudes: Record<string, number>;
   tiles: Record<Position, number>;
@@ -19,120 +29,130 @@ export interface PitchMapProps {
   className?: string;
 }
 
-const FULL_BG = "bg-[#5cbf2a] text-black";
-const HALF_BG = "bg-[#3d6b25] text-white";
-const NONE_BG = "bg-[var(--color-elevated)] text-[var(--color-text-secondary)] shadow-[inset_0_0_0_1px_var(--color-line)]";
+type Proficiency = "full" | "half" | "none";
 
-function cellBg(aptitude: number | undefined): string {
-  if (aptitude === 0) return FULL_BG;
-  if (aptitude === 1) return HALF_BG;
-  return NONE_BG;
-}
-
-function aptitudeLabel(apt: number | undefined): string {
-  return apt === 0 ? "Full" : apt === 1 ? "Half" : "None";
+/** Database aptitude coding: 0 full, 1 half, 2 (or missing) none. */
+function proficiencyOf(apt: number | undefined): Proficiency {
+  return apt === 0 ? "full" : apt === 1 ? "half" : "none";
 }
 
 /** Screen-reader wording of the proficiency (one parallel set of words). */
-function aptitudeSpoken(apt: number | undefined): string {
-  return apt === 0 ? "fully proficient" : apt === 1 ? "half proficient" : "not proficient";
-}
+const SPOKEN: Record<Proficiency, string> = {
+  full: "fully proficient",
+  half: "half proficient",
+  none: "not proficient",
+};
 
-interface PitchCellProps {
-  pos: Position;
-  aptitudes: Record<string, number>;
-  tiles: Record<Position, number>;
-  registeredPosition: string;
-  layout?: "stack" | "row";
-}
+/** Cell fill + the position label's colour, softened like the reference's
+ *  label but ≥ 4.5:1 on each composited fill (measured on the rendered page:
+ *  full: #080d02 at 75 % 5.4:1, half: #fcfcfc at 85 % 5.1:1, none: #a0a0a0
+ *  5.9:1). */
+const FILL: Record<Proficiency, string> = {
+  full: "bg-[#7dff1fb3] text-[#080d02bf]",
+  half: "bg-[#7dff1f4d] text-[#fcfcfcd9]",
+  none: "bg-[#262626cc] text-[var(--color-text-secondary)]",
+};
 
-function PitchCell({ pos, aptitudes, tiles, registeredPosition, layout = "row" }: PitchCellProps) {
-  const apt = aptitudes[pos];
-  const rating = tiles[pos];
-  const isReg = pos === registeredPosition;
+/** Inner edge of every cell; the registered position's inset ring instead
+ *  (dark on the lime fill, the accent on the darker ones — ≥ 3:1 each). */
+const EDGE = "shadow-[inset_0_0_0_1px_#ffffff14]";
+const RING: Record<Proficiency, string> = {
+  full: "shadow-[inset_0_0_0_2px_var(--color-accent-foreground)]",
+  half: "shadow-[inset_0_0_0_2px_var(--color-accent)]",
+  none: "shadow-[inset_0_0_0_2px_var(--color-accent)]",
+};
 
+/** Grid placement: side cells span 2 / 3 / 2 of the seven rows. */
+const PLACE: Record<Position, string> = {
+  LWF: "col-start-1 row-start-1 row-span-2",
+  LMF: "col-start-1 row-start-3 row-span-3",
+  LB: "col-start-1 row-start-6 row-span-2",
+  CF: "col-start-2 row-start-1",
+  SS: "col-start-2 row-start-2",
+  AMF: "col-start-2 row-start-3",
+  CMF: "col-start-2 row-start-4",
+  DMF: "col-start-2 row-start-5",
+  CB: "col-start-2 row-start-6",
+  GK: "col-start-2 row-start-7",
+  RWF: "col-start-3 row-start-1 row-span-2",
+  RMF: "col-start-3 row-start-3 row-span-3",
+  RB: "col-start-3 row-start-6 row-span-2",
+};
+
+/** DOM (and reading) order: left side, centre top to bottom, right side. */
+const ORDER: readonly Position[] = ["LWF", "LMF", "LB", "CF", "SS", "AMF", "CMF", "DMF", "CB", "GK", "RWF", "RMF", "RB"];
+const SIDE = new Set<Position>(["LWF", "LMF", "LB", "RWF", "RMF", "RB"]);
+
+function PitchCell({ pos, proficiency, rating, registered }: { pos: Position; proficiency: Proficiency; rating: number; registered: boolean }) {
+  const stack = SIDE.has(pos);
+  // role="img": one accessible name per tile ("LWF, 104 OVR, fully
+  // proficient" — WCAG 1.4.1, the proficiency is otherwise only the fill);
+  // an aria-label on a plain <div> would be dropped.
   return (
     <div
-      className={`relative flex h-full w-full items-center justify-center rounded-lg ${cellBg(apt)} ${
-        isReg ? "ring-2 ring-[var(--color-accent)] ring-offset-1 ring-offset-[var(--color-panel)]" : ""
-      } ${layout === "stack" ? "flex-col gap-1 p-1" : "flex-row gap-2 px-2 py-0.5"}`}
+      role="img"
+      aria-label={`${pos}, ${rating} OVR, ${SPOKEN[proficiency]}${registered ? ", registered position" : ""}`}
+      className={`flex min-h-0 min-w-0 items-center justify-center overflow-hidden rounded-md ${PLACE[pos]} ${FILL[proficiency]} ${
+        registered ? RING[proficiency] : EDGE
+      } ${stack ? "flex-col gap-1.5" : "flex-row gap-1.5"}`}
       data-testid={`pitch-${pos}`}
-      data-proficiency={aptitudeLabel(apt).toLowerCase()}
+      data-proficiency={proficiency}
+      data-registered={registered ? "true" : undefined}
     >
-      {/* The proficiency is the cell's colour; screen readers get it as text
-          (WCAG 1.4.1 — no information only in colour or in a title):
-          "LWF, half proficient, 104 OVR" ("fully proficient" / "not
-          proficient" for the other two). */}
-      <span className="text-xs font-medium leading-none">{pos}</span>
-      <span className="sr-only">
-        , {aptitudeSpoken(apt)}, {rating} OVR
+      <span aria-hidden className="text-xs font-medium leading-none">
+        {pos}
       </span>
-      {/* Rating text uses the shared `--color-tier-*` tokens (statTierClass)
-          on the black/85 pill, the same contrast as the stat rows. */}
-      <span aria-hidden className={`inline-block rounded-[4px] bg-black/85 px-1.5 py-0.5 text-xs font-bold leading-none tabular-nums ${statTierClass(rating)}`}>
+      {/* Tier colour from the shared `--color-tier-*` tokens (statTierClass). */}
+      <span
+        aria-hidden
+        className={`inline-flex h-[17px] min-w-[26px] shrink-0 items-center justify-center rounded-[4px] border border-[#ffffff21] bg-[#181818e6] px-[5px] text-xs font-semibold leading-none tabular-nums ${statTierClass(rating)}`}
+      >
         {rating}
       </span>
     </div>
   );
 }
 
+const LEGEND: ReadonlyArray<[Proficiency, string]> = [
+  ["none", "None"],
+  ["half", "Half"],
+  ["full", "Full"],
+];
+
 export function PitchMap({ positionAptitudes, tiles, registeredPosition, className = "" }: PitchMapProps) {
-  const cell = (pos: Position, layout: "stack" | "row") => (
-    <PitchCell pos={pos} aptitudes={positionAptitudes} tiles={tiles} registeredPosition={registeredPosition} layout={layout} />
-  );
   return (
-    <div className={`flex w-full max-w-[350px] flex-col items-center ${className}`}>
-      {/* Pitch Diagram (3 columns: Left Wing, Center Spine, Right Wing). Sized
-          relative to its container so it never forces horizontal scrolling on
-          a phone (the 350px cap comes from the wrapper above). */}
-      <div className="flex w-full flex-row gap-1" style={{ aspectRatio: "350 / 320" }}>
-        {/* Left Column (LWF, LMF, LB) */}
-        <div className="flex h-full w-[24%] shrink-0 flex-col justify-between gap-1">
-          <div className="flex-1">{cell("LWF", "stack")}</div>
-          <div className="flex-1">{cell("LMF", "stack")}</div>
-          <div className="flex-1">{cell("LB", "stack")}</div>
-        </div>
-
-        {/* Center Column (CF/SS, AMF/CMF/DMF, CB/GK) */}
-        <div className="flex h-full min-w-0 flex-1 flex-col justify-between gap-1">
-          <div className="flex flex-1 gap-1">
-            <div className="flex-1">{cell("CF", "stack")}</div>
-            <div className="flex-1">{cell("SS", "stack")}</div>
-          </div>
-          <div className="flex flex-1 flex-col justify-between gap-1">
-            <div className="flex-1">{cell("AMF", "row")}</div>
-            <div className="flex-1">{cell("CMF", "row")}</div>
-            <div className="flex-1">{cell("DMF", "row")}</div>
-          </div>
-          <div className="flex flex-1 gap-1">
-            <div className="flex-1">{cell("CB", "stack")}</div>
-            <div className="flex-1">{cell("GK", "stack")}</div>
-          </div>
-        </div>
-
-        {/* Right Column (RWF, RMF, RB) */}
-        <div className="flex h-full w-[24%] shrink-0 flex-col justify-between gap-1">
-          <div className="flex-1">{cell("RWF", "stack")}</div>
-          <div className="flex-1">{cell("RMF", "stack")}</div>
-          <div className="flex-1">{cell("RB", "stack")}</div>
+    <div className={`flex w-full min-w-0 flex-col items-center gap-3 ${className}`}>
+      <div className="w-full rounded-xl bg-[var(--color-default)] p-4">
+        {/* Sized by its container (max 350 × 320): 224 × 205 inside a 320 px
+            phone, no horizontal scroll. */}
+        <div
+          role="group"
+          aria-label="Overall at each position"
+          className="mx-auto grid w-full max-w-[350px] grid-cols-[minmax(0,1fr)_minmax(0,2fr)_minmax(0,1fr)] grid-rows-7 gap-[3px]"
+          style={{ aspectRatio: "350 / 320" }}
+        >
+          {ORDER.map((pos) => (
+            <PitchCell
+              key={pos}
+              pos={pos}
+              proficiency={proficiencyOf(positionAptitudes[pos])}
+              rating={tiles[pos]}
+              registered={pos === registeredPosition}
+            />
+          ))}
         </div>
       </div>
 
-      {/* Proficiency legend */}
-      <div className="mt-3 flex w-full items-center justify-center gap-4 text-xs text-[var(--color-text-secondary)]" role="list" aria-label="Position proficiency levels">
-        <span className="inline-flex items-center gap-1.5" role="listitem">
-          <span className={`size-2.5 rounded-sm ${NONE_BG}`} aria-hidden />
-          None
-        </span>
-        <span className="inline-flex items-center gap-1.5" role="listitem">
-          <span className={`size-2.5 rounded-sm ${HALF_BG}`} aria-hidden />
-          Half
-        </span>
-        <span className="inline-flex items-center gap-1.5" role="listitem">
-          <span className={`size-2.5 rounded-sm ${FULL_BG}`} aria-hidden />
-          Full
-        </span>
-      </div>
+      {/* Proficiency legend: dots in the cell fills on a #272727 pill (the
+          fills are translucent, so they need the cells' own background). */}
+      <ul className="inline-flex items-center gap-4 rounded-full bg-[var(--color-default)] px-3 py-1 text-xs text-[var(--color-text-secondary)]" aria-label="Position proficiency levels">
+        {LEGEND.map(([p, label]) => (
+          <li key={p} className="inline-flex items-center gap-1.5">
+            <span className={`size-2.5 rounded-full ${FILL[p]} ${EDGE}`} aria-hidden />
+            {label}
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

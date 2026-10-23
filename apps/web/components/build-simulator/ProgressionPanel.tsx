@@ -31,7 +31,7 @@ import {
 } from "@eflab/shared";
 import { boosterLabel, statLabel } from "@/lib/card-display";
 import { DeferredManagerPicker, prefetchManagerPicker } from "@/components/build-simulator/deferred";
-import { CATEGORY_ICON, CATEGORY_SUFFIX } from "@/components/detail/StatGrid";
+import { CATEGORY_ICON, CATEGORY_SUFFIX, type CategoryPreviewBind } from "@/components/detail/StatGrid";
 import { PopoverPanel } from "@/components/ui/Popover";
 // Type only: the static copy itself comes from the server page (`notes`).
 import type { BuildNotes } from "@/components/build-simulator/build-notes";
@@ -594,6 +594,7 @@ export function ProgressionPanel({
   idBase,
   highlight = null,
   onHighlight,
+  preview,
   embedded = false,
   notes,
 }: {
@@ -608,9 +609,13 @@ export function ProgressionPanel({
   notice?: string | null;
   /** Base of the ids shared with the Build settings card. */
   idBase: string;
-  /** Category whose stats the stat grid highlights; the label buttons toggle it. */
+  /** Pinned category whose stats the stat grid highlights; the label buttons
+   *  toggle it (and their aria-pressed reflects it only). */
   highlight?: TrainingCategory | null;
   onHighlight?: (next: TrainingCategory | null) => void;
+  /** Hover / keyboard-focus preview of a label's category (useCategoryPreview);
+   *  omitted in the phone sheet, where the grid sits behind the modal. */
+  preview?: CategoryPreviewBind;
   /** Rendered inside the mobile bottom sheet: no card chrome, the sheet's
    *  title replaces the visible heading, and the Build settings follow the
    *  categories in the same flow. */
@@ -687,8 +692,9 @@ export function ProgressionPanel({
       {/* Manager Proficiency (70–90, default 90). */}
       <ProficiencyControl state={state} level={mp} onChange={onChange} id={ids.mp} describedBy={ids.mpNote} />
 
-      {/* Ten category rows (42 px): label button (highlights the category's
-          stats in the stat grid), next cost, − value +, 16 px track. */}
+      {/* Ten category rows (42 px): label button (hover / keyboard focus
+          previews the category's stats in the stat grid, a press pins the
+          highlight), next cost, − value +, 16 px track. */}
       <div id={ids.cats} className="efb-progression__cats" role="group" aria-label="Training categories">
         {TRAINING_CATEGORIES.map((cat) => {
           const v = state.trainingPoints[cat];
@@ -701,8 +707,9 @@ export function ProgressionPanel({
                   id={ids.catLabel(cat)}
                   aria-pressed={hit}
                   aria-describedby={ids.catStats(cat)}
+                  {...preview?.(cat)}
                   onClick={() => onHighlight?.(hit ? null : cat)}
-                  className="efb-progression-row__label hit-44"
+                  className="efb-progression-row__label hit-44 motion-reduce:transition-none"
                   data-testid={`progression-cat-${cat}-label`}
                 >
                   {labelOf(cat)}
@@ -711,7 +718,7 @@ export function ProgressionPanel({
                     a visible list in "About this build"; the costs are in the
                     spinbutton's value text and the visible "next N". */}
                 <span id={ids.catStats(cat)} className="sr-only">
-                  Raises {categoryStatsText(cat)}. Press to highlight these stats.
+                  Raises {categoryStatsText(cat)}. Focus previews these stats; press to pin the highlight.
                 </span>
                 {/* Visible next cost (spec "Cost Curve"), compact so the row
                     keeps its 42 px; aria-hidden because the spinbutton's

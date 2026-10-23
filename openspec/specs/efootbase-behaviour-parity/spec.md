@@ -62,6 +62,21 @@ Activating a stat row on a player page (click, Enter, Space, tap) SHALL open a p
 - **WHEN** the Jumping row is activated
 - **THEN** the popover holds two steppers, one for Aerial Strength and one for Goalkeeper 1.
 
+### Requirement: Category Hover Preview
+On a player page, hovering a category item of the category strip or a category label of the Progression panel with a mouse on a hover-capable device, or giving it keyboard focus, SHALL highlight that category's stat rows in the stat grid (its rows lit, the others dimmed — the same look as the pinned highlight) for as long as the pointer or focus stays on it; leaving or blurring SHALL return the grid to the pinned highlight, or to none. Click, Enter or Space SHALL toggle the pinned highlight, and `aria-pressed` SHALL reflect the pinned state only. A touch tap SHALL toggle the pin without a preview. An open Adjust popover keeps highlighting its own categories. Under reduced motion the highlight SHALL change without a transition.
+
+#### Scenario: Hover previews, click pins
+- **WHEN** the mouse rests on the Dribbling item of the category strip and then leaves it
+- **THEN** the Dribbling, Ball Control and Tight Possession rows are lit within one frame with every other row dimmed, the item stays `aria-pressed="false"`, and after the pointer leaves no row is lit.
+
+#### Scenario: Preview over a pinned category
+- **WHEN** Dribbling is pinned by a click and the mouse then rests on the Passing item and leaves it
+- **THEN** the Passing rows are lit while the pointer is on Passing, Dribbling stays the only pressed item, and after the pointer leaves the Dribbling rows are lit again.
+
+#### Scenario: Keyboard focus previews
+- **WHEN** keyboard focus moves onto a category item or a Progression category label
+- **THEN** that category's rows are lit until focus moves on, and Enter or Space pins or unpins it.
+
 ### Requirement: Inline Playstyle And Skill Triggers
 The hero line and the Overview paragraph SHALL present the card's playing styles as triggers that show their description (hover/focus tooltip; click, Enter, Space or tap toggles a popover with the same text), and the Overview paragraph SHALL link at most two skills (Showtime first) as skill links and end with "and other N player skills" ("skill" when N is 1) when more exist.
 
@@ -70,7 +85,7 @@ The hero line and the Overview paragraph SHALL present the card's playing styles
 - **THEN** the Overview paragraph contains one or two skill links and ends with "and other 8 player skills" or "and other 9 player skills" accordingly.
 
 ### Requirement: No Information Only In Title
-Stat rows, pitch tiles, the category strip, the Progression panel's category labels and booster buttons SHALL NOT carry information only in a `title` attribute: stat breakdowns live in the Adjust popover, pitch tiles carry screen-reader text of the proficiency ("fully proficient", "half proficient" or "not proficient") and value, a category label's stats are its screen-reader description and are listed visibly under "About this build", and booster buttons show readable stat names (for example "+5 · Dribbling, Tight Possession, Speed, Balance") with their on/off state shown by an icon as well as colour.
+Stat rows, pitch tiles, the category strip, the Progression panel's category labels and booster buttons SHALL NOT carry information only in a `title` attribute: stat breakdowns live in the Adjust popover, pitch tiles carry an accessible name with the position, value and proficiency ("fully proficient", "half proficient" or "not proficient" — for example "LWF, 104 OVR, half proficient"), a category label's stats are its screen-reader description and are listed visibly under "About this build", and booster buttons show readable stat names (for example "+5 · Dribbling, Tight Possession, Speed, Balance") with their on/off state shown by an icon as well as colour.
 
 #### Scenario: No title data
 - **WHEN** a detail page is inspected

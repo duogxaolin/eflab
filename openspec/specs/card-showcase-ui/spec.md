@@ -22,9 +22,9 @@ The card component MUST clearly display active booster bonuses (e.g., `+4 Defend
 - **THEN** the UI displays the booster badge with boosted stat categories and highlighted bonus values adjacent to the base stats.
 
 ### Requirement: Position Proficiency Heatmap
-The card details view MUST display a 12-position football pitch diagram visually distinguishing Full Familiarity, Partial Familiarity, and No Familiarity, with projected OVR ratings for each eligible slot.
+The card details view MUST display a 13-position football pitch diagram visually distinguishing Full Familiarity, Partial Familiarity, and No Familiarity, with the computed OVR for every position. The pitch SHALL sit in a tertiary-surface box (radius 12, padding 16) and be laid out as a left column (LWF, LMF, LB), a centre column of seven rows (CF, SS, AMF, CMF, DMF, CB, GK — position and value side by side) and a right column (RWF, RMF, RB — position above value), the side cells spanning two, three and two of the centre rows. Full proficiency SHALL be a lime fill at 70 % opacity, half proficiency the same lime at about 30 %, and no proficiency a dark grey; each value SHALL sit in a dark badge in its tier colour, and the proficiency SHALL also be part of each tile's accessible name.
 
 #### Scenario: Viewing position adaptability
 - **WHEN** viewing a card with full CB and partial DMF familiarity
-- **THEN** the pitch graphic highlights CB in solid color with peak rating and DMF in shaded outline with adjusted rating.
+- **THEN** the pitch graphic shows CB on the solid lime fill and DMF on the fainter lime fill, each with its computed overall in a tier-coloured badge, and the other positions on the dark grey fill.
 

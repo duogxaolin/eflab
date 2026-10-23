@@ -192,7 +192,7 @@ The Playing Style filter SHALL list only styles whose identifiers are verified a
 - **THEN** the filter does not offer a made-up identifier for it and the documentation lists it as unavailable.
 
 ### Requirement: Player Detail Information Sections
-The player detail page SHALL show a single overall pill, a Card Info block (name, featured pack, card type, nation, team, position, age, strong foot, height, weight, condition, card id with a copy control, release date), a Body Model section, Injury Resistance and Form, with stat names never truncated at 1280 and 390 px, "+N" booster chips on affected stats, a fifth tier colour for values of 100 or more taken from the tier tokens, click-to-highlight of stats belonging to a category, efootbase skill labels with Showtime skills first, and proficiency text of the form "N Full · N Half".
+The player detail page SHALL show a single overall pill, a Card Info block (name, featured pack, card type, nation, team, position, age, strong foot, height, weight, condition, card id with a copy control, release date), a Body Model section, Injury Resistance and Form, with stat names never truncated at 1280 and 390 px, "+N" booster chips on affected stats, a fifth tier colour for values of 100 or more taken from the tier tokens, click-to-highlight (pinned) of stats belonging to a category, with a hover / keyboard-focus preview of a category before it is pinned, efootbase skill labels with Showtime skills first, and proficiency text of the form "N Full · N Half".
 
 #### Scenario: Card info
 - **WHEN** a user opens a player page
