@@ -40,6 +40,14 @@ export function ManagerPicker({
   if (open && !requested) setRequested(true);
   const q = trpc.manager.picker.useQuery(undefined, { enabled: requested, staleTime: Infinity, gcTime: Infinity });
   const [term, setTerm] = useState("");
+  // Each opening starts with an empty search (QA 2026-10-23 U3): cleared on
+  // the opening edge, not on close, so the list does not re-expand while the
+  // drawer slides out.
+  const [wasOpen, setWasOpen] = useState(open);
+  if (open !== wasOpen) {
+    setWasOpen(open);
+    if (open) setTerm("");
+  }
   const needle = normalizeSearchQuery(term);
   const all = q.data ?? [];
   const shown = useMemo(() => (needle ? all.filter((m) => haystack(m).includes(needle)) : all), [all, needle]);

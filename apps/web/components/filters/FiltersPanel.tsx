@@ -48,11 +48,14 @@ export function FiltersPanel({
   update,
   openDialog,
   conditionIcon = conditionUrl,
+  resetKey,
 }: {
   state: PlayersState;
   update: (patch: Partial<PlayersState>) => void;
   openDialog: (kind: FilterDialogKind) => void;
   conditionIcon?: (letter: string) => string;
+  /** Bumped by a navigation: the range fields re-sync their drafts (RangeFields `resetKey`). */
+  resetKey?: number;
 }) {
   // Names for the launcher summaries (cached lists; the dialogs share them).
   const countries = trpc.player.countries.useQuery(undefined, { staleTime: 60 * 60_000, enabled: state.nat.length > 0 });
@@ -121,8 +124,8 @@ export function FiltersPanel({
         onChange={(types) => update({ types: types.length === 0 || types.length === CARD_TYPES.length ? null : CARD_TYPES.filter((t) => types.includes(t)) })}
       />
 
-      <RangeFields label="Base Overall Rating" value={state.base} bounds={b.ovr} onChange={(base) => update({ base })} />
-      <RangeFields label="Max Overall Rating" value={state.max} bounds={b.maxOvr} onChange={(max) => update({ max })} />
+      <RangeFields label="Base Overall Rating" value={state.base} bounds={b.ovr} onChange={(base) => update({ base })} resetKey={resetKey} />
+      <RangeFields label="Max Overall Rating" value={state.max} bounds={b.maxOvr} onChange={(max) => update({ max })} resetKey={resetKey} />
 
       <ToggleGroup<0 | 1>
         label="Strong Foot"
@@ -174,9 +177,9 @@ export function FiltersPanel({
         onChange={(wfu) => update({ wfu: wfu.sort((a, c) => a - c) })}
       />
 
-      <RangeFields label="Height" unit=" cm" value={state.height} bounds={b.height} onChange={(height) => update({ height })} />
-      <RangeFields label="Weight" unit=" kg" value={state.weight} bounds={b.weight} onChange={(weight) => update({ weight })} />
-      <RangeFields label="Age" value={state.age} bounds={b.age} onChange={(age) => update({ age })} />
+      <RangeFields label="Height" unit=" cm" value={state.height} bounds={b.height} onChange={(height) => update({ height })} resetKey={resetKey} />
+      <RangeFields label="Weight" unit=" kg" value={state.weight} bounds={b.weight} onChange={(weight) => update({ weight })} resetKey={resetKey} />
+      <RangeFields label="Age" value={state.age} bounds={b.age} onChange={(age) => update({ age })} resetKey={resetKey} />
     </div>
   );
 }

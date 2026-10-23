@@ -7,6 +7,7 @@ import {
   formatRangeParam,
   hasNonAscii,
   heightToFeetInches,
+  labelSearchKey,
   normalizeSearchQuery,
   parseIntListParams,
   parsePositionParams,
@@ -72,6 +73,30 @@ function assert(cond: unknown, msg: string): void {
   assert(normalizeSearchQuery("三笘 薫") === "三笘 薫", "CJK is left unchanged");
   assert(normalizeSearchQuery("") === "", "empty stays empty");
   assert(!hasNonAscii("mbappe") && hasNonAscii("三笘") && hasNonAscii("é"), "hasNonAscii detects non-ASCII only");
+}
+
+// 2b. labelSearchKey — the picker / skills list search (QA 2026-10-23 bug 3:
+// the /players pickers only lower-cased, so "cote" missed "Côte d'Ivoire").
+{
+  const matches = (query: string, label: string) => labelSearchKey(label).includes(labelSearchKey(query));
+  // The old picker rule (lower-case substring) misses all four; the shared key finds them.
+  const lowerCaseOnly = (query: string, label: string) => label.toLowerCase().includes(query.trim().toLowerCase());
+  const cases: Array<[string, string]> = [
+    ["cote", "Côte d'Ivoire"],
+    ["sao paulo", "São Paulo F.C."],
+    ["saint etienne", "AS Saint-Étienne"],
+    ["one touch", "One-touch Pass"],
+  ];
+  for (const [q, label] of cases) {
+    assert(matches(q, label), `labelSearchKey: "${q}" finds "${label}"`);
+    assert(!lowerCaseOnly(q, label), `the lower-case-only rule misses "${q}" → "${label}" (regression guard)`);
+  }
+  assert(matches("ONE–TOUCH", "One-touch Pass"), "en dash and capitals in the query");
+  assert(matches("one_touch", "One-touch Pass") && matches("one/touch", "One-touch Pass"), "underscore and slash read as spaces");
+  assert(matches("  saint   étienne ", "AS Saint-Étienne"), "extra spaces and accents in the query");
+  assert(!matches("cotes", "Côte d'Ivoire"), "still a substring test, not fuzzy");
+  assert(labelSearchKey("Côte d'Ivoire") === "cote d'ivoire", "apostrophes are kept");
+  assert(labelSearchKey("") === "", "empty stays empty");
 }
 
 // 3. escapeLike — %, _ and \ become literal under ESCAPE '\'.

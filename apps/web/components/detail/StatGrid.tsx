@@ -33,7 +33,9 @@ import { Popover } from "@/components/ui/Popover";
 // renders (`renderAdjust`, the Progression panel's own CategoryStepper — one
 // state) and the value's breakdown into base, training, the cut at 99,
 // Manager Proficiency, booster and manager parts. A card without Progression
-// (level cap 1) gets the breakdown only, titled with the stat. While a
+// (level cap 1) gets the breakdown only, titled with the stat: its Max value
+// as base + Booster 1, never a reference to a Build view it does not have
+// (QA 2026-10-23 U1). While a
 // popover is open the stats of its categories are highlighted; otherwise the
 // highlight follows the category strip / the panel's category labels.
 // Below 640 px a popover taller than half the viewport (e.g. Jumping's two
@@ -90,6 +92,9 @@ interface GridProps {
   /** The steppers of a stat's categories for its Adjust popover; omitted for
    *  a card without Progression (the popover then holds the breakdown only). */
   renderAdjust?: (stat: BaseStat) => ReactNode;
+  /** Level-1 values of a card without Progression (level cap 1): the Max
+   *  view's breakdown splits a value into this base and Booster 1. */
+  baseValues?: Record<BaseStat, number>;
 }
 
 interface SectionProps extends GridProps {
@@ -102,9 +107,32 @@ interface SectionProps extends GridProps {
 
 const signed = (v: number): string => (v > 0 ? `+${v}` : v < 0 ? `−${-v}` : "0");
 
-/** The value's parts, one line each (no line for a part that is 0). */
-function Breakdown({ stat, value, source, lift, cut, bonus, boost, mgr }: { stat: BaseStat; value: number; source: StatSource; lift: number; cut: number; bonus: number; boost: number; mgr: number }) {
+/** The value's parts, one line each (no line for a part that is 0). `cap1Base`
+ *  is the level-1 value of a card whose max level is 1 (no Build view): its
+ *  Max value splits into that base and Booster 1. */
+function Breakdown({
+  stat,
+  value,
+  source,
+  lift,
+  cut,
+  bonus,
+  boost,
+  mgr,
+  cap1Base,
+}: {
+  stat: BaseStat;
+  value: number;
+  source: StatSource;
+  lift: number;
+  cut: number;
+  bonus: number;
+  boost: number;
+  mgr: number;
+  cap1Base?: number;
+}) {
   const cats = STAT_CATEGORIES[stat].map((c) => PROGRESSION_CATEGORY_LABELS[c]).join(" / ");
+  const cap1Max = source === "max" && cap1Base !== undefined;
   const rows: Array<[string, string]> =
     source === "build"
       ? [
@@ -115,7 +143,30 @@ function Breakdown({ stat, value, source, lift, cut, bonus, boost, mgr }: { stat
           ...(boost ? [["Boosters", signed(boost)] as [string, string]] : []),
           ...(mgr ? [["Manager", signed(mgr)] as [string, string]] : []),
         ]
-      : [];
+      : cap1Max
+        ? [["Base", String(cap1Base)], ...(value !== cap1Base ? [["Booster 1", signed(value - cap1Base)] as [string, string]] : [])]
+        : [];
+  const total =
+    source === "build"
+      ? statLabel(stat)
+      : cap1Max
+        ? `${statLabel(stat)} at max level 1`
+        : source === "max"
+          ? `${statLabel(stat)} at max level (dump)`
+          : `${statLabel(stat)} at level 1`;
+  // Level-cap-1 cards have no Build view, so their notes never point to one;
+  // on them the dump's max-level value is the base plus Booster 1 (true for
+  // every level-cap-1 card of the dump: no training, no Booster 2 bump).
+  const note =
+    source === "build"
+      ? null
+      : cap1Max
+        ? "Max level is 1 for this card: no training, so the value is the base plus Booster 1."
+        : source === "max"
+          ? "The dump's own max-level value; the Build view splits a value into its parts."
+          : cap1Base !== undefined
+            ? "The card's level-1 value, without its booster."
+            : "The card's level-1 value.";
   return (
     <div className="efb-adjust__breakdown" data-testid="stat-breakdown">
       <dl className="efb-adjust__parts">
@@ -126,15 +177,11 @@ function Breakdown({ stat, value, source, lift, cut, bonus, boost, mgr }: { stat
           </div>
         ))}
         <div className="contents efb-adjust__total">
-          <dt>{source === "build" ? statLabel(stat) : source === "max" ? `${statLabel(stat)} at max level (dump)` : `${statLabel(stat)} at level 1`}</dt>
+          <dt>{total}</dt>
           <dd>{value}</dd>
         </div>
       </dl>
-      {source !== "build" && (
-        <p className="efb-adjust__note">
-          {source === "max" ? "The dump's own max-level value; the Build view splits a value into its parts." : "The card's level-1 value."}
-        </p>
-      )}
+      {note && <p className="efb-adjust__note">{note}</p>}
     </div>
   );
 }
@@ -151,6 +198,7 @@ function StatSection({
   source,
   highlight,
   renderAdjust,
+  baseValues,
   openStat,
   setOpen,
   idBase,
@@ -221,7 +269,17 @@ function StatSection({
                   {heading}
                 </h3>
                 {renderAdjust?.(st)}
-                <Breakdown stat={st} value={val} source={source} lift={lift} cut={cut} bonus={bonus} boost={boost} mgr={mgr} />
+                <Breakdown
+                  stat={st}
+                  value={val}
+                  source={source}
+                  lift={lift}
+                  cut={cut}
+                  bonus={bonus}
+                  boost={boost}
+                  mgr={mgr}
+                  cap1Base={renderAdjust ? undefined : baseValues?.[st]}
+                />
               </div>
             </Popover>
           );

@@ -251,13 +251,18 @@ export const progressionIds = (base: string) => ({
 const categoryStatsText = (cat: TrainingCategory): string => TRAINING_STATS[cat].map((s) => statLabel(s)).join(", ");
 
 /**
- * − value + of one training category: 18 × 18 icon buttons (44 × 44 on touch,
- * not tab stops) around a `role="spinbutton"` value (Arrow / Page / Home / End
- * keys; named by `labelledBy`; value text "N stat points, X pts spent, next
- * costs Y"). "+" is disabled when the next stat point costs more than what is
- * left. A button that becomes disabled while focused hands focus to the value.
- * `autoFocus` marks the control a popover focuses on opening ("+" while it can
- * be used, else the value).
+ * − value + of one training category: 18 × 18 icon buttons (44 × 44 on touch)
+ * around a `role="spinbutton"` value (Arrow / Page / Home / End keys; named by
+ * `labelledBy`; value text "N stat points, X pts spent, next costs Y"). "+" is
+ * disabled when the next stat point costs more than what is left. A button
+ * that becomes disabled while focused hands focus to the value.
+ * In the panel's ten rows the buttons are not tab stops (the spinbutton is the
+ * row's one stop); `tabbable` (the stat-row Adjust popover, a handful of
+ * controls) makes − value + three stops in that order (QA 2026-10-23 bug 6:
+ * the popover used to open on a "+" that was not a tab stop, and one Tab left
+ * it). `autoFocus` marks the value as the control a popover focuses on
+ * opening — the middle of the sequence, with the category's name and the
+ * arrow keys; Tab reaches "+", Shift+Tab "−".
  */
 export function CategoryStepper({
   cat,
@@ -265,12 +270,14 @@ export function CategoryStepper({
   onChange,
   labelledBy,
   autoFocus = false,
+  tabbable = false,
 }: {
   cat: TrainingCategory;
   state: ProgressionState;
   onChange: ProgressionChange;
   labelledBy: string;
   autoFocus?: boolean;
+  tabbable?: boolean;
 }) {
   const v = state.trainingPoints[cat];
   const next = nextStatPointCost(v);
@@ -318,7 +325,7 @@ export function CategoryStepper({
     <div className="efb-stepper">
       <button
         type="button"
-        tabIndex={-1}
+        tabIndex={tabbable ? undefined : -1}
         aria-label={`Decrease ${label}`}
         disabled={v === 0}
         onClick={() => set(v - 1)}
@@ -338,18 +345,17 @@ export function CategoryStepper({
         aria-valuetext={`${v} stat points, ${costText}`}
         onKeyDown={onKey}
         className="efb-stepper__value"
-        data-autofocus={autoFocus && !canInc ? "" : undefined}
+        data-autofocus={autoFocus ? "" : undefined}
       >
         {v}
       </div>
       <button
         type="button"
-        tabIndex={-1}
+        tabIndex={tabbable ? undefined : -1}
         aria-label={`Increase ${label}`}
         disabled={!canInc}
         onClick={() => set(v + 1)}
         className="efb-stepper__button hit-44"
-        data-autofocus={autoFocus && canInc ? "" : undefined}
         {...track("inc")}
       >
         <Plus className="size-3.5" aria-hidden />
@@ -361,9 +367,10 @@ export function CategoryStepper({
 /** The steppers of a stat row's Adjust popover (StatGrid `renderAdjust`):
  *  one row per category that raises the stat (two for Jumping: Aerial
  *  Strength and Goalkeeper 1) with the label, the next stat point's cost and
- *  the shared CategoryStepper, then the points left. The first stepper takes
- *  the popover's focus. A polite status announces each change made here
- *  (the panel's own live region is absent below lg). */
+ *  the shared CategoryStepper (− value + as tab stops), then the points left.
+ *  The first stepper's value takes the popover's focus. A polite status
+ *  announces each change made here (the panel's own live region is absent
+ *  below lg). */
 export function CategoryAdjust({
   cats,
   state,
@@ -393,7 +400,7 @@ export function CategoryAdjust({
             <span className="efb-progression-row__next" aria-hidden>
               next {pts(nextStatPointCost(v))}
             </span>
-            <CategoryStepper cat={cat} state={state} onChange={onChange} labelledBy={labelId} autoFocus={i === 0} />
+            <CategoryStepper cat={cat} state={state} onChange={onChange} labelledBy={labelId} autoFocus={i === 0} tabbable />
           </div>
         );
       })}
@@ -430,8 +437,9 @@ const DOCK_PROFICIENCY_TESTIDS: ProficiencyTestIds = {
  *  deselects the manager (withManagerProficiency). Arrow / Home / End are
  *  native; PageUp / PageDown move by 5 (browsers disagree on their step).
  *  `steppers` (the phone dock's popover) adds 36 px round − / + buttons
- *  (44 px touch area, step 1, not tab stops — the slider carries the
- *  keyboard) on either side of the slider; at a bound a button is
+ *  (44 px touch area, step 1) on either side of the slider, in the Tab order
+ *  − slider + like every other visible control of a popover (QA 2026-10-23
+ *  bug 6); at a bound a button is
  *  `aria-disabled`, so it keeps focus instead of dropping it to the body, and
  *  each press is announced. `autoFocus` marks the slider as the control a
  *  popover focuses on opening. */
@@ -495,7 +503,6 @@ export function ProficiencyControl({
     return (
       <button
         type="button"
-        tabIndex={-1}
         aria-label={`${delta > 0 ? "Increase" : "Decrease"} Manager Proficiency`}
         aria-disabled={atBound || undefined}
         onClick={() => {
@@ -959,8 +966,9 @@ export function BuildSettings({
  *     page not dimmed) anchored above the strip — so above the dock, with the
  *     strip still visible between them — and as wide as the dock: "Select
  *     Manager" (opens the manager drawer) and the Manager Proficiency control
- *     with 36 px − / + buttons. Focus goes to the slider; Escape or a tap
- *     outside closes it and focus returns to the chip / avatar that opened it.
+ *     with 36 px − / + buttons. Focus goes to the slider (Tab order: Select
+ *     Manager, −, slider, +); Escape or a tap outside closes it and focus
+ *     returns to the chip / avatar that opened it; Tab out of it closes it.
  *     A press on either trigger while it is open closes it.
  *   - The strip, the points and the "Progression" button open the bottom
  *     sheet with the full panel (`onOpen`; the parent scrolls it to the

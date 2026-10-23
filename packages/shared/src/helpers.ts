@@ -24,6 +24,25 @@ export function normalizeSearchQuery(q: string): string {
     .trim();
 }
 
+/** Hyphens, dashes (‐ ‑ ‒ – — ― and the minus sign), slashes and underscores. */
+const LABEL_SEPARATORS = /[-‐-―−_/]/g;
+
+/**
+ * Search key of a label for the client-side list filters (the `/skills`
+ * search, the Nation / League / Team / Skills pickers of `/players`):
+ * separators read as spaces, then `normalizeSearchQuery` (accents and case
+ * folded, spaces collapsed). Built the same way for the query and for each
+ * label, so a substring test of the two keys matches
+ *
+ *   "one touch"     → "One-touch Pass"
+ *   "cote"          → "Côte d'Ivoire"
+ *   "sao paulo"     → "São Paulo F.C."
+ *   "saint etienne" → "AS Saint-Étienne"
+ */
+export function labelSearchKey(s: string): string {
+  return normalizeSearchQuery(s.replace(LABEL_SEPARATORS, " "));
+}
+
 /**
  * Escape the three characters that are special inside a SQL `LIKE` pattern so a
  * user query is matched literally. The SQL side must declare the same escape

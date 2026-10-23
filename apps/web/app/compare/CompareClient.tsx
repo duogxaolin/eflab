@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import type { Route } from "next";
 import Link from "next/link";
@@ -7,8 +7,8 @@ import { trpc } from "@/lib/trpc";
 import { PlayerCard } from "@/components/cards/PlayerCard";
 import { SearchPalette } from "@/components/search/SearchPalette";
 import { QueryErrorState } from "@/lib/query-state";
-import { CARD_TYPE_LABELS, INT8_MAX, positionTiles, type PlayerCardDTO, type BaseStat, type Position } from "@eflab/shared";
-import { ATTACKING_STATS, DEFENDING_STATS, STRENGTH_STATS, POSITION_BY_INDEX, statLabel } from "@/lib/card-display";
+import { CARD_TYPE_LABELS, INT8_MAX, positionTiles, type BoosterDTO, type PlayerCardDTO, type BaseStat, type Position } from "@eflab/shared";
+import { ATTACKING_STATS, DEFENDING_STATS, STRENGTH_STATS, POSITION_BY_INDEX, boosterLabel, statLabel } from "@/lib/card-display";
 import { Plus, ArrowLeftRight, Link as LinkIcon, X, Check, Sparkles } from "lucide-react";
 
 // Pitch position grid (left→right, top→bottom) — 12 outfield slots + GK.
@@ -83,28 +83,45 @@ function CompareRadar({ p1, p2 }: { p1?: PlayerCardDTO; p2?: PlayerCardDTO }) {
   );
 }
 
+/** Readable booster label, as on the player page (`boosterLabel`: "+3 ·
+ *  Jumping, Physical Contact, Balance, Stamina", never the stored
+ *  abbreviations "Jump, PhysCont"). A booster with no stat data (Booster 136
+ *  "Booster +1", id 0) says so — the same wording as the player page. */
+function readableBooster(b: BoosterDTO): string {
+  const deltas = (Object.entries(b.stats) as Array<[BaseStat, number]>).filter(([, v]) => typeof v === "number" && v !== 0);
+  return deltas.length > 0 ? boosterLabel(b.name, deltas) : `${b.name} (no stat data)`;
+}
+
 function aptitudeDot(v: number | undefined): string {
   if (v === 0) return "bg-[var(--color-accent)]";
   if (v === 1) return "bg-[var(--color-accent-secondary)]";
   return "bg-[var(--color-line-active)]";
 }
 
-/** The slot ids of `?ids` (valid, distinct, at most MAX_SLOTS) and how many
- *  malformed entries were dropped before the cut (empty entries — `1,,2` or a
- *  trailing comma — are not counted; duplicates and extra ids are trimmed
- *  silently). */
-function parseIds(raw: string | null): { ids: string[]; malformed: number } {
-  if (!raw) return { ids: [], malformed: 0 };
-  const ids: string[] = [];
+/** Most well-formed ids of one link that are looked up (in batches of
+ *  COMPARE_BATCH, the `player.compare` bound); any beyond are ignored as extras. */
+const MAX_LINK_IDS = 20;
+const COMPARE_BATCH = 4;
+
+/** The well-formed, distinct ids of `?ids` in link order (`candidates`, at
+ *  most MAX_LINK_IDS; `overflow` = how many more there were) and how many
+ *  malformed entries it holds. Empty entries (`1,,2`, a trailing comma) and
+ *  duplicates are not counted. Which candidates fill the two slots is decided
+ *  only once they have been looked up (the first two that exist). */
+function parseIds(raw: string | null): { candidates: string[]; malformed: number; overflow: number } {
+  if (!raw) return { candidates: [], malformed: 0, overflow: 0 };
+  const candidates: string[] = [];
   let malformed = 0;
+  let overflow = 0;
   for (const id of raw.split(",")) {
-    if (ids.length === MAX_SLOTS) break;
     const s = id.trim();
     if (s === "") continue;
     if (!isValidId(s)) malformed++;
-    else if (!ids.includes(s)) ids.push(s);
+    else if (candidates.includes(s)) continue;
+    else if (candidates.length < MAX_LINK_IDS) candidates.push(s);
+    else overflow++;
   }
-  return { ids, malformed };
+  return { candidates, malformed, overflow };
 }
 
 const MD_QUERY = "(min-width: 48rem)";
@@ -130,7 +147,10 @@ export function CompareClient() {
   // swap) is written back with router.replace so the URL stays shareable.
   const rawIds = searchParams.get("ids");
   const parsed = useMemo(() => parseIds(rawIds), [rawIds]);
-  const selected = parsed.ids;
+  const selected = useMemo(() => parsed.candidates.slice(0, MAX_SLOTS), [parsed.candidates]);
+  // A canonical link (at most two well-formed, distinct ids, nothing else) is
+  // shown as it is; any other link is resolved first (below).
+  const canonical = rawIds === null || rawIds === selected.join(",");
   // Slot faces: the detail overlays (flag, MAX LVL, MAX OVR) only from md —
   // on the ~170 px phone slots they overlap; the line under the card carries
   // the same numbers.
@@ -148,24 +168,71 @@ export function CompareClient() {
   // line until the user changes the selection.
   const [droppedMalformed, setDroppedMalformed] = useState(0);
   const [droppedUnknown, setDroppedUnknown] = useState(0);
+  // Valid ids beyond the two slots, ignored with their own message.
+  const [droppedExtra, setDroppedExtra] = useState(0);
   const droppedCount = droppedMalformed + droppedUnknown;
   const clearDropped = () => {
     setDroppedMalformed(0);
     setDroppedUnknown(0);
+    setDroppedExtra(0);
   };
 
-  // A pasted link may carry more than MAX_SLOTS ids, duplicates or junk:
-  // rewrite it to the canonical trimmed form so the share link and the tiles
-  // agree (no-op when the URL is already canonical).
+  // A pasted link may carry more than MAX_SLOTS ids, duplicates, junk or
+  // unknown ids: look its well-formed ids up first (batches of COMPARE_BATCH),
+  // keep the first two that exist, then rewrite the URL to them and say what
+  // was dropped — malformed and unknown ids as "not found", found ids beyond
+  // the two slots as "extra" (second verify W2: trimming to two before the
+  // look-up let an unknown first id push a real third card out). A link the
+  // look-up cannot finish (network error) keeps its first two ids; the slots'
+  // own check below then drops an unknown one.
+  const utils = trpc.useUtils();
   useEffect(() => {
-    if (rawIds !== null && rawIds !== selected.join(",")) {
-      if (parsed.malformed > 0) setDroppedMalformed(parsed.malformed);
-      setSelected(selected);
-    }
-  }, [rawIds, selected, parsed.malformed, setSelected]);
+    if (canonical) return;
+    let cancelled = false;
+    void (async () => {
+      const found: string[] = [];
+      let missing = 0;
+      try {
+        for (let i = 0; i < parsed.candidates.length; i += COMPARE_BATCH) {
+          const batch = parsed.candidates.slice(i, i + COMPARE_BATCH);
+          const rows = await utils.player.compare.fetch({ cardIds: batch });
+          const have = new Set(rows.map((r) => r.id));
+          for (const id of batch) {
+            if (have.has(id)) found.push(id);
+            else missing++;
+          }
+        }
+      } catch {
+        if (cancelled) return;
+        setDroppedMalformed(parsed.malformed);
+        setDroppedUnknown(0);
+        setDroppedExtra(Math.max(0, parsed.candidates.length - MAX_SLOTS) + parsed.overflow);
+        setSelected(parsed.candidates.slice(0, MAX_SLOTS));
+        return;
+      }
+      if (cancelled) return;
+      setDroppedMalformed(parsed.malformed);
+      setDroppedUnknown(missing);
+      setDroppedExtra(Math.max(0, found.length - MAX_SLOTS) + parsed.overflow);
+      setSelected(found.slice(0, MAX_SLOTS));
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [canonical, parsed, setSelected, utils]);
 
   const [pickSlot, setPickSlot] = useState<number | null>(null);
-  const [copied, setCopied] = useState(false);
+  // Copy share link: "copied" for 2 s, or "failed" — the clipboard refused
+  // (permissions, an insecure context): a visible message with the link,
+  // selected for a manual copy, for 5 s or until the selection changes (QA
+  // 2026-10-23, same handling as the player page's Card ID — the button used
+  // to claim success whatever happened).
+  const [copy, setCopy] = useState<"idle" | "copied" | "failed">("idle");
+  const copied = copy === "copied";
+  const copyTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(() => () => clearTimeout(copyTimer.current), []);
+  const linkTextRef = useRef<HTMLSpanElement>(null);
+  const [failedLink, setFailedLink] = useState("");
   // Persistent slot wrappers: the picker returns focus here when the button
   // that opened it was replaced by the chosen card.
   const slotRefs = useRef<Array<HTMLDivElement | null>>([]);
@@ -179,7 +246,8 @@ export function CompareClient() {
 
   // Compare fires as soon as ANY card is picked so the chosen card renders at
   // once; the matrix below is gated on two loaded slots.
-  const compareQ = trpc.player.compare.useQuery({ cardIds: selected }, { enabled: selected.length >= 1, placeholderData: (prev) => prev });
+  // Not while a non-canonical link is being resolved (its slots wait for it).
+  const compareQ = trpc.player.compare.useQuery({ cardIds: selected }, { enabled: selected.length >= 1 && canonical, placeholderData: (prev) => prev });
   const compareData = useMemo(() => (selected.length >= 1 ? compareQ.data ?? [] : []), [compareQ.data, selected.length]);
 
   // Every panel reads its card by slot id — never by API row order — so the
@@ -188,7 +256,7 @@ export function CompareClient() {
   // Ids the API skipped (unknown cards): once the comparison has answered for
   // exactly this selection (not the previous selection's placeholder), drop
   // them from the URL.
-  const settled = selected.length >= 1 && compareQ.isSuccess && !compareQ.isPlaceholderData;
+  const settled = canonical && selected.length >= 1 && compareQ.isSuccess && !compareQ.isPlaceholderData;
   const missingCount = settled ? slots.filter((p) => p === undefined).length : 0;
   useEffect(() => {
     if (missingCount === 0) return;
@@ -207,11 +275,36 @@ export function CompareClient() {
     clearDropped();
     setSelected([selected[1]!, selected[0]!]);
   };
-  const copyLink = () => {
-    void navigator.clipboard.writeText(window.location.href);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+  const copyLink = async () => {
+    clearTimeout(copyTimer.current);
+    const href = window.location.href;
+    try {
+      if (!navigator.clipboard) throw new Error("Clipboard API unavailable");
+      await navigator.clipboard.writeText(href);
+      setCopy("copied");
+      copyTimer.current = setTimeout(() => setCopy("idle"), 2000);
+    } catch {
+      setFailedLink(href);
+      setCopy("failed");
+      copyTimer.current = setTimeout(() => setCopy("idle"), 5000);
+    }
   };
+  // The shown link belongs to the selection it was copied from: a new
+  // selection (swap, remove, add) clears the failure line at once (W3).
+  useEffect(() => {
+    setCopy((c) => (c === "failed" ? "idle" : c));
+  }, [rawIds]);
+  // Select the shown link once it is rendered after a refused copy.
+  useLayoutEffect(() => {
+    if (copy !== "failed") return;
+    const el = linkTextRef.current;
+    const selection = window.getSelection();
+    if (!el || !selection) return;
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    selection.removeAllRanges();
+    selection.addRange(range);
+  }, [copy, failedLink]);
   // Remove (B6): the button unmounts with its slot's card, so focus parks on
   // the slot's persistent wrapper at once and moves to the "Add Player"
   // button of the slot that became empty once it renders. `?ids` is a compact
@@ -374,7 +467,7 @@ export function CompareClient() {
           </button>
           <button
             type="button"
-            onClick={copyLink}
+            onClick={() => void copyLink()}
             className="button button--md button--icon-only button--ghost"
             title="Copy share link"
             aria-label={copied ? "Link copied" : "Copy share link"}
@@ -387,9 +480,25 @@ export function CompareClient() {
         Compare two eFootball player cards side by side — stats, skills, position proficiency and boosters.
       </p>
       {/* Always mounted (polite live region); empty and room-less unless a
-          card of the opened link was dropped. */}
-      <p role="status" className={droppedCount > 0 ? "mt-2 text-xs text-[var(--color-accent-warn)]" : "sr-only"} data-testid="compare-dropped">
-        {droppedCount === 0 ? "" : droppedCount === 1 ? "A card in the link was not found." : `${droppedCount} cards in the link were not found.`}
+          card of the opened link was dropped — not found, or beyond the two
+          slots. */}
+      <p role="status" className={droppedCount > 0 || droppedExtra > 0 ? "mt-2 text-xs text-[var(--color-accent-warn)]" : "sr-only"} data-testid="compare-dropped">
+        {[
+          droppedCount === 0 ? "" : `${droppedCount} ${droppedCount === 1 ? "card in the link was" : "cards in the link were"} not found.`,
+          droppedExtra === 0 ? "" : "Compare shows two cards — extra cards in the link were ignored.",
+        ]
+          .filter(Boolean)
+          .join(" ")}
+      </p>
+      {/* Refused copy: the link, selected for a manual copy (polite). */}
+      <p role="status" className={copy === "failed" ? "mt-2 text-xs text-[var(--color-accent-warn)] break-all" : "sr-only"}>
+        {copy === "failed" ? (
+          <>
+            Copy failed — select the link: <span ref={linkTextRef} className="text-[var(--color-text-primary)]">{failedLink}</span>
+          </>
+        ) : (
+          ""
+        )}
       </p>
 
       {/* Console: slot 1 · radar · slot 2 — 260 / flexible / 260 from 768 px;
@@ -539,18 +648,9 @@ export function CompareClient() {
                       {boosters.length === 0 && <span className="text-xs text-[var(--color-text-secondary)]">No boosters assigned</span>}
                       {boosters.map((b, j) => (
                         <div key={`b-${p.id}-${j}-${b.id}`} className="inline-flex max-w-full flex-col gap-1 rounded-xl bg-[var(--color-default)] px-2.5 py-1.5">
-                          <span className="inline-flex items-center gap-1 text-xs font-semibold text-[var(--color-skill-boost)]">
-                            <Sparkles className="size-3" aria-hidden /> {b.name}
+                          <span className="inline-flex items-start gap-1 text-xs font-semibold text-[var(--color-skill-boost)]">
+                            <Sparkles className="mt-0.5 size-3 shrink-0" aria-hidden /> <span className="min-w-0 break-words">{readableBooster(b)}</span>
                           </span>
-                          {Object.keys(b.stats).length > 0 && (
-                            <div className="flex flex-wrap gap-1">
-                              {Object.entries(b.stats).map(([k, v]) => (
-                                <span key={k} className="rounded-md bg-[var(--color-panel)] px-1.5 py-0.5 text-[11px] font-medium tabular-nums text-[var(--color-text-primary)]">
-                                  +{v} {statLabel(k as BaseStat)}
-                                </span>
-                              ))}
-                            </div>
-                          )}
                         </div>
                       ))}
                     </div>

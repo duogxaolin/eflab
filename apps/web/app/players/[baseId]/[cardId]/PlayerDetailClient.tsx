@@ -291,6 +291,11 @@ export function PlayerDetailClient({
   // the grid. Best Fit = the highest tile (registered position on a tie).
   const tiles = hasProgression ? buildResult.tiles : positionTiles(stats, { height: p.height, weakFootAccuracy: p.weakFootAccuracy }, p.positionAptitudes);
   const bestPos = bestFitPosition(tiles, regPos);
+  // The "At <POS>" tile reads the position the card face prints: the one
+  // chosen in Build settings when the card has a panel, else the registered
+  // one (QA 2026-10-23 U2 — it used to stay on the registered position while
+  // the face followed the selection).
+  const atPos: Position = hasProgression ? build.position : regPos;
   // Without a panel the card's level cap is 1: "Max" = base + Booster 1 (dump).
   const tilesSource = hasProgression ? "current build" : view === "max" ? "max-level stats (Booster 1 on)" : "level-1 stats";
   // The card face prints the build's overall at the selected position with
@@ -725,6 +730,7 @@ export function PlayerDetailClient({
                     )
                   : undefined
               }
+              baseValues={hasProgression ? undefined : p.stats}
             />
 
             {/* Skills — Showtime first (gold), classic after; each chip links
@@ -775,10 +781,10 @@ export function PlayerDetailClient({
                 </div>
               </div>
               <div className="efb-detail-tile min-h-[92px]">
-                <div className="text-sm text-[var(--color-text-secondary)]">At {posLabel}</div>
+                <div className="text-sm text-[var(--color-text-secondary)]">At {POSITION_LABEL[atPos]}</div>
                 <div className="mt-2 flex flex-wrap items-baseline gap-x-2">
-                  <span className={`text-2xl font-bold tabular-nums ${statTierClass(tiles[regPos])}`} data-testid="at-position-value">
-                    {tiles[regPos]}
+                  <span className={`text-2xl font-bold tabular-nums ${statTierClass(tiles[atPos])}`} data-testid="at-position-value">
+                    {tiles[atPos]}
                   </span>
                   <span className="text-xs text-[var(--color-text-secondary)]">{tilesSource}</span>
                 </div>
