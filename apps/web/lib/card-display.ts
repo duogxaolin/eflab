@@ -120,6 +120,35 @@ export function statLabel(key: BaseStat): string {
   return STAT_LABEL_OVERRIDES[key] ?? splitCamelCase(key);
 }
 
+/** Readable booster label (efootbase-behaviour-parity, "No Information Only
+ *  In Title"): built from the booster's stat vector with `statLabel`, never
+ *  from the abbreviations in the stored name ("Booster +5 · Dribble,
+ *  TightPoss, Speed, Balance"). The generic "Booster +N …" names drop their
+ *  name ("+5 · Dribbling, Tight Possession, Speed, Balance"); a named booster
+ *  keeps it ("Magical +4 · Dribbling, …"); a booster whose stats rise by
+ *  different amounts lists each ("Dribbling +2, Speed +3"). */
+export function boosterLabel(name: string, booster: ReadonlyArray<readonly [BaseStat, number]>): string {
+  // Stats in the stat grid's order (Attacking, Defending, Strength; others
+  // last), not the API's column order: "Dribbling, Tight Possession, Speed,
+  // Balance" — the order of the stored name.
+  const rank = (s: BaseStat) => {
+    const i = STAT_DISPLAY_ORDER.indexOf(s);
+    return i === -1 ? STAT_DISPLAY_ORDER.length : i;
+  };
+  const deltas = [...booster].sort((a, b) => rank(a[0]) - rank(b[0]));
+  const values = new Set(deltas.map(([, v]) => v));
+  const generic = /^Booster\b/i.test(name.trim());
+  // A named booster's own name, without any " · …" stat list it may carry.
+  const own = name.split(" · ")[0]!.trim();
+  const fmt = (v: number) => (v > 0 ? `+${v}` : String(v));
+  if (values.size === 1) {
+    const stats = deltas.map(([s]) => statLabel(s)).join(", ");
+    return `${generic ? fmt(deltas[0]![1]) : own} · ${stats}`;
+  }
+  const stats = deltas.map(([s, v]) => `${statLabel(s)} ${fmt(v)}`).join(", ");
+  return generic ? stats : `${own} · ${stats}`;
+}
+
 // Map BASE_STATS to rows.
 export const ATTACKING_STATS: BaseStat[] = [
   "offensiveAwareness","ballControl","dribbling","tightPossession",
@@ -132,6 +161,8 @@ export const DEFENDING_STATS: BaseStat[] = [
 export const STRENGTH_STATS: BaseStat[] = [
   "speed","acceleration","kickingPower","jump","physicalContact","balance","stamina",
 ];
+/** Every stat in the stat grid's reading order. */
+const STAT_DISPLAY_ORDER: readonly BaseStat[] = [...ATTACKING_STATS, ...DEFENDING_STATS, ...STRENGTH_STATS];
 
 // Position aptitude: 0=full, 1=partial, 2=none.
 export type Aptitude = 0 | 1 | 2;

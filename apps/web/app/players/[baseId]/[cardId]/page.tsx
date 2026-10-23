@@ -2,12 +2,15 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { CARD_TYPE_LABELS } from "@eflab/shared";
 import { fetchPlayer, isNumericId } from "@/lib/api-server";
+import { BUILD_NOTES } from "@/components/build-simulator/build-notes";
 import { PlayerDetailClient } from "./PlayerDetailClient";
 
 // Player card page (design decision 10): the server wrapper fetches the card
 // over HTTP, answers HTTP 404 when the card is unknown or `baseId` is not the
 // card's base, and names the player in the document title. Rendered per
-// request so `next build` never needs the API.
+// request so `next build` never needs the API. The static explanatory copy of
+// the Progression controls (build-notes.ts) is passed from here, so it travels
+// in the server render rather than in the client bundle.
 export const dynamic = "force-dynamic";
 
 type Params = { baseId: string; cardId: string };
@@ -32,5 +35,5 @@ export default async function PlayerPage({ params }: { params: Promise<Params> }
   if (!isNumericId(baseId) || !isNumericId(cardId)) notFound();
   const player = await fetchPlayer(baseId, cardId);
   if (!player) notFound();
-  return <PlayerDetailClient baseId={baseId} cardId={cardId} initialData={player} />;
+  return <PlayerDetailClient baseId={baseId} cardId={cardId} initialData={player} notes={BUILD_NOTES} />;
 }

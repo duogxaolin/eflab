@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import type { Route } from "next";
 import Link from "next/link";
@@ -89,15 +89,38 @@ function aptitudeDot(v: number | undefined): string {
   return "bg-[var(--color-line-active)]";
 }
 
-function parseIds(raw: string | null): string[] {
-  if (!raw) return [];
-  const out: string[] = [];
+/** The slot ids of `?ids` (valid, distinct, at most MAX_SLOTS) and how many
+ *  malformed entries were dropped before the cut (empty entries — `1,,2` or a
+ *  trailing comma — are not counted; duplicates and extra ids are trimmed
+ *  silently). */
+function parseIds(raw: string | null): { ids: string[]; malformed: number } {
+  if (!raw) return { ids: [], malformed: 0 };
+  const ids: string[] = [];
+  let malformed = 0;
   for (const id of raw.split(",")) {
+    if (ids.length === MAX_SLOTS) break;
     const s = id.trim();
-    if (isValidId(s) && !out.includes(s)) out.push(s);
-    if (out.length === MAX_SLOTS) break;
+    if (s === "") continue;
+    if (!isValidId(s)) malformed++;
+    else if (!ids.includes(s)) ids.push(s);
   }
-  return out;
+  return { ids, malformed };
+}
+
+const MD_QUERY = "(min-width: 48rem)";
+function subscribeMd(onChange: () => void): () => void {
+  const mql = window.matchMedia(MD_QUERY);
+  mql.addEventListener("change", onChange);
+  return () => mql.removeEventListener("change", onChange);
+}
+/** True from md (768 px). The server render and the first paint read false
+ *  (the plain face), so a phone never flashes the detail overlays. */
+function useFromMd(): boolean {
+  return useSyncExternalStore(
+    subscribeMd,
+    () => window.matchMedia(MD_QUERY).matches,
+    () => false,
+  );
 }
 
 export function CompareClient() {
@@ -106,7 +129,12 @@ export function CompareClient() {
   // `?ids` is the source of truth for the selection: every change (pick, remove,
   // swap) is written back with router.replace so the URL stays shareable.
   const rawIds = searchParams.get("ids");
-  const selected = useMemo(() => parseIds(rawIds), [rawIds]);
+  const parsed = useMemo(() => parseIds(rawIds), [rawIds]);
+  const selected = parsed.ids;
+  // Slot faces: the detail overlays (flag, MAX LVL, MAX OVR) only from md —
+  // on the ~170 px phone slots they overlap; the line under the card carries
+  // the same numbers.
+  const fromMd = useFromMd();
   const setSelected = useCallback(
     (next: string[]) => {
       const ids = next.filter((id, i) => id && next.indexOf(id) === i).slice(0, MAX_SLOTS);
@@ -114,12 +142,27 @@ export function CompareClient() {
     },
     [router],
   );
+  // Cards of the link that were dropped (efootbase-behaviour-parity "Compare
+  // Guards"): malformed entries (dropped while parsing) and ids the API does
+  // not know (dropped once the comparison answered). Shown in a polite status
+  // line until the user changes the selection.
+  const [droppedMalformed, setDroppedMalformed] = useState(0);
+  const [droppedUnknown, setDroppedUnknown] = useState(0);
+  const droppedCount = droppedMalformed + droppedUnknown;
+  const clearDropped = () => {
+    setDroppedMalformed(0);
+    setDroppedUnknown(0);
+  };
+
   // A pasted link may carry more than MAX_SLOTS ids, duplicates or junk:
   // rewrite it to the canonical trimmed form so the share link and the tiles
   // agree (no-op when the URL is already canonical).
   useEffect(() => {
-    if (rawIds !== null && rawIds !== selected.join(",")) setSelected(selected);
-  }, [rawIds, selected, setSelected]);
+    if (rawIds !== null && rawIds !== selected.join(",")) {
+      if (parsed.malformed > 0) setDroppedMalformed(parsed.malformed);
+      setSelected(selected);
+    }
+  }, [rawIds, selected, parsed.malformed, setSelected]);
 
   const [pickSlot, setPickSlot] = useState<number | null>(null);
   const [copied, setCopied] = useState(false);
@@ -142,6 +185,16 @@ export function CompareClient() {
   // Every panel reads its card by slot id — never by API row order — so the
   // left slot is always the left column and Swap reorders every panel together.
   const slots = useMemo(() => selected.map((id) => compareData.find((p) => p.id === id)), [selected, compareData]);
+  // Ids the API skipped (unknown cards): once the comparison has answered for
+  // exactly this selection (not the previous selection's placeholder), drop
+  // them from the URL.
+  const settled = selected.length >= 1 && compareQ.isSuccess && !compareQ.isPlaceholderData;
+  const missingCount = settled ? slots.filter((p) => p === undefined).length : 0;
+  useEffect(() => {
+    if (missingCount === 0) return;
+    setDroppedUnknown(missingCount);
+    setSelected(selected.filter((_, i) => slots[i] !== undefined));
+  }, [missingCount, selected, slots, setSelected]);
   const left = slots[0];
   const right = slots[1];
   const loadedSlots = slots.filter((p): p is PlayerCardDTO => p !== undefined);
@@ -150,23 +203,52 @@ export function CompareClient() {
 
   const canSwap = selected.length === 2;
   const swapPlayers = () => {
-    if (canSwap) setSelected([selected[1]!, selected[0]!]);
+    if (!canSwap) return;
+    clearDropped();
+    setSelected([selected[1]!, selected[0]!]);
   };
   const copyLink = () => {
     void navigator.clipboard.writeText(window.location.href);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
-  const removeSlot = (slotIdx: number) => setSelected(selected.filter((_, i) => i !== slotIdx));
+  // Remove (B6): the button unmounts with its slot's card, so focus parks on
+  // the slot's persistent wrapper at once and moves to the "Add Player"
+  // button of the slot that became empty once it renders. `?ids` is a compact
+  // list, so removing slot 1 of two moves the other card into slot 1 and the
+  // empty slot is slot 2 — its "Add Player" gets focus.
+  const [focusAddSlot, setFocusAddSlot] = useState<number | null>(null);
+  const removeSlot = (slotIdx: number) => {
+    const next = selected.filter((_, i) => i !== slotIdx);
+    slotRefs.current[slotIdx]?.focus();
+    setFocusAddSlot(next.length);
+    clearDropped();
+    setSelected(next);
+  };
+  useEffect(() => {
+    if (focusAddSlot === null || selected.length !== focusAddSlot) return;
+    const add = slotRefs.current[focusAddSlot]?.querySelector<HTMLElement>("[data-slot-add]");
+    if (!add) return;
+    const active = document.activeElement;
+    // Only while focus is still parked on a slot wrapper or lost to the body.
+    if (active === null || active === document.body || slotRefs.current.includes(active as HTMLDivElement)) add.focus();
+    setFocusAddSlot(null);
+  }, [focusAddSlot, selected.length]);
+  // Picker rows that cannot be chosen: every card already in a slot (the
+  // picker only opens on an empty slot), with its slot number.
+  const pickerExclude = useMemo(() => Object.fromEntries(selected.map((id, i) => [id, `In slot ${i + 1}`])), [selected]);
   const openPicker = (slot: number) => {
     lastSlotRef.current = slot;
     setPickSlot(slot);
   };
   const selectCardForSlot = (id: string) => {
-    if (pickSlot === null) return;
+    // The palette never offers a card already in a slot (excludeIds); the
+    // check stays as a guard for any other caller.
+    if (pickSlot === null || selected.includes(id)) return;
     const next = [...selected];
     next[pickSlot] = id;
     const filtered = next.filter(Boolean);
+    clearDropped();
     setSelected(filtered);
     // An empty slot 2 picked while slot 1 is empty becomes slot 1.
     pendingFocusRef.current = filtered.indexOf(id);
@@ -193,7 +275,7 @@ export function CompareClient() {
         <div className="flex w-full md:max-w-40 flex-col items-center gap-3">
           <div className="relative w-full">
             {/* caption "none": the slot prints the name (a link) below the card. */}
-            <PlayerCard player={player} size="full" caption="none" showDetails />
+            <PlayerCard player={player} size="full" caption="none" showDetails={fromMd} />
             {/* z-20: above the card tile, which rises to z 10 on hover / focus. */}
             <button
               type="button"
@@ -215,6 +297,8 @@ export function CompareClient() {
             </h2>
             <p className="mt-0.5 text-xs text-[var(--color-text-secondary)] tabular-nums">
               {CARD_TYPE_LABELS[player.cardType]} · {player.ovr} OVR · Max {player.maxOvr}
+              {/* Below md the face has no MAX LVL badge: the level is here. */}
+              {!fromMd && player.levelCap != null && player.levelCap > 0 ? ` · Max Lv ${player.levelCap}` : ""}
             </p>
           </div>
         </div>
@@ -236,22 +320,13 @@ export function CompareClient() {
         </div>
       );
     }
-    if (cardId && compareQ.isSuccess && !compareQ.isPlaceholderData) {
-      // The API skipped this id: unknown card → drop it from the URL.
-      return (
-        <div className="efb-compare-slot cursor-default">
-          <p className="text-xs text-[var(--color-text-secondary)]">Card #{cardId} was not found.</p>
-          <button type="button" onClick={() => removeSlot(slotIdx)} className="button button--sm button--ghost mt-2 text-[var(--color-accent)]">
-            Remove
-          </button>
-        </div>
-      );
-    }
+    // A card the API skipped is dropped from the URL by the effect above (with
+    // the status message); until then the slot reads as loading.
     if (cardId) {
       return <div className="efb-compare-slot animate-pulse" aria-busy="true" aria-label="Loading card" />;
     }
     return (
-      <button type="button" onClick={() => openPicker(slotIdx)} aria-haspopup="dialog" aria-label={`Add Player to slot ${slotIdx + 1}: search and select a player`} className="efb-compare-slot">
+      <button type="button" onClick={() => openPicker(slotIdx)} aria-haspopup="dialog" data-slot-add="" aria-label={`Add Player to slot ${slotIdx + 1}: search and select a player`} className="efb-compare-slot">
         <span className="efb-compare-slot__plus" aria-hidden>
           <Plus className="size-5" />
         </span>
@@ -311,6 +386,11 @@ export function CompareClient() {
       <p className="efb-subtitle mt-3">
         Compare two eFootball player cards side by side — stats, skills, position proficiency and boosters.
       </p>
+      {/* Always mounted (polite live region); empty and room-less unless a
+          card of the opened link was dropped. */}
+      <p role="status" className={droppedCount > 0 ? "mt-2 text-xs text-[var(--color-accent-warn)]" : "sr-only"} data-testid="compare-dropped">
+        {droppedCount === 0 ? "" : droppedCount === 1 ? "A card in the link was not found." : `${droppedCount} cards in the link were not found.`}
+      </p>
 
       {/* Console: slot 1 · radar · slot 2 — 260 / flexible / 260 from 768 px;
           below, the two slots side by side and the radar under them. */}
@@ -333,6 +413,8 @@ export function CompareClient() {
         onClose={() => setPickSlot(null)}
         title={`Select player for slot ${(pickSlot ?? lastSlotRef.current) + 1}`}
         onSelect={(p) => selectCardForSlot(p.id)}
+        // The cards already in a slot cannot be picked again ("In slot N").
+        excludeIds={pickerExclude}
         // After a pick: the slot's wrapper (the effect above then moves focus
         // to the card link); after Escape / backdrop: the opener (null).
         returnFocusTo={() => {

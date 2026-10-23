@@ -119,6 +119,26 @@ export const DEFAULT_PLAYERS_STATE: PlayersState = {
 };
 
 const INT4_MAX = 2_147_483_647;
+
+/** Largest page `player.list` accepts (`playerListInput.page`). A larger page in
+ *  the URL is kept as read (so the page can say which page did not exist) and
+ *  sent as this bound; PlayersClient then replaces it with the last page. */
+export const MAX_LIST_PAGE = 10_000;
+
+/** Field sorts that read naturally from A to Z; every other field sort (the
+ *  numbers) starts with the highest value. */
+const ASCENDING_FIELD_SORTS: ReadonlySet<SortField> = new Set<SortField>(["name", "namePrint", "japName", "chineseName"]);
+
+/**
+ * Direction a sort starts in when it is chosen, and the direction an `order`-less
+ * URL means: Name (and the other name columns) A → Z, numeric fields high → low.
+ * The presets fix their own direction and ignore `order`; "desc" is their
+ * neutral value. The URL writes `order` only when it differs from this, so
+ * `sort=name` is A → Z and `sort=name&order=desc` is Z → A.
+ */
+export function defaultSortOrder(sort: PlayersSort): "asc" | "desc" {
+  return !isSortPreset(sort) && ASCENDING_FIELD_SORTS.has(sort) ? "asc" : "desc";
+}
 const isCardType = (s: string): s is CardType => (CARD_TYPES as readonly string[]).includes(s);
 const isSortField = (s: string): s is SortField => (SORT_FIELDS as readonly string[]).includes(s);
 const isCondition = (s: string): s is Condition => (CONDITIONS as readonly string[]).includes(s);
@@ -201,6 +221,7 @@ export function readPlayersState(sp: URLSearchParams): PlayersState {
   const footRaw = sp.get("foot");
   const sortRaw = sp.get("sort") ?? "";
   const sort: PlayersSort = isSortPreset(sortRaw) ? sortRaw : isSortField(sortRaw) ? sortRaw : DEFAULT_SORT_PRESET;
+  const orderRaw = sp.get("order");
   const b = FILTER_RANGE_BOUNDS;
   return {
     q: (sp.get("search") ?? sp.get("q") ?? "").trim(),
@@ -228,8 +249,12 @@ export function readPlayersState(sp: URLSearchParams): PlayersState {
     statsAtMax: sp.get("smax") === "1",
     body: rangeMap(sp.get("body"), isPhysique, b.physique),
     sort,
-    order: sp.get("order") === "asc" ? "asc" : "desc",
-    page: intParam(sp.get("page"), 1, 10_000) ?? 1,
+    // An explicit `order` wins; without one a field sort uses its natural
+    // direction (defaultSortOrder).
+    order: orderRaw === "asc" || orderRaw === "desc" ? orderRaw : defaultSortOrder(sort),
+    // Any positive integer: a page past the end (or past MAX_LIST_PAGE) is
+    // replaced by the last page once the list has answered.
+    page: intParam(sp.get("page"), 1, Number.MAX_SAFE_INTEGER) ?? 1,
   };
 }
 
@@ -273,7 +298,7 @@ export function writePlayersState(s: PlayersState): string {
   const body = formatRangeMap(s.body);
   if (body) sp.set("body", body);
   if (s.sort !== DEFAULT_SORT_PRESET) sp.set("sort", s.sort);
-  if (!isSortPreset(s.sort) && s.order !== "desc") sp.set("order", s.order);
+  if (!isSortPreset(s.sort) && s.order !== defaultSortOrder(s.sort)) sp.set("order", s.order);
   if (s.page > 1) sp.set("page", String(s.page));
   return sp.toString();
 }
@@ -299,5 +324,5 @@ export function countActiveFilters(s: PlayersState): number {
 
 /** `true` when anything differs from the clean /players view. */
 export function hasAnyState(s: PlayersState): boolean {
-  return Boolean(s.q) || countActiveFilters(s) > 0 || s.sort !== DEFAULT_SORT_PRESET || s.order !== "desc";
+  return Boolean(s.q) || countActiveFilters(s) > 0 || s.sort !== DEFAULT_SORT_PRESET || s.order !== defaultSortOrder(s.sort);
 }

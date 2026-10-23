@@ -36,6 +36,12 @@ export interface PickerLoad {
  *
  * `load` is the query state of the list: the picker renders the loading /
  * retry row itself and shows `emptyText` only once the list is loaded.
+ *
+ * `featured` puts a group of chosen values first (the Nation dialog's ten
+ * nations with the most cards under "Popular") and heads the full list with
+ * `restLabel` ("All nations", A–Z, still containing the featured values). A
+ * search ignores both groups: it lists each matching item once, in `items`
+ * order. A featured value shows in both groups with the same pressed state.
  */
 export function PickerList<V extends string | number>({
   items,
@@ -47,6 +53,7 @@ export function PickerList<V extends string | number>({
   load,
   emptyText = "Nothing matches.",
   labelOf,
+  featured,
 }: {
   items: ReadonlyArray<PickerItem<V>>;
   selected: readonly V[];
@@ -60,6 +67,9 @@ export function PickerList<V extends string | number>({
   /** Chip label for a selected value that is not among `items` (e.g. a team
    *  hidden by the league narrowing); defaults to the item label or the value. */
   labelOf?: (value: V) => string;
+  /** Values listed first under `label` while no search is typed; the full
+   *  list then follows under `restLabel`. */
+  featured?: { label: string; values: readonly V[]; restLabel: string };
 }) {
   const id = useId();
   const [q, setQ] = useState("");
@@ -78,109 +88,126 @@ export function PickerList<V extends string | number>({
   const failed = !loading && load?.isError === true;
   const loaded = !loading && !failed;
 
-  // Group preserving first-seen order.
+  // Group preserving first-seen order; with `featured` and no search: the
+  // featured group, then every item under `restLabel`.
   const groups: Array<{ name: string | undefined; items: PickerItem<V>[] }> = [];
-  for (const item of visible) {
-    const last = groups[groups.length - 1];
-    if (last && last.name === item.group) last.items.push(item);
-    else groups.push({ name: item.group, items: [item] });
+  const featuredItems =
+    featured && !needle
+      ? featured.values.map((v) => items.find((i) => i.value === v)).filter((i): i is PickerItem<V> => i !== undefined)
+      : [];
+  if (featured && !needle) {
+    if (featuredItems.length > 0) groups.push({ name: featured.label, items: featuredItems });
+    if (visible.length > 0) groups.push({ name: featured.restLabel, items: [...visible] });
+  } else {
+    for (const item of visible) {
+      const last = groups[groups.length - 1];
+      if (last && last.name === item.group) last.items.push(item);
+      else groups.push({ name: item.group, items: [item] });
+    }
   }
 
   return (
-    <div className="space-y-4">
-      <div className="field field--sm filter-search">
-        <Search className="size-4 shrink-0 text-[var(--color-text-secondary)]" aria-hidden />
-        <input
-          id={`${id}-search`}
-          type="search"
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          placeholder={searchLabel}
-          aria-label={searchLabel}
-          autoComplete="off"
-          // The enclosing Modal focuses this after showModal().
-          data-autofocus
-          className="field__input no-native-clear"
-        />
-        {q && (
-          <button
-            type="button"
-            onClick={() => setQ("")}
-            aria-label="Clear search"
-            className="hit-44 inline-flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-full bg-[var(--color-default)] text-[var(--color-text-secondary)] transition-colors hover:text-[var(--color-text-primary)]"
-          >
-            <X className="size-3" aria-hidden />
-          </button>
-        )}
-      </div>
-      {/* The cap notice sits under the search field (where the next choice is
-          typed), above the chips, so it stays in view however many are
-          selected; it is a permanent live region (sr-only while empty) so
-          reaching the limit is announced the moment it happens. */}
-      {!single && max !== undefined && (
-        <p role="status" aria-live="polite" data-limit-message={full ? "true" : undefined} className={full ? "text-xs text-[var(--color-accent-warn)]" : "sr-only"}>
-          {full ? `At most ${max} selections — remove one to pick another.` : ""}
-        </p>
-      )}
-      {selected.length > 0 && (
-        <div className="space-y-2">
-          <div className="flex items-center justify-between gap-2 text-xs">
-            <span className="text-[var(--color-text-secondary)]" aria-live="polite">
-              {selected.length} selected
-            </span>
-            <button type="button" onClick={() => onChange([])} className="hit-44 cursor-pointer font-medium text-[var(--color-accent)] hover:underline">
-              Clear selection
+    <div>
+      {/* Pinned at the top of the dialog body (`.filter-search-bar`, sticky)
+          while the options scroll under it; the bar sits outside the
+          `space-y` list below so its own margins apply. */}
+      <div className="filter-search-bar">
+        <div className="field field--sm filter-search">
+          <Search className="size-4 shrink-0 text-[var(--color-text-secondary)]" aria-hidden />
+          <input
+            id={`${id}-search`}
+            type="search"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder={searchLabel}
+            aria-label={searchLabel}
+            autoComplete="off"
+            // The enclosing Modal focuses this after showModal().
+            data-autofocus
+            className="field__input no-native-clear"
+          />
+          {q && (
+            <button
+              type="button"
+              onClick={() => setQ("")}
+              aria-label="Clear search"
+              className="hit-44 inline-flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-full bg-[var(--color-default)] text-[var(--color-text-secondary)] transition-colors hover:text-[var(--color-text-primary)]"
+            >
+              <X className="size-3" aria-hidden />
             </button>
-          </div>
-          {!single && (
-            <ul className="m-0 flex list-none flex-wrap gap-1.5 p-0" aria-label="Selected">
-              {selected.map((v) => {
-                const label = chipLabel(v);
-                return (
-                  <li key={String(v)} className="max-w-full">
-                    <button type="button" onClick={() => toggle(v)} aria-label={`Remove ${label}`} title={`Remove ${label}`} className="filter-chip hit-44">
-                      <span className="truncate">{label}</span>
-                      <X className="size-3 shrink-0" aria-hidden />
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
           )}
         </div>
-      )}
-      {loading && <p className="py-3 text-center text-xs text-[var(--color-text-secondary)]">Loading {load?.what}…</p>}
-      {failed && (
-        <button type="button" onClick={() => void load?.refetch()} className="hit-44 w-full cursor-pointer py-3 text-center text-xs text-[var(--color-accent)] hover:underline">
-          Could not load {load?.what} — retry
-        </button>
-      )}
-      {loaded && visible.length === 0 && <p className="py-4 text-center text-xs text-[var(--color-text-secondary)]">{emptyText}</p>}
-      {groups.map((g, gi) => (
-        <section key={g.name ?? `g${gi}`} className="space-y-2">
-          {g.name && <h3 className="filter-label">{g.name}</h3>}
-          <div className="filter-options">
-            {g.items.map((item) => {
-              const on = selected.includes(item.value);
-              const blocked = full && !on;
-              return (
-                <button
-                  key={String(item.value)}
-                  type="button"
-                  aria-pressed={on}
-                  aria-disabled={blocked || undefined}
-                  onClick={() => toggle(item.value)}
-                  title={blocked ? `At most ${max} selections` : item.hint ? `${item.label} · ${item.hint}` : item.label}
-                  className="filter-option"
-                >
-                  <span className="filter-option__label">{item.label}</span>
-                  {on && <Check className="size-4 shrink-0" aria-hidden />}
-                </button>
-              );
-            })}
+        {/* The cap notice sits under the search field (where the next choice is
+            typed), above the chips, pinned with it so it stays in view however
+            many are selected; it is a permanent live region (sr-only while
+            empty) so reaching the limit is announced the moment it happens. */}
+        {!single && max !== undefined && (
+          <p role="status" aria-live="polite" data-limit-message={full ? "true" : undefined} className={full ? "text-xs text-[var(--color-accent-warn)]" : "sr-only"}>
+            {full ? `At most ${max} selections — remove one to pick another.` : ""}
+          </p>
+        )}
+      </div>
+      <div className="mt-3 space-y-4">
+        {selected.length > 0 && (
+          <div className="space-y-2">
+            <div className="flex items-center justify-between gap-2 text-xs">
+              <span className="text-[var(--color-text-secondary)]" aria-live="polite">
+                {selected.length} selected
+              </span>
+              <button type="button" onClick={() => onChange([])} className="hit-44 cursor-pointer font-medium text-[var(--color-accent)] hover:underline">
+                Clear selection
+              </button>
+            </div>
+            {!single && (
+              <ul className="m-0 flex list-none flex-wrap gap-1.5 p-0" aria-label="Selected">
+                {selected.map((v) => {
+                  const label = chipLabel(v);
+                  return (
+                    <li key={String(v)} className="max-w-full">
+                      <button type="button" onClick={() => toggle(v)} aria-label={`Remove ${label}`} title={`Remove ${label}`} className="filter-chip hit-44">
+                        <span className="truncate">{label}</span>
+                        <X className="size-3 shrink-0" aria-hidden />
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
           </div>
-        </section>
-      ))}
+        )}
+        {loading && <p className="py-3 text-center text-xs text-[var(--color-text-secondary)]">Loading {load?.what}…</p>}
+        {failed && (
+          <button type="button" onClick={() => void load?.refetch()} className="hit-44 w-full cursor-pointer py-3 text-center text-xs text-[var(--color-accent)] hover:underline">
+            Could not load {load?.what} — retry
+          </button>
+        )}
+        {loaded && visible.length === 0 && <p className="py-4 text-center text-xs text-[var(--color-text-secondary)]">{emptyText}</p>}
+        {groups.map((g, gi) => (
+          <section key={g.name ?? `g${gi}`} className="space-y-2">
+            {g.name && <h3 className="filter-label">{g.name}</h3>}
+            <div className="filter-options">
+              {g.items.map((item) => {
+                const on = selected.includes(item.value);
+                const blocked = full && !on;
+                return (
+                  <button
+                    key={String(item.value)}
+                    type="button"
+                    aria-pressed={on}
+                    aria-disabled={blocked || undefined}
+                    onClick={() => toggle(item.value)}
+                    title={blocked ? `At most ${max} selections` : item.hint ? `${item.label} · ${item.hint}` : item.label}
+                    className="filter-option"
+                  >
+                    <span className="filter-option__label">{item.label}</span>
+                    {on && <Check className="size-4 shrink-0" aria-hidden />}
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+        ))}
+      </div>
     </div>
   );
 }

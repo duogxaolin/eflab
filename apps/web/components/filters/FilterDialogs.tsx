@@ -212,12 +212,30 @@ function SkillsDialog({ state, update, onClose }: DialogProps) {
 // provides the Done button, the focus trap, Escape and the focus return.
 const OR_NOTE = "Several selections widen the list to cards matching any of them.";
 
+// Size of the Nation dialog's "Popular" group (efootbase lists ten nations
+// first; ours are the ten with the most cards, from player.countries).
+const POPULAR_NATIONS = 10;
+
 function NationDialog({ state, update, onClose }: DialogProps) {
   const q = trpc.player.countries.useQuery(undefined, { staleTime: 60 * 60_000 });
-  const items = (q.data ?? []).map((c) => ({ value: c.id, label: c.name }));
+  const countries = q.data ?? [];
+  // The list arrives A–Z; "All nations" keeps that order.
+  const items = countries.map((c) => ({ value: c.id, label: c.name }));
+  const popular = [...countries]
+    .filter((c) => c.playerCount > 0)
+    .sort((a, b) => b.playerCount - a.playerCount || a.name.localeCompare(b.name, "en") || a.id - b.id)
+    .slice(0, POPULAR_NATIONS)
+    .map((c) => c.id);
   return (
     <Modal open onClose={onClose} title="Nation">
-      <PickerList items={items} selected={state.nat} onChange={(nat) => update({ nat: sortIds(nat) })} max={MAX_FILTER_IDS} load={loadOf(q, "nations")} />
+      <PickerList
+        items={items}
+        selected={state.nat}
+        onChange={(nat) => update({ nat: sortIds(nat) })}
+        max={MAX_FILTER_IDS}
+        load={loadOf(q, "nations")}
+        featured={{ label: "Popular", values: popular, restLabel: "All nations" }}
+      />
       <p className={NOTE_CLASS}>{OR_NOTE}</p>
     </Modal>
   );

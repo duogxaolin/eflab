@@ -1,6 +1,7 @@
 "use client";
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { trpc } from "@/lib/trpc";
 import { PlayerCard } from "@/components/cards/PlayerCard";
 import { Pagination } from "@/components/players/Pagination";
@@ -11,8 +12,17 @@ import { SkillIcon } from "@/components/skills/SkillIcon";
 import { SkillEffects } from "@/components/skills/SkillEffects";
 
 const PAGE_SIZE = 24;
+/** Highest page `skill.players` accepts (its input schema). */
+const MAX_PAGE = 10000;
 /** Holder grid — the pack grid (4 / 5 / 6 / 7 / 8 columns), name captions. */
 const HOLDER_GRID = "grid grid-cols-4 gap-3 px-1 py-2 sm:grid-cols-5 md:grid-cols-6 lg:grid-cols-7 xl:grid-cols-8";
+
+/** `?page=` as written (a positive integer), or null when absent / invalid. */
+function parsePageParam(raw: string | null): number | null {
+  if (raw === null || !/^\d{1,9}$/.test(raw)) return null;
+  const n = Number(raw);
+  return n >= 1 ? n : null;
+}
 
 // One skill (not in the reference capture; restyled with the tokens): the
 // artwork (letterboxed, never cropped), name, description, group, stored stat
@@ -23,9 +33,48 @@ export function SkillDetailClient({ slug, initialData }: { slug: string; initial
   const skill = detail.data ?? initialData;
   const label = skillLabel(skill);
   const group = skillGroup(skill);
-  const [page, setPage] = useState(1);
+  // The top-cards page lives in the URL (`?page=N`, page 1 omitted; efootbase-
+  // behaviour-parity "Skills Search And URL State"). It is written with the
+  // native history.replaceState, which Next keeps in sync with
+  // useSearchParams, so turning a page re-renders this client page only
+  // (router.replace would re-run the force-dynamic server page and its skill
+  // fetch on every click).
+  const searchParams = useSearchParams();
+  const rawPage = searchParams.get("page");
+  const requestedPage = parsePageParam(rawPage) ?? 1;
+  const page = Math.min(requestedPage, MAX_PAGE);
+  const setPage = useCallback((next: number) => {
+    const url = new URL(window.location.href);
+    if (next > 1) url.searchParams.set("page", String(next));
+    else url.searchParams.delete("page");
+    // `null` state: Next treats a state carrying its own internal markers as
+    // its own call and would skip the useSearchParams sync.
+    window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+  }, []);
+  // "Page N does not exist — showing page M": set when a page past the end is
+  // replaced by the last page, cleared by the next page turn.
+  const [pageNotice, setPageNotice] = useState<{ requested: number; shown: number } | null>(null);
+  const turnPage = (next: number) => {
+    setPageNotice(null);
+    setPage(next);
+  };
+
   const holders = trpc.skill.players.useQuery({ slug, page, limit: PAGE_SIZE }, { placeholderData: (prev) => prev });
   const catalogue = trpc.player.list.useQuery({ page: 1, limit: 1 }, { staleTime: 60 * 60_000 });
+
+  // A malformed `page` (or `page=1`) is rewritten to the canonical URL.
+  useEffect(() => {
+    if (rawPage !== null && (parsePageParam(rawPage) === null || parsePageParam(rawPage) === 1)) setPage(1);
+  }, [rawPage, setPage]);
+
+  // A page past the last one is replaced by the last page once the list has
+  // answered for the current page (no skill holders → page 1).
+  const settledLast = holders.data !== undefined && !holders.isPlaceholderData ? Math.max(1, holders.data.totalPages) : null;
+  useEffect(() => {
+    if (settledLast === null || requestedPage <= settledLast) return;
+    setPage(settledLast);
+    setPageNotice({ requested: requestedPage, shown: settledLast });
+  }, [settledLast, requestedPage, setPage]);
 
   // The real holder count: `skill.players.total` once loaded, else the count the
   // server page already fetched with the skill.
@@ -100,6 +149,13 @@ export function SkillDetailClient({ slug, initialData }: { slug: string; initial
         <h2 id="skill-top-cards" className="efb-h2 text-[var(--color-text-primary)]">
           Top cards
         </h2>
+        {/* Always mounted (polite live region); empty and room-less unless a
+            page past the end was just replaced by the last page. */}
+        <p role="status" className={pageNotice ? "text-xs text-[var(--color-accent-warn)]" : "sr-only"}>
+          {pageNotice
+            ? `Page ${pageNotice.requested.toLocaleString("en-US")} does not exist — showing page ${pageNotice.shown.toLocaleString("en-US")}.`
+            : ""}
+        </p>
 
         {holders.isError ? (
           <QueryErrorState error={holders.error} onRetry={() => void holders.refetch()} title="Could not load the cards with this skill" />
@@ -114,7 +170,7 @@ export function SkillDetailClient({ slug, initialData }: { slug: string; initial
                 <PlayerCard key={p.id} player={p} caption="name" />
               ))}
             </div>
-            <Pagination page={page} totalPages={holders.data.totalPages} onChange={setPage} />
+            <Pagination page={page} totalPages={holders.data.totalPages} onChange={turnPage} />
           </>
         )}
       </section>

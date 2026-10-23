@@ -362,6 +362,11 @@ export const FILTER_RANGE_BOUNDS = {
 // and the URL helper of the web.
 export const MAX_FILTER_IDS = 50;
 
+// Shortest name query any search runs (the /players search, the ⌘K palette,
+// the home search and `player.search`, which answers an empty list below it);
+// a one-character query is not sent (change efootbase-behaviour-parity).
+export const SEARCH_MIN_LENGTH = 2;
+
 // Sort presets of the players page (efootbase "Sort by" radio group:
 // Trending · New cards · Top rated · High to low · Low to high). The keys are
 // efootbase's own URL values where they were observed (`sort=top`,

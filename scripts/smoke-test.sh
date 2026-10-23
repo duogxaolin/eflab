@@ -573,6 +573,78 @@ else
   fail "player.search 'Lionel Messi' → first result Lionel Messi" "code=$CODE first=$TOP_NAME"
 fi
 
+# 9b. player.search ranks whole-word matches, then word-start matches, then
+#     other partial ones and, inside a rank, the higher max overall first
+#     (efootbase-behaviour-parity "Player Search Ranking"): "ronaldo" lists
+#     Cristiano Ronaldo in the first three, not only the lower-rated cards
+#     named exactly "Ronaldo".
+trpc_get "player.search" '{"q":"ronaldo","limit":10}'
+RON_TOP="$(result '"|".join(p["name"] for p in d[:3])')"
+RON_RANKED="$(result 'all(d[i]["maxOvr"] >= d[i + 1]["maxOvr"] for i in range(len(d) - 1) if "ronaldo" in d[i]["name"].lower().split() and "ronaldo" in d[i + 1]["name"].lower().split())')"
+RON_CODE="$CODE"
+# Tiers compete on "ira": the best mid-word match ("…ira…", max overall 101 in
+# the 2026-10 data) outranks every name with a word starting "ira" (72), so
+# only the word-start tier puts the latter first. Every row whose accent-free
+# name has "ira" at a word start must come before every row that has not.
+trpc_get "player.search" '{"q":"ira","limit":30}'
+IRA_TIERS="$(result '(lambda ws: "%d|%s" % (sum(ws), ws == sorted(ws, reverse=True) and 0 < sum(ws) < len(ws)))([1 if __import__("re").search(r"\bira", __import__("unicodedata").normalize("NFD", p["name"]).encode("ascii", "ignore").decode().lower()) else 0 for p in d])')"
+IRA_CODE="$CODE"
+# Whole word before word start: "ronald" is a whole word of "Ronald Koeman"
+# but only the start of a word of "Ronaldinho" / "Cristiano Ronaldo", whose
+# best cards have a higher max overall — so only the whole-word tier puts the
+# former first. Classified per row of one response (limit 50, the schema
+# maximum): every whole-word row must come before every word-start-only row,
+# there must be at least one of each, and when both names are present the
+# first "Ronald Koeman" must come before the first "Ronaldinho".
+trpc_get "player.search" '{"q":"ronald","limit":50}'
+RONALD_TIERS="$(result '(lambda ns: (lambda ww, ws: "%d|%d|%s" % (len(ww), len(ws), bool(ww) and bool(ws) and max(ww) < min(ws) and (not any("ronald koeman" == n for n in ns) or not any(n.startswith("ronaldinho") for n in ns) or ns.index("ronald koeman") < next(i for i, n in enumerate(ns) if n.startswith("ronaldinho")))))([i for i, n in enumerate(ns) if __import__("re").search(r"\bronald\b", n)], [i for i, n in enumerate(ns) if __import__("re").search(r"\bronald", n) and not __import__("re").search(r"\bronald\b", n)]))([__import__("unicodedata").normalize("NFD", p["name"]).encode("ascii", "ignore").decode().lower() for p in d])')"
+if [ "$RON_CODE" = "200" ] && [ "$IRA_CODE" = "200" ] && [ "$CODE" = "200" ] && printf '%s' "$RON_TOP" | grep -q 'Cristiano Ronaldo' && [ "$RON_RANKED" = "True" ] && [ "${IRA_TIERS#*|}" = "True" ] && [ "${RONALD_TIERS##*|}" = "True" ]; then
+  pass "player.search 'ronaldo' → Cristiano Ronaldo in the top 3 (top 3: $RON_TOP), whole-word matches by max overall; 'ronald' → ${RONALD_TIERS%%|*} whole-word matches (Ronald Koeman) before the word-start-only ones (Ronaldinho); 'ira' → ${IRA_TIERS%%|*} word-start matches before the partial ones"
+else
+  fail "player.search 'ronaldo' → Cristiano Ronaldo in the top 3; 'ronald' → whole word before word start; 'ira' → word start before partial" "code=$RON_CODE/$IRA_CODE/$CODE top3=$RON_TOP ranked=$RON_RANKED ronald(ww|ws|ok)=$RONALD_TIERS ira=$IRA_TIERS"
+fi
+
+# 9c. Name sort orders by the accent-free, lower-case name (nameNormalized,
+#     id tiebreaker): A→Z ascending, Z→A descending. The key below is the same
+#     normalisation for plain Latin names (NFD, marks stripped, lower-case);
+#     pairs whose key is still non-ASCII (ø, ß, CJK — transliterated by the
+#     dump) are not compared. The database collation is "C" (byte order), which
+#     Python's str order reproduces for ASCII.
+NAME_KEY_PY='import unicodedata
+def k(s): return "".join(c for c in unicodedata.normalize("NFD", s) if not unicodedata.combining(c)).lower()
+def ordered(names, rev):
+    keys = [k(n) for n in names]
+    pairs = [(a, b) for a, b in zip(keys, keys[1:]) if a.isascii() and b.isascii()]
+    return len(names) >= 2 and len(pairs) > 0 and all((a >= b) if rev else (a <= b) for a, b in pairs)'
+name_sorted() {
+  printf '%s' "$BODY" | py "$NAME_KEY_PY"'
+import json,sys
+d=json.load(sys.stdin)["result"]["data"]["json"]
+print(ordered([p["name"] for p in d["items"]], sys.argv[1] == "desc"), d["items"][0]["name"] if d["items"] else "")' "$1" 2>/dev/null
+}
+trpc_get "player.list" '{"page":1,"limit":40,"sort":"name","order":"asc"}'
+NAME_ASC="$(name_sorted asc)"
+trpc_get "player.list" '{"page":2,"limit":40,"sort":"name","order":"desc"}'
+NAME_DESC="$(name_sorted desc)"
+if [ "${NAME_ASC%% *}" = "True" ] && [ "${NAME_DESC%% *}" = "True" ]; then
+  pass "player.list sort=name → A→Z ascending (first: ${NAME_ASC#* }), Z→A descending"
+else
+  fail "player.list sort=name → ordered by the normalised name" "asc=$NAME_ASC desc=$NAME_DESC"
+fi
+
+# 9d. player.countries carries each nation's card count (the Nation dialog's
+#     "Popular" group): non-negative integers summing to the catalogue total.
+trpc_get "player.list" '{"page":1,"limit":1}'
+ALL_TOTAL="$(result 'd["total"]')"
+trpc_get "player.countries" '{}'
+NAT_SUM="$(result 'sum(c["playerCount"] for c in d) if all(isinstance(c.get("playerCount"), int) and c["playerCount"] >= 0 for c in d) else -1')"
+NAT_TOP="$(result '", ".join(c["name"] for c in sorted(d, key=lambda c: (-c["playerCount"], c["name"]))[:3])')"
+if [ "$CODE" = "200" ] && [ -n "$ALL_TOTAL" ] && [ "$NAT_SUM" = "$ALL_TOTAL" ]; then
+  pass "player.countries playerCount sums to $ALL_TOTAL cards (most: $NAT_TOP)"
+else
+  fail "player.countries playerCount sums to the card total" "code=$CODE sum=$NAT_SUM total=$ALL_TOTAL"
+fi
+
 # 10. player.byId resolves a real card (baseId must match the card)
 trpc_get "player.list" '{"page":1,"limit":1,"sort":"ovr","order":"desc"}'
 BASE_1="$(result 'd["items"][0]["baseId"]')"

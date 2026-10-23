@@ -33,6 +33,11 @@ function aptitudeLabel(apt: number | undefined): string {
   return apt === 0 ? "Full" : apt === 1 ? "Half" : "None";
 }
 
+/** Screen-reader wording of the proficiency (one parallel set of words). */
+function aptitudeSpoken(apt: number | undefined): string {
+  return apt === 0 ? "fully proficient" : apt === 1 ? "half proficient" : "not proficient";
+}
+
 interface PitchCellProps {
   pos: Position;
   aptitudes: Record<string, number>;
@@ -51,13 +56,20 @@ function PitchCell({ pos, aptitudes, tiles, registeredPosition, layout = "row" }
       className={`relative flex h-full w-full items-center justify-center rounded-lg ${cellBg(apt)} ${
         isReg ? "ring-2 ring-[var(--color-accent)] ring-offset-1 ring-offset-[var(--color-panel)]" : ""
       } ${layout === "stack" ? "flex-col gap-1 p-1" : "flex-row gap-2 px-2 py-0.5"}`}
-      title={`${pos}: ${rating} OVR (${aptitudeLabel(apt)} proficiency)`}
       data-testid={`pitch-${pos}`}
+      data-proficiency={aptitudeLabel(apt).toLowerCase()}
     >
+      {/* The proficiency is the cell's colour; screen readers get it as text
+          (WCAG 1.4.1 — no information only in colour or in a title):
+          "LWF, half proficient, 104 OVR" ("fully proficient" / "not
+          proficient" for the other two). */}
       <span className="text-xs font-medium leading-none">{pos}</span>
+      <span className="sr-only">
+        , {aptitudeSpoken(apt)}, {rating} OVR
+      </span>
       {/* Rating text uses the shared `--color-tier-*` tokens (statTierClass)
           on the black/85 pill, the same contrast as the stat rows. */}
-      <span className={`inline-block rounded-[4px] bg-black/85 px-1.5 py-0.5 text-xs font-bold leading-none tabular-nums ${statTierClass(rating)}`}>
+      <span aria-hidden className={`inline-block rounded-[4px] bg-black/85 px-1.5 py-0.5 text-xs font-bold leading-none tabular-nums ${statTierClass(rating)}`}>
         {rating}
       </span>
     </div>

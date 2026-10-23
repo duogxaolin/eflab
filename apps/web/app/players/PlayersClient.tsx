@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import type { Route } from "next";
 import Link from "next/link";
@@ -10,8 +10,9 @@ import { Pagination } from "@/components/players/Pagination";
 import { QueryErrorState, CardGridSkeleton } from "@/lib/query-state";
 import { useDebouncedValue } from "@/lib/use-debounced-value";
 import {
-  DEFAULT_PLAYERS_STATE,
+  MAX_LIST_PAGE,
   countActiveFilters,
+  defaultSortOrder,
   hasAnyState,
   readPlayersState,
   writePlayersState,
@@ -19,9 +20,10 @@ import {
   type PlayersState,
 } from "@/lib/filter-url";
 import { FiltersPanel, type FilterDialogKind } from "@/components/filters/FiltersPanel";
-import { PLAYERS_GRID } from "./players-grid";
+import { PLAYERS_GRID, PLAYERS_PAGE_SIZE } from "./players-grid";
 import { Modal } from "@/components/filters/Modal";
 import {
+  SEARCH_MIN_LENGTH,
   SORT_FIELDS,
   SORT_PRESETS,
   SORT_PRESET_LABELS,
@@ -55,7 +57,22 @@ const FIELD_SORT_OPTIONS: ReadonlyArray<{ value: SortField; label: string }> = [
 ];
 const isSortField = (s: string): s is SortField => (SORT_FIELDS as readonly string[]).includes(s);
 
-const PAGE_SIZE = 24; // efootbase uses 24 cards per page
+// Direction buttons of a field sort, in the order the sort starts with
+// (defaultSortOrder): names read A → Z first, numbers high → low first.
+const directionOptions = (sort: PlayersSort): ReadonlyArray<readonly ["asc" | "desc", string]> =>
+  defaultSortOrder(sort) === "asc"
+    ? [
+        ["asc", "A to Z"],
+        ["desc", "Z to A"],
+      ]
+    : [
+        ["desc", "High to low"],
+        ["asc", "Low to high"],
+      ];
+
+/** A name query is sent only from SEARCH_MIN_LENGTH characters; shorter ones
+ *  (one letter) would list most of the catalogue. Empty = no name filter. */
+const searchable = (q: string) => q.length === 0 || q.length >= SEARCH_MIN_LENGTH;
 
 // ---------------------------------------------------------------------------
 export function PlayersClient() {
@@ -65,25 +82,36 @@ export function PlayersClient() {
 
   // Replace the URL with a patched state. Any change other than the page
   // itself resets to page 1 (catalog-browsing-parity "Page State Lives in the URL").
+  // "Page N does not exist — showing page M": set when a page past the end is
+  // replaced by the last page, cleared by the next change the user makes.
+  const [pageNotice, setPageNotice] = useState<{ requested: number; shown: number } | null>(null);
+
   const update = useCallback(
     (patch: Partial<PlayersState>) => {
       const pageOnly = Object.keys(patch).every((k) => k === "page");
       const next: PlayersState = { ...state, ...patch, page: pageOnly ? (patch.page ?? 1) : 1 };
       const qs = writePlayersState(next);
+      setPageNotice(null);
       router.replace((qs ? `/players?${qs}` : "/players") as Route, { scroll: false });
     },
     [router, state],
   );
 
-  // Search box: local text mirrors the URL and is debounced into it.
+  // Search box: local text mirrors the URL and is debounced into it. A
+  // one-character query is never written or sent: the field shows a hint and
+  // the grid keeps the previous result (SEARCH_MIN_LENGTH, shared with the
+  // palette and the home search).
+  const searchHintId = useId();
   const [qInput, setQInput] = useState(state.q);
-  const debouncedQ = useDebouncedValue(qInput.trim(), 250);
+  const qTrimmed = qInput.trim();
+  const debouncedQ = useDebouncedValue(qTrimmed, 250);
+  const qTooShort = !searchable(qTrimmed);
   useEffect(() => {
     setQInput(state.q);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.q]);
   useEffect(() => {
-    if (debouncedQ !== state.q) update({ q: debouncedQ });
+    if (debouncedQ !== state.q && searchable(debouncedQ)) update({ q: debouncedQ });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [debouncedQ]);
 
@@ -101,11 +129,14 @@ export function PlayersClient() {
 
   const listQuery = trpc.player.list.useQuery(
     {
-      page: state.page,
-      limit: PAGE_SIZE,
+      // The URL may carry a page past MAX_LIST_PAGE (the API bound); it is
+      // asked for as the bound and then replaced by the last page below.
+      page: Math.min(state.page, MAX_LIST_PAGE),
+      limit: PLAYERS_PAGE_SIZE,
       sort: state.sort,
       order: state.order,
-      q: state.q || undefined,
+      // A one-character `search=` link is not sent either.
+      q: state.q.length >= SEARCH_MIN_LENGTH ? state.q : undefined,
       cardTypeIn: state.types ?? undefined,
       // Multi-valued lists (OR within, AND between — multi-select-filters).
       positions: state.pos.length ? state.pos : undefined,
@@ -138,9 +169,13 @@ export function PlayersClient() {
     { placeholderData: (prev) => prev },
   );
 
-  const players = listQuery.data?.items ?? [];
-  const totalPages = listQuery.data?.totalPages ?? 1;
-  const total = listQuery.data?.total ?? 0;
+  const listData = listQuery.data;
+  const players = listData?.items ?? [];
+  const totalPages = listData?.totalPages ?? 1;
+  const total = listData?.total ?? 0;
+  // An empty page of a non-empty list = a page past the end: it is about to be
+  // replaced by the last page, so it renders as loading, never as "No players".
+  const pastEnd = listData !== undefined && listData.items.length === 0 && listData.total > 0;
 
   // Scroll back to the top of the grid when the page changes (not on first render).
   const gridTopRef = useRef<HTMLDivElement>(null);
@@ -153,6 +188,19 @@ export function PlayersClient() {
     }
   }, [state.page]);
 
+  // A page past the last one (`?page=99999`, an old link after the data
+  // shrank) is replaced by the last page once the list has answered for the
+  // current query, with a polite message naming both pages.
+  const settledLast = listData !== undefined && !listQuery.isPlaceholderData ? listData.totalPages : null;
+  useEffect(() => {
+    if (settledLast === null || state.page <= settledLast) return;
+    const requested = state.page;
+    lastPage.current = settledLast; // a replacement, not a page turn: no scroll
+    update({ page: settledLast });
+    setPageNotice({ requested, shown: settledLast });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settledLast, state.page]);
+
   const activeFilters = countActiveFilters(state);
   const resetAll = () => {
     setQInput("");
@@ -161,7 +209,9 @@ export function PlayersClient() {
     router.replace("/players", { scroll: false });
   };
 
-  const chooseSort = (sort: PlayersSort) => update({ sort, order: DEFAULT_PLAYERS_STATE.order });
+  // A newly chosen sort starts in its natural direction (Name A → Z, numbers
+  // high → low); the direction buttons change it afterwards.
+  const chooseSort = (sort: PlayersSort) => update({ sort, order: defaultSortOrder(sort) });
   const fieldSortActive = !isSortPreset(state.sort);
 
   // Sort row: the five presets as a 32 px segmented radiogroup next to the
@@ -203,10 +253,7 @@ export function PlayersClient() {
         </select>
         {fieldSortActive && (
           <div className="segment shrink-0 p-1" role="group" aria-label="Sort direction">
-            {([
-              ["desc", "High to low"],
-              ["asc", "Low to high"],
-            ] as const).map(([dir, label]) => (
+            {directionOptions(state.sort).map(([dir, label]) => (
               <button key={dir} type="button" aria-pressed={state.order === dir} onClick={() => update({ order: dir })} className="segment__item hit-44">
                 {label}
               </button>
@@ -246,12 +293,12 @@ export function PlayersClient() {
         </header>
 
         {/* Search (44 px, radius 12) + the Filters button below 1024 px */}
-        <div className="mt-4 flex items-center gap-2">
+        <div className="mt-4 flex items-start gap-2">
           <form
             role="search"
             onSubmit={(e) => {
               e.preventDefault();
-              if (qInput.trim() !== state.q) update({ q: qInput.trim() });
+              if (qTrimmed !== state.q && searchable(qTrimmed)) update({ q: qTrimmed });
             }}
             className="min-w-0 flex-1"
           >
@@ -263,6 +310,7 @@ export function PlayersClient() {
                 onChange={(e) => setQInput(e.target.value)}
                 placeholder="Search players by name…"
                 aria-label="Search players by name…"
+                aria-describedby={qTooShort ? searchHintId : undefined}
                 className="field__input no-native-clear"
               />
               {qInput && (
@@ -279,6 +327,14 @@ export function PlayersClient() {
                 </button>
               )}
             </div>
+            {/* Always mounted (a polite live region); takes no room while empty. */}
+            <p
+              id={searchHintId}
+              role="status"
+              className={qTooShort ? "mt-1.5 px-1 text-xs text-[var(--color-text-secondary)]" : "sr-only"}
+            >
+              {qTooShort ? `Type at least ${SEARCH_MIN_LENGTH} characters` : ""}
+            </p>
           </form>
           <button
             type="button"
@@ -307,11 +363,11 @@ export function PlayersClient() {
           <span className="mr-auto" aria-live="polite" aria-busy={listQuery.isPlaceholderData || undefined}>
             {listQuery.isError
               ? "—"
-              : listQuery.isPending
+              : listQuery.isPending || pastEnd
                 ? "Loading…"
                 : listQuery.isPlaceholderData
                   ? "Updating…"
-                  : `${total.toLocaleString("en-US")} cards · page ${state.page.toLocaleString("en-US")} of ${totalPages.toLocaleString("en-US")}`}
+                  : `${total.toLocaleString("en-US")} ${total === 1 ? "card" : "cards"} · page ${state.page.toLocaleString("en-US")} of ${totalPages.toLocaleString("en-US")}`}
           </span>
           {hasAnyState(state) && (
             <button
@@ -325,14 +381,21 @@ export function PlayersClient() {
             </button>
           )}
         </div>
+        {/* Always mounted (polite live region); empty and room-less unless a
+            page past the end was just replaced by the last page. */}
+        <p role="status" className={pageNotice ? "mt-1 text-xs text-[var(--color-accent-warn)]" : "sr-only"}>
+          {pageNotice
+            ? `Page ${pageNotice.requested.toLocaleString("en-US")} does not exist — showing page ${pageNotice.shown.toLocaleString("en-US")}.`
+            : ""}
+        </p>
 
         {/* Card grid: 4 columns, 6 from 768, 5 beside the rail from 1024, 6 from 1280 */}
         {listQuery.isError ? (
           <div className="mt-2">
             <QueryErrorState error={listQuery.error} onRetry={() => void listQuery.refetch()} title="Could not load players" />
           </div>
-        ) : listQuery.isPending ? (
-          <CardGridSkeleton className={`mt-1 ${PLAYERS_GRID}`} />
+        ) : listQuery.isPending || pastEnd ? (
+          <CardGridSkeleton count={PLAYERS_PAGE_SIZE} className={`mt-1 ${PLAYERS_GRID}`} />
         ) : players.length === 0 ? (
           <div className="mt-2 space-y-2 rounded-[var(--radius-panel)] bg-[var(--color-panel)] p-12 text-center text-sm text-[var(--color-text-secondary)]">
             <p>No players match your search and filter criteria.</p>
@@ -350,7 +413,7 @@ export function PlayersClient() {
           </div>
         )}
 
-        <Pagination className="mt-4" page={state.page} totalPages={totalPages} onChange={(p) => update({ page: p })} />
+        {!pastEnd && <Pagination className="mt-4" page={state.page} totalPages={totalPages} onChange={(p) => update({ page: p })} />}
       </div>
 
       {/* Desktop rail (≥ 1024): sticky, 280 px, #181818, radius 24, padding 16 */}

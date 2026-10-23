@@ -17,7 +17,9 @@ import { Search, Shield } from "lucide-react";
 // deselects it — the panel owns what that does to the proficiency.
 // The drawer is the shared native-<dialog> Modal, variant "drawer" (bottom-
 // anchored, 512 px wide, top radius 16): focus trap, Escape, focus return to
-// the "Select Manager" button.
+// the "Select Manager" button. The panel and the phone dock load this module
+// on its first opening (`deferred.tsx`, DeferredManagerPicker) — it is not
+// part of the detail page's first-load JavaScript.
 
 /** Text a search matches: the name and the pill labels ("Lofted Pass"). */
 const haystack = (m: PickerManagerDTO): string => normalizeSearchQuery([m.name, ...m.pills.map((p) => statLabel(p))].join(" | "));
