@@ -1,5 +1,5 @@
 "use client";
-import { useId, useState, type ReactNode } from "react";
+import { useCallback, useId, useState, type FocusEvent, type PointerEvent, type ReactNode } from "react";
 import { ChevronsUp, Crosshair, Footprints, Hand, Send, Shield, Volleyball, Zap, type LucideIcon } from "lucide-react";
 import {
   PROGRESSION_CATEGORY_LABELS,
@@ -37,7 +37,9 @@ import { Popover } from "@/components/ui/Popover";
 // as base + Booster 1, never a reference to a Build view it does not have
 // (QA 2026-10-23 U1). While a
 // popover is open the stats of its categories are highlighted; otherwise the
-// highlight follows the category strip / the panel's category labels.
+// highlight follows the category strip / the panel's category labels (the
+// caller passes the hovered / focused category's preview, else the pinned
+// one — useCategoryPreview).
 // Below 640 px a popover taller than half the viewport (e.g. Jumping's two
 // steppers on a 568 px tall phone) is shown as a bottom sheet — the same
 // popover element, state and focus handling (Popover `sheetBelow`).
@@ -55,6 +57,53 @@ export const STAT_CATEGORIES: Readonly<Record<BaseStat, readonly TrainingCategor
 })();
 
 export type StatHighlight = TrainingCategory | null;
+
+/** Handlers a category control (strip counter, Progression panel label)
+ *  spreads to preview its category's stats. */
+export interface CategoryPreviewHandlers {
+  onPointerEnter: (e: PointerEvent<HTMLElement>) => void;
+  onPointerLeave: (e: PointerEvent<HTMLElement>) => void;
+  onFocus: (e: FocusEvent<HTMLElement>) => void;
+  onBlur: () => void;
+}
+export type CategoryPreviewBind = (cat: TrainingCategory) => CategoryPreviewHandlers;
+
+const hoverDevice = () => window.matchMedia("(hover: hover)").matches;
+
+/** Category hover preview (owner feedback 2026-10-23: on the reference,
+ *  merely hovering a category item lights its stats). A mouse pointer on a
+ *  hover-capable device over a category control, or keyboard focus on it
+ *  (`:focus-visible` — a mouse click that focuses the button does not
+ *  count), previews that category; leaving / blurring returns to the pinned
+ *  highlight, which only click / Enter / Space toggles (and which alone
+ *  drives `aria-pressed`). Touch never previews: `pointerenter` is gated on
+ *  `pointerType === "mouse"` (a tap's emulated mouseenter is never followed
+ *  by a mouseleave, so mouse events would leave a stuck preview). Hover wins
+ *  over focus; a handler clears only the preview it still owns. */
+export function useCategoryPreview(): { preview: StatHighlight; bind: CategoryPreviewBind; clear: () => void } {
+  const [hover, setHover] = useState<StatHighlight>(null);
+  const [focus, setFocus] = useState<StatHighlight>(null);
+  const bind = useCallback<CategoryPreviewBind>(
+    (cat) => ({
+      onPointerEnter: (e) => {
+        if (e.pointerType === "mouse" && hoverDevice()) setHover(cat);
+      },
+      onPointerLeave: (e) => {
+        if (e.pointerType === "mouse") setHover((cur) => (cur === cat ? null : cur));
+      },
+      onFocus: (e) => {
+        if (e.currentTarget.matches(":focus-visible")) setFocus(cat);
+      },
+      onBlur: () => setFocus((cur) => (cur === cat ? null : cur)),
+    }),
+    [],
+  );
+  const clear = useCallback(() => {
+    setHover(null);
+    setFocus(null);
+  }, []);
+  return { preview: hover ?? focus, bind, clear };
+}
 
 /** "+N" chip for a stat raised by an active booster (cyan) or by the selected
  *  manager (lime, "+1"); what it is is said in screen-reader text. */
@@ -237,7 +286,7 @@ function StatSection({
                 <button
                   {...tp}
                   type="button"
-                  className="efb-stat-row hit-44 cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-focus)]"
+                  className="efb-stat-row hit-44 cursor-pointer motion-reduce:transition-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-focus)]"
                   data-stat={st}
                   data-category={cats.join(" ")}
                   data-hit={hit ? "true" : undefined}
@@ -326,18 +375,24 @@ export const CATEGORY_ICON: Readonly<Record<TrainingCategory, LucideIcon>> = {
 export const CATEGORY_SUFFIX: Partial<Record<TrainingCategory, string>> = { GK1: "1", GK2: "2", GK3: "3" };
 
 /** Category strip: the stat points the current build spends in each of the
- *  ten training categories, as icon + number in one dark bar. Each counter
- *  is a toggle (aria-pressed, named by the category) that highlights the
- *  stats its category raises; it is a readout — the steppers in the
+ *  ten training categories, as icon + number in one dark bar. Hovering a
+ *  counter with a mouse, or focusing it from the keyboard, previews the
+ *  stats its category raises (`preview`); each counter is also a toggle
+ *  (aria-pressed = the pinned highlight only, named by the category) that
+ *  pins / unpins that highlight. It is a readout — the steppers in the
  *  Progression panel change the values. */
 export function CategoryRow({
   allocation,
   highlight,
   onHighlight,
+  preview,
 }: {
   allocation: TrainingAllocation;
+  /** The pinned category (click / Enter / Space). */
   highlight: StatHighlight;
   onHighlight: (next: StatHighlight) => void;
+  /** Hover / focus preview handlers (useCategoryPreview). */
+  preview?: CategoryPreviewBind;
 }) {
   return (
     <div className="efb-category-strip" role="group" aria-label="Training categories of the current build" data-testid="category-row">
@@ -355,8 +410,9 @@ export function CategoryRow({
             aria-label={`${label}: ${v}`}
             data-testid={`category-chip-${cat}`}
             data-spent={v > 0 ? "true" : undefined}
+            {...preview?.(cat)}
             onClick={() => onHighlight(hit ? null : cat)}
-            className="efb-category-strip__item hit-44"
+            className="efb-category-strip__item hit-44 motion-reduce:transition-none"
           >
             <Icon className="size-4 shrink-0" aria-hidden />
             {suffix && <span className="efb-category-strip__sub" aria-hidden>{suffix}</span>}

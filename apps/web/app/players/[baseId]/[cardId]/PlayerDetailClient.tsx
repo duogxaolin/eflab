@@ -41,7 +41,7 @@ import type { BuildNotes } from "@/components/build-simulator/build-notes";
 import { CardInfo } from "@/components/detail/CardInfo";
 import { BodyModel } from "@/components/detail/BodyModel";
 import { StarRating } from "@/components/detail/StarRating";
-import { CategoryRow, KeyStats, STAT_CATEGORIES, StatGrid, type StatHighlight } from "@/components/detail/StatGrid";
+import { CategoryRow, KeyStats, STAT_CATEGORIES, StatGrid, useCategoryPreview, type StatHighlight } from "@/components/detail/StatGrid";
 import { isShowtimeSkill, orderSkills, skillDisplayName } from "@/components/detail/skill-display";
 import { SkillChip } from "@/components/detail/SkillChip";
 import { PlaystyleTrigger } from "@/components/detail/PlaystyleTrigger";
@@ -148,7 +148,11 @@ export function PlayerDetailClient({
 }) {
   const hasProgressionInitial = initialData.levelCap > 1;
   const [statView, setStatView] = useState<StatView>(hasProgressionInitial ? "build" : "max");
+  // Pinned category highlight (strip counter / panel label press) and the
+  // transient hover / keyboard-focus preview of a category, which wins while
+  // it lasts (owner feedback 2026-10-23).
   const [highlight, setHighlight] = useState<StatHighlight>(null);
+  const categoryPreview = useCategoryPreview();
   const [allVersions, setAllVersions] = useState(false);
   // "+N" in Other Versions: index of the version link to focus once the rest
   // is shown, and the polite announcement of it.
@@ -181,6 +185,11 @@ export function PlayerDetailClient({
   // prefix of the stat-row Adjust steppers.
   const progressionIdBase = useId().replace(/:/g, "");
   const desktop = useDesktopLayout();
+  // Crossing lg unmounts the column's panel (or the dock): a label hovered or
+  // focused at that moment never reports its leave / blur, so the preview is
+  // dropped with it.
+  const clearCategoryPreview = categoryPreview.clear;
+  useEffect(() => clearCategoryPreview(), [desktop, clearCategoryPreview]);
   // Mobile Progression sheet. It can only be open below lg: crossing to lg
   // closes it (the Modal's `open` turns false and its close event resets this).
   const [sheetOpen, setSheetOpen] = useState(false);
@@ -511,6 +520,7 @@ export function PlayerDetailClient({
                 idBase={progressionIdBase}
                 highlight={highlight}
                 onHighlight={onHighlight}
+                preview={categoryPreview.bind}
                 notes={notes}
               />
             </div>
@@ -610,7 +620,9 @@ export function PlayerDetailClient({
               </span>
             </div>
 
-            {hasProgression && <CategoryRow allocation={build.trainingPoints} highlight={highlight} onHighlight={onHighlight} />}
+            {hasProgression && (
+              <CategoryRow allocation={build.trainingPoints} highlight={highlight} onHighlight={onHighlight} preview={categoryPreview.bind} />
+            )}
 
             {showBoosters && (
               <div className="grid grid-cols-2 gap-2" role="group" aria-label="Boosters">
@@ -711,7 +723,9 @@ export function PlayerDetailClient({
             {view === "build" && (
               <p id={statsHelpId} className={`text-xs text-[var(--color-text-secondary)] ${statsHelpOpen ? "" : "max-lg:hidden"}`}>
                 {notes.statsHelp}
-                {highlight ?" click the highlighted category again to clear the highlight." : " a category highlights the stats it trains."}
+                {highlight
+                  ? " click the pinned category again to clear the highlight."
+                  : " hovering or focusing a category previews the stats it trains, a click pins it."}
               </p>
             )}
             <StatGrid
@@ -722,7 +736,7 @@ export function PlayerDetailClient({
               proficiencyDeltas={proficiencyDeltas}
               managerDeltas={managerDeltas}
               source={view}
-              highlight={highlight}
+              highlight={categoryPreview.preview ?? highlight}
               renderAdjust={
                 hasProgression
                   ? (stat) => (
@@ -804,10 +818,15 @@ export function PlayerDetailClient({
               </div>
             </div>
 
-            <div className="grid items-start gap-3 md:grid-cols-2">
-              <div className="flex flex-col items-center gap-3 rounded-2xl bg-[var(--color-panel)] p-4">
+            {/* 20 px between the pitch and the style panel from 768 px (the
+                reference's gap: 382 + 20 + 382 in its 784 px card at 1440). */}
+            <div className="grid items-start gap-3 md:grid-cols-2 md:gap-5">
+              {/* The pitch box (#272727, radius 12, padding 16 — the
+                  reference's 382 × 352 at 1440), then the legend and the note
+                  under it, outside the box. */}
+              <div className="flex min-w-0 flex-col items-center gap-3">
                 <PitchMap positionAptitudes={p.positionAptitudes} tiles={tiles} registeredPosition={regPos} />
-                <p className="max-w-[350px] text-xs leading-relaxed text-[var(--color-text-secondary)]" data-testid="pitch-note">
+                <p className="w-full text-xs leading-relaxed text-[var(--color-text-secondary)]" data-testid="pitch-note">
                   Overall at each position, computed with the game&apos;s overall formula from the {tilesSource}.
                   {hasProgression ? "" : " The formula matched every measured tile on the five surveyed cards; other cards are checked in bulk only, not tile by tile."}
                 </p>
