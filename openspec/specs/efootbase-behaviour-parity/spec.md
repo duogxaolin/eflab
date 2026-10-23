@@ -19,7 +19,7 @@ The interface SHALL provide one tooltip behaviour for hover previews: it opens a
 - **THEN** the preview stays open while the pointer is over it and closes on Escape while focus stays where it was.
 
 ### Requirement: Popover Primitive
-The interface SHALL provide one click popover behaviour: activating its trigger (click, Enter, Space, tap) toggles a non-modal `role="dialog"` named by its heading, the trigger exposes `aria-haspopup="dialog"` and `aria-expanded`, focus moves to the first control inside, Escape or a click outside closes it and returns focus to the trigger, and it stays at least 8 px inside the viewport, scrolling inside itself when taller than the viewport.
+The interface SHALL provide one click popover behaviour: activating its trigger (click, Enter, Space, tap) toggles a non-modal `role="dialog"` named by its heading, the trigger exposes `aria-haspopup="dialog"` and `aria-expanded`, focus moves to the popover's primary control (its first control unless the popover names one), Escape or a click outside closes it and returns focus to the trigger, and it stays at least 8 px inside the viewport, scrolling inside itself when taller than the viewport.
 
 #### Scenario: Keyboard toggle
 - **WHEN** a keyboard user focuses a popover trigger and presses Enter, then Escape

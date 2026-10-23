@@ -45,11 +45,14 @@ export function FilterDialogs({
   onClose,
   state,
   update,
+  resetKey,
 }: {
   dialog: FilterDialogKind;
   onClose: () => void;
   state: PlayersState;
   update: (patch: Partial<PlayersState>) => void;
+  /** Bumped by a navigation: the Stats / Body Model range fields re-sync their drafts. */
+  resetKey?: number;
 }) {
   const setStat = (stat: BaseStat, r: IntRange | null) => {
     const next = { ...state.stats };
@@ -96,7 +99,15 @@ export function FilterDialogs({
             <section key={g.title} className="min-w-0 space-y-4" aria-label={g.title}>
               <h3 className="filter-label">{g.title}</h3>
               {g.stats.map((s) => (
-                <RangeFields key={s} compact label={statFilterLabel(s)} value={state.stats[s] ?? null} bounds={FILTER_RANGE_BOUNDS.stat} onChange={(r) => setStat(s, r)} />
+                <RangeFields
+                  key={s}
+                  compact
+                  label={statFilterLabel(s)}
+                  value={state.stats[s] ?? null}
+                  bounds={FILTER_RANGE_BOUNDS.stat}
+                  onChange={(r) => setStat(s, r)}
+                  resetKey={resetKey}
+                />
               ))}
             </section>
           ))}
@@ -112,7 +123,15 @@ export function FilterDialogs({
           {BODY_COLUMNS.map((col, i) => (
             <section key={i} className="min-w-0 space-y-4">
               {col.map((f) => (
-                <RangeFields key={f} compact label={PHYSIQUE_LABEL[f]} value={state.body[f] ?? null} bounds={FILTER_RANGE_BOUNDS.physique} onChange={(r) => setBody(f, r)} />
+                <RangeFields
+                  key={f}
+                  compact
+                  label={PHYSIQUE_LABEL[f]}
+                  value={state.body[f] ?? null}
+                  bounds={FILTER_RANGE_BOUNDS.physique}
+                  onChange={(r) => setBody(f, r)}
+                  resetKey={resetKey}
+                />
               ))}
             </section>
           ))}

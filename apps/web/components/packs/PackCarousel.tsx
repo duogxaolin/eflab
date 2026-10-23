@@ -109,7 +109,10 @@ export function PackCarousel({
           (size="full") so the art never overflows the slot on narrow screens.
           The px-1 / py-2 padding leaves room for the 1.05 hover scale inside
           the scroller's clip. The arrows come first in the Tab order, so the
-          row can be paged without tabbing through every card. */}
+          row can be paged without tabbing through every card; an arrow at its
+          end (`aria-disabled`) leaves the Tab order (tabIndex -1) so the first
+          stop is never a dead control (QA 2026-10-23 U6), yet keeps focus
+          when it turns disabled under it — focus is never dropped at the ends. */}
       <div className="pack-row">
         {ends.overflow && (
           <>
@@ -119,6 +122,7 @@ export function PackCarousel({
               aria-label={`Scroll ${bundle.name} left`}
               aria-controls={trackId}
               aria-disabled={ends.atStart}
+              tabIndex={ends.atStart ? -1 : undefined}
               className="pack-row__arrow pack-row__arrow--prev hit-44"
             >
               <ChevronLeft className="size-4" aria-hidden />
@@ -129,6 +133,7 @@ export function PackCarousel({
               aria-label={`Scroll ${bundle.name} right`}
               aria-controls={trackId}
               aria-disabled={ends.atEnd}
+              tabIndex={ends.atEnd ? -1 : undefined}
               className="pack-row__arrow pack-row__arrow--next hit-44"
             >
               <ChevronRight className="size-4" aria-hidden />

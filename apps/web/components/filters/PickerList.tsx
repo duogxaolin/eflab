@@ -1,6 +1,7 @@
 "use client";
-import { useId, useState } from "react";
+import { useId, useLayoutEffect, useRef, useState } from "react";
 import { Check, Search, X } from "lucide-react";
+import { labelSearchKey } from "@eflab/shared";
 
 export interface PickerItem<V extends string | number> {
   value: V;
@@ -21,7 +22,8 @@ export interface PickerLoad {
 
 /**
  * Searchable list of toggles for the Nation / League / Team / Skills dialogs:
- * a 36 px search field (prefix-insensitive substring on the label) over
+ * a 36 px search field (substring on the label, accent-, case- and
+ * separator-insensitive — `labelSearchKey`, shared with /skills) over
  * grouped pressed/unpressed option rows (`.filter-option`: 44 px, radius 12,
  * one / two / three columns at < 640 / 640 / 768 px; a pressed row is the
  * accent with a check mark). In multi-select mode (the default) the current
@@ -72,9 +74,13 @@ export function PickerList<V extends string | number>({
   featured?: { label: string; values: readonly V[]; restLabel: string };
 }) {
   const id = useId();
+  const searchId = `${id}-search`;
   const [q, setQ] = useState("");
-  const needle = q.trim().toLowerCase();
-  const visible = needle ? items.filter((i) => i.label.toLowerCase().includes(needle)) : items;
+  // Accent-, case- and separator-insensitive ("cote" → Côte d'Ivoire, "saint
+  // etienne" → AS Saint-Étienne, "one touch" → One-touch Pass): the same key
+  // as the /skills search.
+  const needle = labelSearchKey(q);
+  const visible = needle ? items.filter((i) => labelSearchKey(i.label).includes(needle)) : items;
   const full = !single && max !== undefined && selected.length >= max;
   const toggle = (v: V) => {
     const on = selected.includes(v);
@@ -83,6 +89,31 @@ export function PickerList<V extends string | number>({
     if (full) return; // the cap is reached: only removals go through
     onChange([...selected, v]);
   };
+
+  // A removed chip (or "Clear selection") unmounts the focused button; focus
+  // goes to the chip that took its place (the next one), else the previous
+  // one, else the search field — never to the page body. Set before the
+  // change, applied once the chips have re-rendered.
+  const chipListRef = useRef<HTMLUListElement>(null);
+  const pendingFocus = useRef<{ chip: number } | "search" | null>(null);
+  const removeChip = (v: V, index: number) => {
+    pendingFocus.current = selected.length > 1 ? { chip: Math.min(index, selected.length - 2) } : "search";
+    toggle(v);
+  };
+  const clearAll = () => {
+    pendingFocus.current = "search";
+    onChange([]);
+  };
+  useLayoutEffect(() => {
+    const target = pendingFocus.current;
+    if (target === null) return;
+    pendingFocus.current = null;
+    const el =
+      target === "search"
+        ? document.getElementById(searchId)
+        : chipListRef.current?.querySelectorAll<HTMLButtonElement>("button")[target.chip] ?? document.getElementById(searchId);
+    el?.focus();
+  }, [selected, searchId]);
   const chipLabel = (v: V) => items.find((i) => i.value === v)?.label ?? labelOf?.(v) ?? String(v);
   const loading = load?.isPending === true;
   const failed = !loading && load?.isError === true;
@@ -115,7 +146,7 @@ export function PickerList<V extends string | number>({
         <div className="field field--sm filter-search">
           <Search className="size-4 shrink-0 text-[var(--color-text-secondary)]" aria-hidden />
           <input
-            id={`${id}-search`}
+            id={searchId}
             type="search"
             value={q}
             onChange={(e) => setQ(e.target.value)}
@@ -154,17 +185,17 @@ export function PickerList<V extends string | number>({
               <span className="text-[var(--color-text-secondary)]" aria-live="polite">
                 {selected.length} selected
               </span>
-              <button type="button" onClick={() => onChange([])} className="hit-44 cursor-pointer font-medium text-[var(--color-accent)] hover:underline">
+              <button type="button" onClick={clearAll} className="hit-44 cursor-pointer font-medium text-[var(--color-accent)] hover:underline">
                 Clear selection
               </button>
             </div>
             {!single && (
-              <ul className="m-0 flex list-none flex-wrap gap-1.5 p-0" aria-label="Selected">
-                {selected.map((v) => {
+              <ul ref={chipListRef} className="m-0 flex list-none flex-wrap gap-1.5 p-0" aria-label="Selected">
+                {selected.map((v, i) => {
                   const label = chipLabel(v);
                   return (
                     <li key={String(v)} className="max-w-full">
-                      <button type="button" onClick={() => toggle(v)} aria-label={`Remove ${label}`} title={`Remove ${label}`} className="filter-chip hit-44">
+                      <button type="button" onClick={() => removeChip(v, i)} aria-label={`Remove ${label}`} title={`Remove ${label}`} className="filter-chip hit-44">
                         <span className="truncate">{label}</span>
                         <X className="size-3 shrink-0" aria-hidden />
                       </button>

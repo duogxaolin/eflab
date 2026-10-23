@@ -4,7 +4,7 @@ import type { Route } from "next";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { CircleDashed, ListChecks, Search, Sparkles, X, Zap, type LucideIcon } from "lucide-react";
-import { normalizeSearchQuery, type SkillDTO } from "@eflab/shared";
+import { labelSearchKey, type SkillDTO } from "@eflab/shared";
 import { trpc } from "@/lib/trpc";
 import { QueryErrorState } from "@/lib/query-state";
 import { useDebouncedValue } from "@/lib/use-debounced-value";
@@ -30,14 +30,11 @@ function parseGroup(raw: string | null): GroupFilter {
   return raw !== null && (SKILL_GROUP_ORDER as readonly string[]).includes(raw) ? (raw as SkillSection) : ALL;
 }
 
-/** Hyphens, dashes (‐ ‑ ‒ – — ― and the minus sign), slashes and underscores
- *  read as spaces, so "one touch" finds "One-touch Pass"; then the shared
- *  accent- and case-folding normaliser (which also collapses the spaces). The
- *  same key is built for the query and for each name. */
-const SEPARATORS = /[-‐-―−_/]/g;
-function skillSearchKey(s: string): string {
-  return normalizeSearchQuery(s.replace(SEPARATORS, " "));
-}
+/** Hyphens, dashes, slashes and underscores read as spaces, so "one touch"
+ *  finds "One-touch Pass"; accents and case are folded. The same key is built
+ *  for the query and for each name — the shared `labelSearchKey`, also used by
+ *  the `/players` picker dialogs. */
+const skillSearchKey = labelSearchKey;
 
 /** Breadcrumbs, H1 and intro — also the server-rendered fallback while the
  *  URL state is read (`app/skills/page.tsx`). */

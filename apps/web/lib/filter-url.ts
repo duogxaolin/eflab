@@ -1,7 +1,8 @@
 // URL ⇄ state of the /players page (catalog-browsing-parity "Page State Lives
 // in the URL", efootbase-parity-round2 "Additional Player Filters"). Pure
-// functions, no React: PlayersClient reads the state from `useSearchParams`
-// and writes every change back with `router.replace`.
+// functions, no React: PlayersClient reads the state from `useSearchParams`,
+// holds it locally and writes every change back with `history.replaceState`
+// (QA 2026-10-23 bug 1 — no server round trip per filter change).
 //
 // Parameter names follow efootbase where they were observed in the 2026-10-18
 // capture (`sort`, `pos`, `card` repeated, `base`, `ovr`, `playingStyle`,
@@ -256,6 +257,20 @@ export function readPlayersState(sp: URLSearchParams): PlayersState {
     // replaced by the last page once the list has answered.
     page: intParam(sp.get("page"), 1, Number.MAX_SAFE_INTEGER) ?? 1,
   };
+}
+
+/**
+ * The query without its `page` parameter when that parameter does not name a
+ * page past the first (`page=0`, `page=abc`, `page=-2`, `page=1.5`, `page=1`
+ * — all read as page 1), so the address can be rewritten to the clean one;
+ * `null` when there is nothing to drop. Every other parameter is kept as it
+ * is (legacy names are rewritten on the next change, not on load).
+ */
+export function withoutDefaultPage(sp: URLSearchParams): string | null {
+  if (!sp.has("page") || readPlayersState(sp).page > 1) return null;
+  const out = new URLSearchParams(sp);
+  out.delete("page");
+  return out.toString();
 }
 
 /** Query string for a state; defaults are omitted so `/players` stays clean. */

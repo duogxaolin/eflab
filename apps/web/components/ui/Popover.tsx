@@ -21,8 +21,12 @@ import {
 // shared Escape layers, so a dialog underneath stays open) or a click outside
 // closes it, and focus returns to the trigger when it was inside the popover
 // or fell to the body (a click on another control keeps that control
-// focused). Placement and the 8 px viewport clamp are shared with the
-// tooltip (`floating.ts`); a popover taller than the viewport scrolls inside.
+// focused). Focus moving out of it (Tab past its last control, Shift+Tab
+// before its first) closes it too, focus staying where it went — a non-modal
+// popover never stays open behind the focus (QA 2026-10-23 bug 6); its
+// visible controls are all tab stops. Placement and the 8 px viewport clamp
+// are shared with the tooltip (`floating.ts`); a popover taller than the
+// viewport scrolls inside.
 // With `sheetBelow` a popover is shown as a bottom sheet on a narrow viewport
 // when it is taller than half of it (the stat-row Adjust popover on phones).
 // Content renders only while open.
@@ -81,12 +85,19 @@ export function PopoverPanel({
     if (trigger?.isConnected && focusIsLostOrInside(panel)) trigger.focus();
   }, [triggerRef]);
 
+  // Set while a close is caused by focus moving out: that focus has a
+  // destination, so the close must not pull it back to the trigger (the
+  // focusout runs before the new element is focused — activeElement is still
+  // the body there, which would read as "focus lost").
+  const focusMovedOut = useRef(false);
+
   // Sync the `open` prop with the native popover.
   useEffect(() => {
     const panel = panelRef.current;
     if (!panel) return;
     const shown = panel.matches(":popover-open");
     if (open && !shown) {
+      focusMovedOut.current = false;
       clearSheet(panel);
       showPopoverFrom(panel, triggerRef.current);
       const a = anchor.current;
@@ -98,8 +109,10 @@ export function PopoverPanel({
       const target = panel.querySelector<HTMLElement>("[data-autofocus]") ?? panel.querySelector<HTMLElement>(FOCUSABLE) ?? panel;
       target.focus({ preventScroll: true });
     } else if (!open && shown) {
-      // Focus must leave before the panel hides, or it is dropped to the body.
-      returnFocus();
+      // Focus must leave before the panel hides, or it is dropped to the body
+      // — unless it is already on its way to another element.
+      if (focusMovedOut.current) focusMovedOut.current = false;
+      else returnFocus();
       panel.hidePopover();
     }
   }, [open, anchor, triggerRef, side, matchWidth, sheetBelow, returnFocus]);
@@ -133,6 +146,20 @@ export function PopoverPanel({
       }}
       // Tab to an element lower in a scrolling popover keeps it in view.
       onFocus={(e) => e.target.scrollIntoView({ block: "nearest" })}
+      // Focus moved to an element outside (Tab past the last control,
+      // Shift+Tab before the first, a click on another control): the popover
+      // closes through `onOpenChange` like any other dismissal, so no popover
+      // stays open without focus and its owner's state (the stat-row
+      // highlight, `aria-expanded`) follows; focus stays where it went. A
+      // blur with nowhere to go (a control disabled under focus, the window
+      // losing focus) is not a move and keeps it open.
+      onBlur={(e) => {
+        const to = e.relatedTarget;
+        if (open && to instanceof Node && !e.currentTarget.contains(to)) {
+          focusMovedOut.current = true;
+          onOpenChange(false);
+        }
+      }}
       className={`efb-popover ${className}`}
       data-testid={testId}
     >

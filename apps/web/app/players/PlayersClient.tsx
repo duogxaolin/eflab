@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import type { Route } from "next";
 import Link from "next/link";
@@ -10,11 +10,13 @@ import { Pagination } from "@/components/players/Pagination";
 import { QueryErrorState, CardGridSkeleton } from "@/lib/query-state";
 import { useDebouncedValue } from "@/lib/use-debounced-value";
 import {
+  DEFAULT_PLAYERS_STATE,
   MAX_LIST_PAGE,
   countActiveFilters,
   defaultSortOrder,
   hasAnyState,
   readPlayersState,
+  withoutDefaultPage,
   writePlayersState,
   type PlayersSort,
   type PlayersState,
@@ -78,24 +80,89 @@ const searchable = (q: string) => q.length === 0 || q.length >= SEARCH_MIN_LENGT
 export function PlayersClient() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const state = useMemo(() => readPlayersState(new URLSearchParams(searchParams.toString())), [searchParams]);
+  const urlQs = searchParams.toString();
 
-  // Replace the URL with a patched state. Any change other than the page
-  // itself resets to page 1 (catalog-browsing-parity "Page State Lives in the URL").
+  // The page state lives in the URL (catalog-browsing-parity "Page State
+  // Lives in the URL") but is held here, so a change shows at once and the
+  // next change builds on it (QA 2026-10-23 bug 1: with `router.replace` every
+  // filter change was an RSC round trip and was derived from the search
+  // params of the last render, so CF, Epic and Left pressed 250 ms apart at
+  // 800 ms latency ended as `foot=1` alone, and no toggle looked pressed until
+  // the server answered).
+  //  - `update` derives the next state from `latest` (the newest intended
+  //    state, also when two changes land before a re-render), renders it at
+  //    once and writes its canonical query with `history.replaceState`, which
+  //    Next's router adopts as the new URL (useSearchParams follows) without a
+  //    server request — this page's server component reads no search params.
+  //    A replace, as before: no history entry per change, Back / Forward and
+  //    reload restore the state from the URL exactly as they did.
+  //  - Every query this component writes is remembered until the router
+  //    hands it back (`ownWrites`, oldest first). A search-params value that
+  //    is one of them is our own echo — the newest, or an older one arriving
+  //    late (two writes in one router transition) — and changes nothing. Any
+  //    other value is a navigation and is adopted: Back / Forward, the header
+  //    search or a "Players" link while on /players (`router.push` renders the
+  //    new params before Next writes the history entry, so the address bar
+  //    cannot be consulted during render — verify finding 2026-10-23), the
+  //    U4 clean-up below. A navigation also bumps `navEpoch`, the range
+  //    fields' `resetKey`, so their drafts — an unapplied "Min is above Max"
+  //    included — show the new URL's values; nothing is remounted, so focus
+  //    on a toggle, in an open dialog or in the phone sheet stays put.
+  const [state, setState] = useState<PlayersState>(() => readPlayersState(new URLSearchParams(urlQs)));
+  const latest = useRef(state);
+  useLayoutEffect(() => {
+    latest.current = state;
+  }, [state]);
+  const ownWrites = useRef<string[]>([]);
+  const [navEpoch, setNavEpoch] = useState(0);
   // "Page N does not exist — showing page M": set when a page past the end is
-  // replaced by the last page, cleared by the next change the user makes.
+  // replaced by the last page, cleared by the next change or navigation.
   const [pageNotice, setPageNotice] = useState<{ requested: number; shown: number } | null>(null);
+  const [seenQs, setSeenQs] = useState(urlQs);
+  if (seenQs !== urlQs) {
+    setSeenQs(urlQs);
+    if (!ownWrites.current.includes(urlQs)) {
+      const fromUrl = readPlayersState(new URLSearchParams(urlQs));
+      if (writePlayersState(fromUrl) !== writePlayersState(state)) setState(fromUrl);
+      setNavEpoch((n) => n + 1);
+      setPageNotice(null);
+    }
+  }
+  // Forget the writes the router has handed back (up to the one just seen);
+  // a navigation forgets them all.
+  useEffect(() => {
+    const i = ownWrites.current.indexOf(urlQs);
+    ownWrites.current = i >= 0 ? ownWrites.current.slice(i + 1) : [];
+  }, [urlQs]);
 
+  const commit = useCallback((next: PlayersState) => {
+    latest.current = next;
+    setState(next);
+    const qs = writePlayersState(next);
+    ownWrites.current = [...ownWrites.current.slice(-31), qs];
+    window.history.replaceState(null, "", qs ? `/players?${qs}` : "/players");
+  }, []);
+
+  // Patch the newest state. Any change other than the page itself resets to
+  // page 1 (catalog-browsing-parity "Page State Lives in the URL").
   const update = useCallback(
     (patch: Partial<PlayersState>) => {
       const pageOnly = Object.keys(patch).every((k) => k === "page");
-      const next: PlayersState = { ...state, ...patch, page: pageOnly ? (patch.page ?? 1) : 1 };
-      const qs = writePlayersState(next);
       setPageNotice(null);
-      router.replace((qs ? `/players?${qs}` : "/players") as Route, { scroll: false });
+      commit({ ...latest.current, ...patch, page: pageOnly ? (patch.page ?? 1) : 1 });
     },
-    [router, state],
+    [commit],
   );
+
+  // A `page` that is not a page number past 1 (`?page=0`, `?page=abc`,
+  // `?page=1`) reads as page 1: drop it so the address is the clean one.
+  // Only that parameter goes; legacy names elsewhere are rewritten on the
+  // next change as before. Through the router, not history.replaceState:
+  // this can run on the first render, before Next has patched the history.
+  useEffect(() => {
+    const cleaned = withoutDefaultPage(new URLSearchParams(urlQs));
+    if (cleaned !== null) router.replace((cleaned ? `/players?${cleaned}` : "/players") as Route, { scroll: false });
+  }, [router, urlQs]);
 
   // Search box: local text mirrors the URL and is debounced into it. A
   // one-character query is never written or sent: the field shows a hint and
@@ -106,9 +173,11 @@ export function PlayersClient() {
   const qTrimmed = qInput.trim();
   const debouncedQ = useDebouncedValue(qTrimmed, 250);
   const qTooShort = !searchable(qTrimmed);
+  // Follow the state's query (Back, Reset, a link) unless the field already
+  // says it: the debounced write of "messi" must not strip the space just
+  // typed after it.
   useEffect(() => {
-    setQInput(state.q);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    setQInput((cur) => (cur.trim() === state.q ? cur : state.q));
   }, [state.q]);
   useEffect(() => {
     if (debouncedQ !== state.q && searchable(debouncedQ)) update({ q: debouncedQ });
@@ -206,7 +275,8 @@ export function PlayersClient() {
     setQInput("");
     setDialog(null);
     setMobileFilters(false);
-    router.replace("/players", { scroll: false });
+    setPageNotice(null);
+    commit(DEFAULT_PLAYERS_STATE);
   };
 
   // A newly chosen sort starts in its natural direction (Name A → Z, numbers
@@ -264,7 +334,9 @@ export function PlayersClient() {
     </div>
   );
 
-  const panel = <FiltersPanel state={state} update={update} openDialog={setDialog} />;
+  // `resetKey`: a navigation re-syncs the range fields' drafts; nothing is
+  // remounted, so focus (a toggle, an open dialog or the phone sheet) stays.
+  const panel = <FiltersPanel state={state} update={update} openDialog={setDialog} resetKey={navEpoch} />;
 
   return (
     <div className="lg:grid lg:grid-cols-[minmax(0,1fr)_17.5rem] lg:items-start lg:gap-6">
@@ -427,7 +499,7 @@ export function PlayersClient() {
         {panel}
       </Modal>
 
-      {dialog && <FilterDialogs dialog={dialog} onClose={() => setDialog(null)} state={state} update={update} />}
+      {dialog && <FilterDialogs dialog={dialog} onClose={() => setDialog(null)} state={state} update={update} resetKey={navEpoch} />}
     </div>
   );
 }
