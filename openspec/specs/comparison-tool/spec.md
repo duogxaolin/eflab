@@ -4,15 +4,15 @@
 The comparison tool capability enables simultaneous side-by-side analysis of two or more player cards, aligning attribute categories and rendering 6-axis radar visualizations.
 ## Requirements
 ### Requirement: Multi-Card Side-by-Side Comparison
-The system MUST allow users to select 1 to 2 player cards (efootbase's compare is a two-slot tool) and display their 26 attributes, physical metrics, skills, and playstyles in an aligned matrix with visual indicators highlighting statistical advantages. A `?ids` query carrying more than two ids MUST be trimmed to the first two valid ids on load so no card is loaded without a slot tile. Every panel (cards, radar, stat matrix, position proficiency, boosters) MUST follow the user's selection order, and the Swap action MUST reorder all panels together.
+The system MUST allow users to select 1 to 2 player cards in two slots, `left` and `right` (efootbase's compare is a two-slot tool; the same card may sit in both slots), each with its own build (see efootbase-function-parity "Two-Build Compare"), and display their 26 attributes from each side's build, the overview data, skills, body model and playstyles in an aligned matrix in which each row shows both values as pills and, when they differ, the absolute difference next to both pills, marked positive on the higher side and negative on the lower side. A legacy `?ids` query MUST be read as `left` = the first valid id and `right` = the second, the extra ids dropped and the URL rewritten to the `left`/`right` form, so no card is loaded without a slot tile. Every panel (cards, radar, stat matrix, position proficiency, boosters) MUST follow the slot order, and the Swap action MUST exchange the cards and their builds in all panels together.
 
 #### Scenario: Extra ids in the share link
 - **WHEN** the user opens `/compare?ids=A,B,C,D`
-- **THEN** only A and B are shown (slot 1 = A, slot 2 = B), the URL is rewritten to `?ids=A,B`, and no panel lists C or D.
+- **THEN** only A and B are shown (left = A, right = B), the URL is rewritten to `?left=A&right=B`, and no panel lists C or D.
 
 #### Scenario: Comparing two center-backs
 - **WHEN** user selects Bonucci (Epic) and Chiellini (Epic) for comparison
-- **THEN** the system renders a synchronized comparison table highlighting the superior value in green for each respective attribute row.
+- **THEN** the system renders a synchronized comparison table in which every row whose values differ shows the difference next to both pills, the higher value marked positive and the lower negative, and equal rows show no difference.
 
 #### Scenario: Selection order independent of card id
 - **WHEN** the user picks a card with the larger id in the left slot and a card with the smaller id in the right slot
@@ -20,7 +20,7 @@ The system MUST allow users to select 1 to 2 player cards (efootbase's compare i
 
 #### Scenario: Swap
 - **WHEN** the user presses Swap
-- **THEN** the left and right columns of every panel exchange, matching the slot cards and radar.
+- **THEN** the left and right columns of every panel exchange, matching the slot cards, their builds and the radar.
 
 ### Requirement: 6-Axis Radar Visualization
 The comparison view MUST render an interactive hexagonal radar chart summarizing aggregate ratings across 6 macro dimensions: SHT (Shooting), PAS (Passing), PHY (Physicality), DEF (Defending), DRI (Dribbling), and SPD (Speed).
