@@ -21,7 +21,7 @@
 import { createHash } from "node:crypto";
 import { createServer, type IncomingHttpHeaders, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import { CARD_TYPE_BY_EFOOTBASE_CODE, CARD_TYPE_LABELS, POSITIONS } from "@eflab/shared";
+import { CARD_TYPE_BY_EFOOTBASE_CODE, CARD_TYPE_DUMP_LABELS, POSITIONS } from "@eflab/shared";
 import { CONDITION_LETTERS, META_LABEL_OVERRIDES } from "@eflab/db/efootbase-map";
 import { EFOOTBASE_KEY_HEADER } from "../../src/efootbase.js";
 
@@ -71,13 +71,14 @@ export interface FakeSource {
   close(): Promise<void>;
 }
 
-/** players_meta.json shape that `buildCardTypeMap` accepts (labels from our own constants). */
+/** players_meta.json shape that `buildCardTypeMap` accepts (the dump's labels from our own
+ *  constants, CARD_TYPE_DUMP_LABELS — never the display table). */
 export function fakePlayersMeta(): Record<string, unknown> {
   const codes = Object.keys(CARD_TYPE_BY_EFOOTBASE_CODE).map(Number);
   const values: string[] = Array.from({ length: Math.max(...codes) + 1 }, () => "");
   for (const code of codes) {
     const type = CARD_TYPE_BY_EFOOTBASE_CODE[code]!;
-    values[code] = code in META_LABEL_OVERRIDES ? META_LABEL_OVERRIDES[code]! : CARD_TYPE_LABELS[type];
+    values[code] = code in META_LABEL_OVERRIDES ? META_LABEL_OVERRIDES[code]! : CARD_TYPE_DUMP_LABELS[type];
   }
   return {
     id: { type: "integer" },

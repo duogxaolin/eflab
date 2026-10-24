@@ -13,7 +13,7 @@ const BROWSE_LINKS: readonly FooterLink[] = [
   { href: "/players", label: "Players" },
   { href: "/compare", label: "Compare" },
   { href: "/packs", label: "Packs" },
-  { href: "/skills", label: "Skills" },
+  { href: "/wiki/skills", label: "Skills" },
 ];
 
 const PROJECT_LINKS: readonly FooterLink[] = [

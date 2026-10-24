@@ -56,6 +56,7 @@ export function Modal({
   title,
   children,
   headerExtra,
+  headerAction,
   footer,
   panelClassName = "",
   variant = "dialog",
@@ -67,6 +68,9 @@ export function Modal({
   children: ReactNode;
   /** Rendered under the title (e.g. a search field or a switch). */
   headerExtra?: ReactNode;
+  /** Rendered on the title row, before the close button (e.g. the /players
+   *  filter sheet's Reset). */
+  headerAction?: ReactNode;
   /** Replaces the "Done" button in the footer (e.g. a confirmation's Cancel / Confirm pair). */
   footer?: ReactNode;
   panelClassName?: string;
@@ -172,6 +176,7 @@ export function Modal({
               </h2>
               {headerExtra}
             </div>
+            {headerAction}
             <button type="button" onClick={onClose} aria-label="Close" className="efb-modal__close hit-44">
               <X className="size-4" aria-hidden />
             </button>

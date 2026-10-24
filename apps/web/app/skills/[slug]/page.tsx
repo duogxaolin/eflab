@@ -1,32 +1,28 @@
-import type { Metadata } from "next";
-import { notFound } from "next/navigation";
-import { fetchSkill, isSlug } from "@/lib/api-server";
-import { skillDescription, skillLabel } from "@/lib/skill-labels";
-import { SkillDetailClient } from "./SkillDetailClient";
+import { notFound, permanentRedirect } from "next/navigation";
+import { fetchSkill, isSkillSlug } from "@/lib/api-server";
+import { wikiSkillPath } from "@/lib/skill-routes";
 
-// Skill page by slug backed by `skill.byId`; rendered per request so `next
-// build` never needs the API (design decision 10).
+// Old skill URLs, /skills/<slug> (the wiki moved to /wiki/skills in change
+// efootbase-function-parity, design D12). Every one answers ONE permanent
+// redirect (308) straight to the skill's public URL: the slug — stored or
+// public — is resolved through `skill.byId`, so an old URL whose stored slug
+// differs from the public one (phenomenal-passing → phenomenal-pass) takes no
+// second hop. Data-driven: no slug is listed here or in next.config.ts. An
+// unknown or unreleased slug is a 404 (the styled not-found page). The query
+// is carried except the old `page`. Nothing is rendered or streamed before the
+// redirect (no Suspense boundary, no loading.tsx, no metadata), so Next
+// answers with a real 308 and a Location header. `/skills` itself is a config
+// redirect (next.config.ts). Rendered per request so `next build` never needs
+// the API (design decision 10).
 export const dynamic = "force-dynamic";
 
 type Params = { slug: string };
+type SearchParams = Record<string, string | string[] | undefined>;
 
-export async function generateMetadata({ params }: { params: Promise<Params> }): Promise<Metadata> {
+export default async function OldSkillUrl({ params, searchParams }: { params: Promise<Params>; searchParams: Promise<SearchParams> }) {
   const { slug } = await params;
-  if (!isSlug(slug)) return { title: "Skill not found" };
-  const skill = await fetchSkill(slug);
-  if (!skill) return { title: "Skill not found", robots: { index: false } };
-  const label = skillLabel(skill);
-  return {
-    title: `${label} skill`,
-    description: `${label} — ${skillDescription(skill)} ${skill.playerCount.toLocaleString("en-US")} eFootball cards have this skill.`,
-    openGraph: { title: `${label} skill`, type: "website" },
-  };
-}
-
-export default async function SkillPage({ params }: { params: Promise<Params> }) {
-  const { slug } = await params;
-  if (!isSlug(slug)) notFound();
+  if (!isSkillSlug(slug)) notFound();
   const skill = await fetchSkill(slug);
   if (!skill) notFound();
-  return <SkillDetailClient slug={slug} initialData={skill} />;
+  permanentRedirect(wikiSkillPath(skill.publicSlug, await searchParams));
 }

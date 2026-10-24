@@ -27,7 +27,7 @@ export default function NotFound() {
         <Link href="/packs" className="button button--sm button--secondary">
           Packs
         </Link>
-        <Link href="/skills" className="button button--sm button--secondary">
+        <Link href="/wiki/skills" className="button button--sm button--secondary">
           Skills
         </Link>
       </div>

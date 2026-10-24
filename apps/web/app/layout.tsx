@@ -6,6 +6,7 @@ import { Providers } from "./providers";
 import { SiteHeader } from "@/components/layout/SiteHeader";
 import { MobileBottomNav } from "@/components/layout/MobileBottomNav";
 import { SiteFooter } from "@/components/layout/SiteFooter";
+import { PageSlot } from "@/components/layout/PageSlot";
 
 const inter = Inter({
   subsets: ["latin"],
@@ -58,7 +59,8 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           <div className="relative z-1 flex flex-1 flex-col">
             <SiteHeader />
             <main className="flex-1 mx-auto w-full max-w-6xl px-4 py-8">
-              {children}
+              {/* Not `{children}` directly: see PageSlot (hydration #418). */}
+              <PageSlot>{children}</PageSlot>
             </main>
             <SiteFooter />
             <MobileBottomNav />

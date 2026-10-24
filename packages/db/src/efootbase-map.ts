@@ -11,7 +11,7 @@
 import {
   BASE_STATS,
   CARD_TYPE_BY_EFOOTBASE_CODE,
-  CARD_TYPE_LABELS,
+  CARD_TYPE_DUMP_LABELS,
   EFOOTBASE_STAT_MAP,
   POSITIONS,
   type BaseStat,
@@ -310,13 +310,14 @@ export interface PlayersMeta {
 }
 
 /** Codes whose meta label is unusable and is resolved from pack names instead
- *  (see CARD_TYPE_LABELS in @eflab/shared). The expected meta text is asserted so a
+ *  (see CARD_TYPE_DUMP_LABELS in @eflab/shared). The expected meta text is asserted so a
  *  changed dump is noticed. */
 export const META_LABEL_OVERRIDES: Readonly<Record<number, string>> = { 4: "Legendary", 7: "" };
 
 /** efootbase `card_type` code → CardType, after checking players_meta.json agrees
- *  (card-type labels, position order, condition letters). `metaPath` only names
- *  the file in error messages. Any disagreement throws. */
+ *  (card-type labels — the dump's own, CARD_TYPE_DUMP_LABELS, never the display
+ *  table CARD_TYPE_LABELS —, position order, condition letters). `metaPath` only
+ *  names the file in error messages. Any disagreement throws. */
 export function buildCardTypeMap(meta: PlayersMeta, metaPath: string): Map<number, CardType> {
   const values = meta.card_type?.values;
   if (!values) throw new Error(`${metaPath}: card_type.values missing`);
@@ -325,7 +326,7 @@ export function buildCardTypeMap(meta: PlayersMeta, metaPath: string): Map<numbe
   for (const [codeStr, type] of Object.entries(CARD_TYPE_BY_EFOOTBASE_CODE)) {
     const code = Number(codeStr);
     const metaLabel = values[code];
-    const expected = code in META_LABEL_OVERRIDES ? META_LABEL_OVERRIDES[code] : CARD_TYPE_LABELS[type];
+    const expected = code in META_LABEL_OVERRIDES ? META_LABEL_OVERRIDES[code] : CARD_TYPE_DUMP_LABELS[type];
     if (metaLabel !== expected) {
       problems.push(`code ${code}: players_meta says ${JSON.stringify(metaLabel)}, expected ${JSON.stringify(expected)} (${type})`);
     }

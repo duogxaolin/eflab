@@ -2,35 +2,34 @@
 import type { ButtonHTMLAttributes } from "react";
 import { Shield, Swords } from "lucide-react";
 import { playingStyleName, type CardPreview } from "@eflab/shared";
-import { CARD_TYPE_LABEL, positionOf, statTierBg, statTierForeground } from "@/lib/card-display";
+import { positionOf, statTierBg, statTierForeground } from "@/lib/card-display";
 import { playerCardDynamicUrl } from "@/lib/r2-images";
 
 /**
- * One player result (search palette, compare picker, home search dropdown):
- * a 40 × 56 card-face thumbnail (`cards/{id}_dynamic.webp` through the R2
+ * One player result (search palette, compare picker, home search list): a
+ * 40 × 56 card-face thumbnail (`cards/{id}_dynamic.webp` through the R2
  * helper, lazy), the name 14/500, a 12 px muted line "POS · attack style ·
- * defence style" with 12 px style icons and the card type as a soft lime chip,
- * and the max-level overall at the right as a 40 × 24 badge filled with its
- * tier colour (black text). The badge is the card's overall at max level from
- * the dump (Booster 1 on), so its accessible text says "max overall".
- * Extra button props (role="option", id, aria-selected, data attributes) pass
- * through. `disabledNote` marks a row that cannot be chosen (the compare
- * picker's card already in the other slot): the row is `aria-disabled` and
- * shows the reason as visible text before the badge ("In slot 1"); the caller
- * still has to ignore its activation.
+ * defence style" with 12 px style icons and the card's pack / campaign name
+ * as a soft lime chip when it has one (change efootbase-function-parity
+ * "Search Result Lists"; it replaced the card-type chip), and the max-level
+ * overall at the right as a 40 × 24 badge filled with its tier colour (black
+ * text). The badge is the card's overall at max level from the dump
+ * (Booster 1 on), so its accessible text says "max overall".
+ * Extra button props (role="option", id, aria-selected, tabIndex, mouse
+ * handlers) pass through: the lists keep DOM focus in their input and point
+ * at the active row with `aria-activedescendant`.
  */
 export function PlayerSearchRow({
   player,
-  disabledNote,
   className = "",
   ...rest
-}: { player: CardPreview; disabledNote?: string } & Omit<ButtonHTMLAttributes<HTMLButtonElement>, "children" | "type">) {
+}: { player: CardPreview } & Omit<ButtonHTMLAttributes<HTMLButtonElement>, "children" | "type">) {
   const pos = positionOf(player.registeredPosition);
   const attack = player.playingStyleAttack != null ? playingStyleName(player.playingStyleAttack) : null;
   const defence = player.playingStyleDefense != null ? playingStyleName(player.playingStyleDefense) : null;
-  const typeLabel = CARD_TYPE_LABEL[player.cardType] ?? player.cardType;
+  const pack = player.packName?.trim() || null;
   return (
-    <button type="button" className={`efb-result-row ${className}`} aria-disabled={disabledNote ? true : undefined} {...rest}>
+    <button type="button" className={`efb-result-row ${className}`} {...rest}>
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
         src={playerCardDynamicUrl(player.id)}
@@ -69,11 +68,15 @@ export function PlayerSearchRow({
               </span>
             </>
           )}
-          <span className="efb-result-row__type">{typeLabel}</span>
+          {pack && (
+            <span className="efb-result-row__pack">
+              <span className="sr-only">Pack: </span>
+              {pack}
+            </span>
+          )}
         </span>
       </span>
-      {disabledNote && <span className="efb-result-row__note">{disabledNote}</span>}
-      <span className={`efb-result-row__ovr ${statTierBg(player.maxOvr)} ${statTierForeground(player.maxOvr)}`} title={`Max overall ${player.maxOvr} (max level, from the dump)`}>
+      <span className={`efb-result-row__ovr ${statTierBg(player.maxOvr)} ${statTierForeground(player.maxOvr)}`}>
         <span className="sr-only">Max overall </span>
         {player.maxOvr}
       </span>

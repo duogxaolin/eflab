@@ -69,10 +69,13 @@ export async function apiQuery<T>(procedure: string, input: unknown): Promise<T>
 
 // Path-param guards: tRPC rejects non-numeric / oversized ids with a 400, but
 // a malformed URL should simply be "not found" on the web, without a request.
+// The slug guards come from @eflab/shared, bounded by the same constants as
+// the API inputs (SKILL_SLUG_MAX_LENGTH, BUNDLE_SLUG_MAX_LENGTH): a slug the
+// guard lets through is never refused by the input — a refusal would reach
+// the page as an ApiUnavailableError (HTTP 500), not a 404.
 const ID_PATTERN = /^\d{1,19}$/;
 export const isNumericId = (s: string): boolean => ID_PATTERN.test(s);
-const SLUG_PATTERN = /^[a-z0-9][a-z0-9-]{0,199}$/i;
-export const isSlug = (s: string): boolean => SLUG_PATTERN.test(s);
+export { isBundleSlug, isSkillSlug } from "@eflab/shared";
 
 /** `player.byId` — null when the card is unknown OR `baseId` is not its base. */
 export function fetchPlayer(baseId: string, cardId: string): Promise<PlayerCardDTO | null> {
@@ -84,7 +87,14 @@ export function fetchBundle(slug: string): Promise<FeaturedBundleDTO | null> {
   return apiQuery<FeaturedBundleDTO | null>("featured.bySlug", { slug });
 }
 
-/** `skill.byId` — one skill with its holder count, or null. */
+/** `skill.byId` — one skill (by its public or stored slug) with its holder
+ *  count, or null (unknown or unreleased). */
 export function fetchSkill(slug: string): Promise<SkillDTO | null> {
   return apiQuery<SkillDTO | null>("skill.byId", { slug });
+}
+
+/** `skill.list` — every public skill with its holder count (the skill page's
+ *  rarity rank is computed over it). */
+export function fetchSkillList(): Promise<SkillDTO[]> {
+  return apiQuery<SkillDTO[]>("skill.list", {});
 }

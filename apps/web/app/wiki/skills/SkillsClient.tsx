@@ -1,33 +1,41 @@
 "use client";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import type { Route } from "next";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { CircleDashed, ListChecks, Search, Sparkles, X, Zap, type LucideIcon } from "lucide-react";
-import { labelSearchKey, type SkillDTO } from "@eflab/shared";
+import { ListChecks, Search, Sparkles, X, Zap, type LucideIcon } from "lucide-react";
+import { labelSearchKey, type SkillDTO, type SkillGroup } from "@eflab/shared";
 import { trpc } from "@/lib/trpc";
 import { QueryErrorState } from "@/lib/query-state";
 import { useDebouncedValue } from "@/lib/use-debounced-value";
+import { playerCardDynamicUrl } from "@/lib/r2-images";
 import { SectionHeader, type SectionTone } from "@/components/layout/SectionHeader";
-import { SKILL_GROUP_LABELS, SKILL_GROUP_ORDER, compareSkills, skillDescription, skillGroup, skillLabel, type SkillSection } from "@/lib/skill-labels";
+import { SKILL_GROUP_LABELS, compareSkills, skillDescription, skillLabel } from "@/lib/skill-labels";
 
-// Skills index (catalog-browsing-parity "Skills Grouping"; efootbase-ui-redesign
-// design decision 12): tiles grouped Showtime / Classic / Other from the
-// stored group, in the stored wiki order (`sortOrder`); the 5 unreleased
-// skills never reach this page (the API hides them). Every number comes from
-// the API — `playerCount` is the grouped PlayerSkill count. A search field
-// filters the tiles by name (accent-, case- and separator-insensitive, see
-// `skillSearchKey`), a segmented control narrows to one group. Both live in
-// the URL (`group`, `q`; written with replace, the defaults omitted) and come
+// Skills index at /wiki/skills (catalog-browsing-parity "Skills Grouping";
+// change efootbase-function-parity, design D12 — /skills answers 308 here):
+// the Showtime and Classic tiles from the stored group, in the stored wiki
+// order (`sortOrder`). Catalogue entries without a group (no card carries
+// them) are not listed — their page still opens by direct link — and the 5
+// unreleased skills never reach this page (the API hides them). Every number
+// comes from the API: `playerCount` is the grouped PlayerSkill count and
+// `leader` the holder with the highest max overall (ties: the higher card
+// id). A search field filters the tiles by name (accent-, case- and
+// separator-insensitive, see `skillSearchKey`), a segmented control narrows
+// to one group; both live in the URL (`group`, `q`; written with replace, the
+// defaults omitted, an unknown or the former `group=other` dropped) and come
 // back on reload (efootbase-behaviour-parity "Skills Search And URL State").
-// The artwork, stat boosts, activation, share and top cards live on
-// /skills/[slug]. Nothing is synthesised — no rarity, rank, leader or tier label.
+// From 1024 px a wiki rail holds the page ("Skills") and the in-page links
+// "Showtime Skills" (#showtime) / "Classic Skills" (#classic). The artwork,
+// stat boosts, rarity rank and top cards live on /wiki/skills/<slug>.
 const ALL = "ALL";
-type GroupFilter = SkillSection | typeof ALL;
+/** The groups the index lists, in page order. */
+const INDEX_GROUPS: readonly SkillGroup[] = ["showtime", "classic"];
+type GroupFilter = SkillGroup | typeof ALL;
 
-/** `?group=` value → the segment (anything else = All). */
+/** `?group=` value → the segment (anything else, `other` included = All). */
 function parseGroup(raw: string | null): GroupFilter {
-  return raw !== null && (SKILL_GROUP_ORDER as readonly string[]).includes(raw) ? (raw as SkillSection) : ALL;
+  return raw !== null && (INDEX_GROUPS as readonly string[]).includes(raw) ? (raw as SkillGroup) : ALL;
 }
 
 /** Hyphens, dashes, slashes and underscores read as spaces, so "one touch"
@@ -36,8 +44,53 @@ function parseGroup(raw: string | null): GroupFilter {
  *  the `/players` picker dialogs. */
 const skillSearchKey = labelSearchKey;
 
+const GROUP_HEAD: Readonly<Record<SkillGroup, { icon: LucideIcon; tone: SectionTone }>> = {
+  showtime: { icon: Sparkles, tone: "gold" },
+  classic: { icon: ListChecks, tone: "amber" },
+};
+/** Short group names for the segmented filter (section headings keep the long ones). */
+const SEGMENT_LABELS: Readonly<Record<SkillGroup, string>> = { showtime: "Showtime", classic: "Classic" };
+
+/** Wiki rail (from 1024 px, sticky): the page itself and its two sections.
+ *  `onSection` (the loaded page) handles a section that the group filter or
+ *  the search has hidden; without it (the loading fallback) the links are
+ *  plain in-page links. */
+export function SkillsRail({ onSection }: { onSection?: (group: SkillGroup, e: MouseEvent<HTMLAnchorElement>) => void }) {
+  return (
+    <nav aria-label="Wiki" className="wiki-rail" data-testid="wiki-rail">
+      <p className="wiki-rail__label">Wiki</p>
+      <ul className="wiki-rail__list">
+        <li>
+          <Link href="/wiki/skills" className="wiki-rail__link" aria-current="page">
+            <span className="wiki-rail__icon wiki-rail__icon--current" aria-hidden>
+              <Sparkles className="size-4" />
+            </span>
+            Skills
+          </Link>
+        </li>
+      </ul>
+      <p className="wiki-rail__label">Skills</p>
+      <ul className="wiki-rail__list">
+        {INDEX_GROUPS.map((group) => {
+          const Icon = GROUP_HEAD[group].icon;
+          return (
+            <li key={group}>
+              <a href={`#${group}`} className="wiki-rail__link" onClick={onSection ? (e) => onSection(group, e) : undefined}>
+                <span className={`wiki-rail__icon wiki-rail__icon--${group}`} aria-hidden>
+                  <Icon className="size-4" />
+                </span>
+                {SKILL_GROUP_LABELS[group]}
+              </a>
+            </li>
+          );
+        })}
+      </ul>
+    </nav>
+  );
+}
+
 /** Breadcrumbs, H1 and intro — also the server-rendered fallback while the
- *  URL state is read (`app/skills/page.tsx`). */
+ *  URL state is read (`app/wiki/skills/page.tsx`). */
 export function SkillsIntro() {
   return (
     <>
@@ -57,7 +110,7 @@ export function SkillsIntro() {
 
       <h1 className="efb-h1 text-[var(--color-text-primary)]">Skills</h1>
       <p className="efb-subtitle mt-2">
-        Every eFootball skill in one place — Showtime and classic skills with the number of cards that carry each one. Open a skill for its artwork, stat boosts and top cards.
+        Every eFootball skill in one place — Showtime and classic skills with the number of cards that carry each one and the best card for it. Open a skill for its artwork, stat boosts, rarity and top cards.
       </p>
     </>
   );
@@ -74,32 +127,34 @@ export function SkillsSkeleton() {
   );
 }
 
-const GROUP_HEAD: Readonly<Record<SkillSection, { icon: LucideIcon; tone: SectionTone }>> = {
-  showtime: { icon: Sparkles, tone: "gold" },
-  classic: { icon: ListChecks, tone: "amber" },
-  other: { icon: CircleDashed, tone: "neutral" },
-};
-/** Short group names for the segmented filter (section headings keep the long ones). */
-const SEGMENT_LABELS: Readonly<Record<SkillSection, string>> = { showtime: "Showtime", classic: "Classic", other: "Other" };
+/** The page frame: the wiki rail beside the content from 1024 px. */
+export function SkillsFrame({ rail, children }: { rail: ReactNode; children: ReactNode }) {
+  return (
+    <div className="wiki-layout">
+      <div className="max-lg:hidden">{rail}</div>
+      <div className="min-w-0">{children}</div>
+    </div>
+  );
+}
 
-function SkillTile({ skill, group }: { skill: SkillDTO; group: SkillSection }) {
+function SkillTile({ skill, group }: { skill: SkillDTO; group: SkillGroup }) {
   const label = skillLabel(skill);
   const count = skill.playerCount;
+  const countText = `${count.toLocaleString("en-US")} ${count === 1 ? "card" : "cards"}`;
+  const leader = skill.leader;
   const descId = `skill-desc-${skill.slug}`;
   return (
     <Link
-      href={`/skills/${skill.slug}`}
+      href={`/wiki/skills/${skill.publicSlug}`}
       className="skill-tile"
       data-group={group}
       data-testid="skill-card"
-      aria-label={`${label}, ${count.toLocaleString("en-US")} ${count === 1 ? "card" : "cards"}`}
+      data-skill={skill.publicSlug}
+      aria-label={`${label}, ${countText}${leader ? `, top card: ${leader.name}` : ""}`}
       aria-describedby={descId}
     >
-      <span className="skill-tile__name">{label}</span>
-      <span id={descId} className="skill-tile__desc">
-        {skillDescription(skill)}
-      </span>
-      <span className="skill-tile__footer">
+      <span className="skill-tile__head">
+        <span className="skill-tile__name">{label}</span>
         {/* Stored stat boosts only — never an invented one. */}
         {skill.effects.length > 0 && (
           <span className="skill-tile__chip skill-tile__chip--boost">
@@ -107,9 +162,33 @@ function SkillTile({ skill, group }: { skill: SkillDTO; group: SkillSection }) {
             Stat boost
           </span>
         )}
-        <span className="skill-tile__chip skill-tile__chip--count tabular-nums">
-          {count.toLocaleString("en-US")} {count === 1 ? "card" : "cards"}
-        </span>
+      </span>
+      <span id={descId} className="skill-tile__desc">
+        {skillDescription(skill)}
+      </span>
+      <span className="skill-tile__footer">
+        {/* Leader chip: the top holder's card face and name (inside the tile
+            link — no nested link; the tile's name above says it). */}
+        {leader && (
+          <span className="skill-tile__leader" data-testid="skill-leader" data-card-id={leader.id}>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={playerCardDynamicUrl(leader.id)}
+              alt=""
+              width={16}
+              height={22}
+              loading="lazy"
+              decoding="async"
+              draggable={false}
+              className="skill-tile__leader-face"
+              onError={(e) => {
+                (e.currentTarget as HTMLImageElement).style.visibility = "hidden";
+              }}
+            />
+            <span className="skill-tile__leader-name">{leader.name}</span>
+          </span>
+        )}
+        <span className="skill-tile__chip skill-tile__chip--count tabular-nums">{countText}</span>
       </span>
     </Link>
   );
@@ -123,11 +202,13 @@ export function SkillsClient() {
   const urlQ = (searchParams.get("q") ?? "").trim();
 
   // Local state answers at once; the URL follows with replace (the search
-  // text debounced). An outside URL change (a link to /skills?group=…) is
-  // copied back into the state.
+  // text debounced). An outside URL change (a link to /wiki/skills?group=…)
+  // is copied back into the state.
   const [activeGroup, setActiveGroup] = useState<GroupFilter>(urlGroup);
   const [query, setQuery] = useState(urlQ);
   const lastWritten = useRef<{ group: GroupFilter; q: string }>({ group: urlGroup, q: urlQ });
+  // A rail link whose section was hidden: shown again, then focused.
+  const [pendingSection, setPendingSection] = useState<SkillGroup | null>(null);
 
   const writeUrl = (group: GroupFilter, q: string) => {
     lastWritten.current = { group, q };
@@ -135,7 +216,7 @@ export function SkillsClient() {
     if (group !== ALL) sp.set("group", group);
     if (q) sp.set("q", q);
     const qs = sp.toString();
-    router.replace((qs ? `/skills?${qs}` : "/skills") as Route, { scroll: false });
+    router.replace((qs ? `/wiki/skills?${qs}` : "/wiki/skills") as Route, { scroll: false });
   };
 
   useEffect(() => {
@@ -149,7 +230,8 @@ export function SkillsClient() {
     }
   }, [urlGroup, urlQ]);
 
-  // An unknown `group` value reads as All: rewrite the link without it.
+  // An unknown `group` value (the former `other` included) reads as All:
+  // rewrite the link without it.
   useEffect(() => {
     if (rawGroup !== null && urlGroup === ALL) writeUrl(ALL, urlQ);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -173,13 +255,12 @@ export function SkillsClient() {
   const skillsQuery = trpc.skill.list.useQuery({}, { staleTime: 60 * 60_000 });
 
   const needle = skillSearchKey(query);
-  // Showtime first, then Classic, both in the stored order; the entries
-  // without a group (all with 0 holders) come last under "Other". The name
-  // filter applies before grouping, so counts follow it.
+  // Showtime first, then Classic, both in the stored order. The name filter
+  // applies before grouping, so counts follow it.
   const groups = useMemo(() => {
     const sorted = [...(skillsQuery.data ?? [])].sort(compareSkills);
     const matching = needle ? sorted.filter((s) => skillSearchKey(skillLabel(s)).includes(needle)) : sorted;
-    return SKILL_GROUP_ORDER.map((group) => ({ group, skills: matching.filter((s) => skillGroup(s) === group) }));
+    return INDEX_GROUPS.map((group) => ({ group, skills: matching.filter((s) => s.group === group) }));
   }, [skillsQuery.data, needle]);
   const nonEmpty = groups.filter((g) => g.skills.length > 0);
   const matchCount = nonEmpty.reduce((acc, g) => acc + g.skills.length, 0);
@@ -188,13 +269,33 @@ export function SkillsClient() {
   // Groups present in the data at all (the segment keeps its items while a
   // search empties one of them, so the control does not jump around).
   const presentGroups = useMemo(
-    () => SKILL_GROUP_ORDER.filter((group) => (skillsQuery.data ?? []).some((s) => skillGroup(s) === group)),
+    () => INDEX_GROUPS.filter((group) => (skillsQuery.data ?? []).some((s) => s.group === group)),
     [skillsQuery.data],
   );
-  const countOf = (group: SkillSection) => groups.find((g) => g.group === group)?.skills.length ?? 0;
+  const countOf = (group: SkillGroup) => groups.find((g) => g.group === group)?.skills.length ?? 0;
+
+  // Rail link to a section the group filter or the search has hidden: show
+  // every skill again (group All, search cleared), then move focus to the
+  // section (which scrolls it into view, clear of the sticky header). A
+  // visible section is left to the browser's own in-page link.
+  const onSection = (group: SkillGroup, e: MouseEvent<HTMLAnchorElement>) => {
+    if (visibleGroups.some((g) => g.group === group)) return;
+    e.preventDefault();
+    setQuery("");
+    setActiveGroup(ALL);
+    writeUrl(ALL, "");
+    setPendingSection(group);
+  };
+  useEffect(() => {
+    if (pendingSection === null) return;
+    const section = document.getElementById(pendingSection);
+    if (!section) return;
+    section.focus();
+    setPendingSection(null);
+  }, [pendingSection, visibleGroups]);
 
   return (
-    <div>
+    <SkillsFrame rail={<SkillsRail onSection={onSection} />}>
       <SkillsIntro />
 
       {skillsQuery.isError ? (
@@ -266,13 +367,12 @@ export function SkillsClient() {
               </div>
             ) : (
               visibleGroups.map(({ group, skills: list }) => (
-                <section key={group} className="space-y-3" aria-labelledby={`skills-${group}`}>
+                // id = the rail's in-page target (#showtime / #classic); the
+                // scroll margin keeps the heading clear of the sticky header;
+                // tabIndex -1 lets a rail link that had to reveal the section
+                // move focus onto it.
+                <section key={group} id={group} tabIndex={-1} className="scroll-mt-20 space-y-3 focus:outline-none" aria-labelledby={`skills-${group}`}>
                   <SectionHeader id={`skills-${group}`} title={SKILL_GROUP_LABELS[group]} icon={GROUP_HEAD[group].icon} tone={GROUP_HEAD[group].tone} size="lg" count={list.length} />
-                  {group === "other" && (
-                    <p className="max-w-3xl text-xs text-[var(--color-text-secondary)]">
-                      Catalogue entries that are not part of the game&apos;s skill list (AI playing styles, motion styles and set-piece variants); no card carries them.
-                    </p>
-                  )}
                   <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                     {list.map((s) => (
                       <SkillTile key={s.id} skill={s} group={group} />
@@ -284,6 +384,6 @@ export function SkillsClient() {
           </div>
         </>
       )}
-    </div>
+    </SkillsFrame>
   );
 }

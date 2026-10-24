@@ -7,7 +7,7 @@ const LINKS = [
   { href: "/", label: "Home", icon: Home },
   { href: "/players", label: "Players", icon: Trophy },
   { href: "/compare", label: "Compare", icon: Swords },
-  { href: "/skills", label: "Skills", icon: Sparkles },
+  { href: "/wiki/skills", label: "Skills", icon: Sparkles },
   { href: "/packs", label: "Packs", icon: Layers },
 ] as const;
 

@@ -10,7 +10,8 @@ const NAV_LINKS = [
   { href: "/players", label: "Players" },
   { href: "/compare", label: "Compare" },
   { href: "/packs", label: "Packs" },
-  { href: "/skills", label: "Skills" },
+  // The skills wiki (/skills answers 308 here); active on its skill pages too.
+  { href: "/wiki/skills", label: "Skills" },
 ] as const;
 
 export function SiteHeader() {
@@ -103,14 +104,15 @@ export function SiteHeader() {
         </nav>
       </header>
 
-      {/* ⌘K search palette (shared with the compare picker): a player opens
-          its card page; Enter opens the full list for the query. */}
+      {/* ⌘K search palette (shared with the compare picker): a row — or
+          Enter on the active row, the first one while typing — opens that
+          card's page (change efootbase-function-parity; Enter never runs a
+          list search here — the home search's Enter does). */}
       <SearchPalette
         open={paletteOpen}
         onClose={closePalette}
         title="Search players"
         onSelect={(p) => router.push(`/players/${p.baseId}/${p.id}`)}
-        onSubmitQuery={(q) => router.push(`/players?search=${encodeURIComponent(q)}`)}
       />
     </>
   );

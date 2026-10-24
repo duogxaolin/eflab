@@ -2,14 +2,25 @@ import { z } from "zod";
 import {
   AI_PLAYING_STYLE_KEYS,
   BASE_STATS,
+  BUNDLE_SLUG_MAX_LENGTH,
   CARD_TYPES,
   CONDITIONS,
   FILTER_RANGE_BOUNDS,
+  LEGACY_SORT_PRESETS,
+  LIST_SEARCH_MAX_LENGTH,
   MAX_FILTER_IDS,
+  MAX_FILTER_SKILLS,
   PHYSIQUE_FIELDS,
   POSITIONS,
+  SEARCH_MAX_LENGTH,
+  SEARCH_MAX_PAGE,
+  SEARCH_MIN_LENGTH,
+  SKILL_KEY_RE,
+  SKILL_SLUG_MAX_LENGTH,
   SORT_FIELDS,
   SORT_PRESETS,
+  TEAM_NAME_MAX_LENGTH,
+  resolveLegacySort,
 } from "./constants";
 import { SYNC_INTERVAL_MAX_MINUTES, SYNC_INTERVAL_MIN_MINUTES, SYNC_KINDS } from "./sync";
 
@@ -46,14 +57,19 @@ export const playerListInput = z.object({
   page: z.coerce.number().int().min(1).max(10000).default(1),
   limit: z.coerce.number().int().min(1).max(200).default(24),
   // A SORT_FIELDS column (with `order`) or one of the SORT_PRESETS (which fix
-  // their own direction — see constants.ts).
-  sort: z.enum([...SORT_FIELDS, ...SORT_PRESETS] as unknown as [string, ...string[]]).default("ovr"),
+  // their own direction — see constants.ts). The former presets `trending`
+  // and `top` are still accepted and read as `new` and `highest`
+  // (LEGACY_SORT_PRESETS), so an old client never gets a 400.
+  sort: z
+    .enum([...SORT_FIELDS, ...SORT_PRESETS, ...Object.keys(LEGACY_SORT_PRESETS)] as unknown as [string, ...string[]])
+    .default("ovr")
+    .transform((s) => resolveLegacySort(s)),
   order: z.enum(["asc", "desc"]).default("desc"),
-  q: z.string().trim().max(120).optional(),
+  q: z.string().trim().max(LIST_SEARCH_MAX_LENGTH).optional(),
   cardType: z.enum(CARD_TYPES).optional(),
-  // Card-type scope ("All" = omitted). The /players page sends its visible scope
-  // here; the home "Epic & Big Time" quick filter sends ["EPIC"] (Big Time cards
-  // are stored under EPIC — see CARD_TYPE_LABELS).
+  // Card-type scope ("All" = omitted). The /players page sends its Card Type
+  // toggles here; a Big Time card is stored under EPIC (the dump's "Epic" —
+  // see CARD_TYPE_DUMP_LABELS; the UI shows "Epic - Big Time", CARD_TYPE_LABELS).
   cardTypeIn: z.array(z.enum(CARD_TYPES)).max(CARD_TYPES.length).optional(),
   // Position / Nation / League / Team accept several values (change
   // multi-select-filters): the values of one list are OR-ed, the lists are
@@ -67,8 +83,17 @@ export const playerListInput = z.object({
   clubIds: z.array(int4).max(MAX_FILTER_IDS).optional(),
   leagueIds: z.array(int4).max(MAX_FILTER_IDS).optional(),
   // Style id in either slot (efootbase semantics, see PLAYING_STYLE_GROUPS);
-  // `defensiveStyle` restricts to the defence slot only.
+  // `defensiveStyle` restricts to the defence slot only. Several main styles
+  // (`playingStyles`, change efootbase-function-parity) are OR-ed, each in
+  // either slot; the single `playingStyle` is merged into the list.
   playingStyle: int4.optional(),
+  playingStyles: z.array(int4).max(MAX_FILTER_IDS).optional(),
+  // Teams by their stored name (the reference's `team=<name>`; names are
+  // unique), OR-ed with `clubIds` / `clubId` into one team set.
+  teamNames: z.array(z.string().min(1).max(TEAM_NAME_MAX_LENGTH)).max(MAX_FILTER_IDS).optional(),
+  // Skills by their stored key (`Skill.efbKey`, the reference's
+  // `skill=s_rabona`), AND-ed together with `skillIds` / `skillId`.
+  skillKeys: z.array(z.string().regex(SKILL_KEY_RE, "expected a skill key such as s_rabona")).max(MAX_FILTER_SKILLS).optional(),
   defensiveStyle: int4.optional(),
   // AI playing styles — every listed flag must be set.
   aiStyles: z.array(z.enum(AI_PLAYING_STYLE_KEYS as unknown as [string, ...string[]])).max(AI_PLAYING_STYLE_KEYS.length).optional(),
@@ -87,7 +112,7 @@ export const playerListInput = z.object({
   skillId: int4.optional(),
   // Every listed skill must be present (efootbase's Skills dialog is a
   // multi-toggle). Bounded so the AND chain stays small.
-  skillIds: z.array(int4).max(20).optional(),
+  skillIds: z.array(int4).max(MAX_FILTER_SKILLS).optional(),
   conditionIn: z.array(z.enum(CONDITIONS)).max(CONDITIONS.length).optional(),
   formIn: z.array(smallLevel(2)).max(3).optional(),
   weakFootAccuracyIn: z.array(smallLevel(3)).max(4).optional(),
@@ -119,12 +144,14 @@ export const playerByIdInput = z.object({
   cardId: bigIntString,
 });
 
-// Name search (home palette, header, compare picker). Queries shorter than 2
-// characters after normalisation return an empty list (design decision 6); the
-// schema itself still accepts 1 character so a half-typed query is not a 400.
+// Player search (⌘K palette, home search, compare picker; change
+// efootbase-function-parity): the trimmed term has SEARCH_MIN_LENGTH (3) to
+// SEARCH_MAX_LENGTH characters — a shorter one is a 400 — and the results come
+// in pages of SEARCH_PAGE_SIZE (12), page 1..SEARCH_MAX_PAGE. An older
+// client's `limit` is accepted and ignored (the page size is fixed).
 export const playerSearchInput = z.object({
-  q: z.string().trim().min(1).max(120),
-  limit: z.coerce.number().int().min(1).max(50).default(10),
+  q: z.string().trim().min(SEARCH_MIN_LENGTH).max(SEARCH_MAX_LENGTH),
+  page: z.coerce.number().int().min(1).max(SEARCH_MAX_PAGE).default(1),
 });
 
 // Comparison: 1–4 cards. (min 1, not 2: the page renders each card as soon as
@@ -140,19 +167,26 @@ export const skillListInput = z.object({
   category: z.string().trim().max(64).optional(),
 });
 
-export const skillByIdInput = z.object({ slug: z.string().trim().min(1).max(120) });
+// A skill by its stored or public slug, at most SKILL_SLUG_MAX_LENGTH
+// characters — the bound the web skill pages pre-check (`isSkillSlug`).
+export const skillByIdInput = z.object({ slug: z.string().trim().min(1).max(SKILL_SLUG_MAX_LENGTH) });
 
-// Holders of a skill, paginated. A small `limit` (e.g. 4) is the "top cards"
-// call used by the skills index; the order is deterministic (ovr DESC, id DESC).
+// Top cards of a skill (change efootbase-function-parity): the leader and the
+// best card of up to 12 other base players — no paging. `slug` is the stored
+// or the public slug. The former paging fields `page` / `limit` are accepted
+// (with their old bounds) and ignored for one release, so an older client is
+// not a 400.
 export const skillPlayersInput = z.object({
-  slug: z.string().trim().min(1).max(120),
-  page: z.coerce.number().int().min(1).max(10000).default(1),
-  limit: z.coerce.number().int().min(1).max(200).default(24),
+  slug: z.string().trim().min(1).max(SKILL_SLUG_MAX_LENGTH),
+  page: z.coerce.number().int().min(1).max(10000).optional(),
+  limit: z.coerce.number().int().min(1).max(200).optional(),
 });
 
 // Featured bundle (efootbase "Latest Packs") by its stable slug — name + release
 // date, e.g. `spanish-league-midfielders-2026-10-05`, `spotlight-leo-messi-2027-…`.
-export const featuredBySlugInput = z.object({ slug: z.string().trim().min(1).max(200) });
+// At most BUNDLE_SLUG_MAX_LENGTH characters — the bound /packs/<slug>
+// pre-checks (`isBundleSlug`).
+export const featuredBySlugInput = z.object({ slug: z.string().trim().min(1).max(BUNDLE_SLUG_MAX_LENGTH) });
 
 // ---- Auth (email/password; the `auth` router) ----
 // The build / community / profile / feed / tier-list inputs that used to follow

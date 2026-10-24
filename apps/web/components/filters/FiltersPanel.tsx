@@ -1,18 +1,14 @@
 "use client";
 import { BarChart3, ChevronRight, Globe, PersonStanding, ShieldHalf, Target, Trophy, Zap, type LucideIcon } from "lucide-react";
-import { trpc } from "@/lib/trpc";
-import { skillLabel } from "@/lib/skill-labels";
-import type { PlayersState } from "@/lib/filter-url";
+import { filterDialogCounts, type FilterDialogRow, type PlayersState } from "@/lib/filter-url";
 import {
-  AI_PLAYING_STYLES,
   CARD_TYPES,
+  CARD_TYPE_FILTER_ORDER,
   CARD_TYPE_LABELS,
   CONDITIONS,
   CONDITION_FILTER_LABELS,
   FILTER_RANGE_BOUNDS,
   FORM_LABELS,
-  PLAYING_STYLES,
-  POSITIONS,
   WEAK_FOOT_ACCURACY_LABELS,
   WEAK_FOOT_USAGE_LABELS,
   sortPositions,
@@ -24,9 +20,9 @@ import { conditionUrl } from "@/lib/r2-images";
 import { RangeFields } from "./RangeFields";
 import { ToggleGroup } from "./ToggleGroup";
 
-// Kept as a plain union here (not imported from FilterDialogs) so the dialog
-// chunk stays out of the page's first load.
-export type FilterDialogKind = "stats" | "body" | "style" | "skills" | "nation" | "league" | "team";
+// The dialog rows of the rail (a plain union from @eflab/shared, not imported
+// from FilterDialogs, so the dialog chunk stays out of the page's first load).
+export type FilterDialogKind = FilterDialogRow;
 
 // Position order of efootbase's filter grid (attack → defence, 3 per row).
 const POSITION_GRID: readonly Position[] = ["LWF", "CF", "RWF", "LMF", "SS", "RMF", "AMF", "CMF", "DMF", "LB", "CB", "RB", "GK"];
@@ -57,33 +53,19 @@ export function FiltersPanel({
   /** Bumped by a navigation: the range fields re-sync their drafts (RangeFields `resetKey`). */
   resetKey?: number;
 }) {
-  // Names for the launcher summaries (cached lists; the dialogs share them).
-  const countries = trpc.player.countries.useQuery(undefined, { staleTime: 60 * 60_000, enabled: state.nat.length > 0 });
-  const leagues = trpc.player.leagues.useQuery(undefined, { staleTime: 60 * 60_000, enabled: state.league.length > 0 });
-  const teams = trpc.player.teams.useQuery(undefined, { staleTime: 60 * 60_000, enabled: state.team.length > 0 });
-  const skills = trpc.skill.list.useQuery({}, { staleTime: 60 * 60_000, enabled: state.skills.length > 0 });
-  // "Argentina · Brazil" for the multi-valued pickers (ids until the list loads).
-  const namesOf = (ids: readonly number[], rows: ReadonlyArray<{ id: number; name: string }> | undefined) =>
-    ids.map((id) => rows?.find((r) => r.id === id)?.name ?? `#${id}`).join(" · ");
-
-  const statCount = Object.keys(state.stats).length;
-  const bodyCount = Object.keys(state.body).length;
-  const styleSummary = [
-    state.style !== undefined ? PLAYING_STYLES[state.style] : null,
-    ...state.ai.map((k) => AI_PLAYING_STYLES.find((s) => s.key === k)?.label),
-  ].filter(Boolean);
-  const skillNames = state.skills.map((id) => {
-    const s = skills.data?.find((x) => x.id === id);
-    return s ? skillLabel(s) : `#${id}`;
-  });
-  const launchers: ReadonlyArray<{ kind: FilterDialogKind; label: string; icon: LucideIcon; summary: string }> = [
-    { kind: "stats", label: "Stats", icon: BarChart3, summary: statCount ? `${statCount} range${statCount > 1 ? "s" : ""}${state.statsAtMax ? " · max" : ""}` : "" },
-    { kind: "body", label: "Body Model", icon: PersonStanding, summary: bodyCount ? `${bodyCount} range${bodyCount > 1 ? "s" : ""}` : "" },
-    { kind: "style", label: "Playing Style", icon: Target, summary: styleSummary.join(" · ") },
-    { kind: "skills", label: "Skills", icon: Zap, summary: skillNames.join(" · ") },
-    { kind: "nation", label: "Nation", icon: Globe, summary: namesOf(state.nat, countries.data) },
-    { kind: "league", label: "League", icon: Trophy, summary: namesOf(state.league, leagues.data) },
-    { kind: "team", label: "Team", icon: ShieldHalf, summary: namesOf(state.team, teams.data) },
+  // Each dialog row shows how many values it holds as a badge (survey
+  // 2026-10-23 S2 §6: "Nation 2", "Playing Style 5", "Stats 2" = a stat range
+  // plus the max switch); the values themselves are the chips under the
+  // search field.
+  const counts = filterDialogCounts(state);
+  const launchers: ReadonlyArray<{ kind: FilterDialogKind; label: string; icon: LucideIcon }> = [
+    { kind: "stats", label: "Stats", icon: BarChart3 },
+    { kind: "body", label: "Body Model", icon: PersonStanding },
+    { kind: "style", label: "Playing Style", icon: Target },
+    { kind: "skills", label: "Skills", icon: Zap },
+    { kind: "nation", label: "Nation", icon: Globe },
+    { kind: "league", label: "League", icon: Trophy },
+    { kind: "team", label: "Team", icon: ShieldHalf },
   ];
 
   const b = FILTER_RANGE_BOUNDS;
@@ -91,18 +73,26 @@ export function FiltersPanel({
   return (
     <div className="filter-panel">
       <ul className="filter-rows">
-        {launchers.map((l) => (
-          <li key={l.kind}>
-            <button type="button" onClick={() => openDialog(l.kind)} aria-haspopup="dialog" className="filter-row hit-44">
-              <span className="filter-row__icon" aria-hidden>
-                <l.icon className="size-4" />
-              </span>
-              <span className="filter-row__label">{l.label}</span>
-              {l.summary && <span className="filter-row__summary">{l.summary}</span>}
-              <ChevronRight className="filter-row__chevron size-4" aria-hidden />
-            </button>
-          </li>
-        ))}
+        {launchers.map((l) => {
+          const n = counts[l.kind];
+          return (
+            <li key={l.kind}>
+              <button type="button" onClick={() => openDialog(l.kind)} aria-haspopup="dialog" data-active={n > 0 || undefined} className="filter-row hit-44">
+                <span className="filter-row__icon" aria-hidden>
+                  <l.icon className="size-4" />
+                </span>
+                <span className="filter-row__label">{l.label}</span>
+                {n > 0 && (
+                  <span className="filter-row__badge" data-testid={`filter-badge-${l.kind}`}>
+                    <span aria-hidden>{n}</span>
+                    <span className="sr-only">, {n} selected</span>
+                  </span>
+                )}
+                <ChevronRight className="filter-row__chevron size-4" aria-hidden />
+              </button>
+            </li>
+          );
+        })}
       </ul>
 
       {/* 13 independent toggles (aria-pressed): a card matches when it plays
@@ -116,10 +106,14 @@ export function FiltersPanel({
         onChange={(pos) => update({ pos: sortPositions(pos) })}
       />
 
+      {/* efootbase's toggle order and display labels (CARD_TYPE_FILTER_ORDER,
+          CARD_TYPE_LABELS: Standard, Selection, Icons, Trending, Highlight,
+          Epic - Big Time, then Strike Arena); the state and the URL keep the
+          code order (CARD_TYPES). */}
       <ToggleGroup<CardType>
         label="Card Type"
         columns={2}
-        options={CARD_TYPES.map((t) => ({ value: t, label: CARD_TYPE_LABELS[t] }))}
+        options={CARD_TYPE_FILTER_ORDER.map((t) => ({ value: t, label: CARD_TYPE_LABELS[t] }))}
         selected={state.types ?? []}
         onChange={(types) => update({ types: types.length === 0 || types.length === CARD_TYPES.length ? null : CARD_TYPES.filter((t) => types.includes(t)) })}
       />

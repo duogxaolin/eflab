@@ -23,7 +23,7 @@ export interface PickerLoad {
 /**
  * Searchable list of toggles for the Nation / League / Team / Skills dialogs:
  * a 36 px search field (substring on the label, accent-, case- and
- * separator-insensitive — `labelSearchKey`, shared with /skills) over
+ * separator-insensitive — `labelSearchKey`, shared with /wiki/skills) over
  * grouped pressed/unpressed option rows (`.filter-option`: 44 px, radius 12,
  * one / two / three columns at < 640 / 640 / 768 px; a pressed row is the
  * accent with a check mark). In multi-select mode (the default) the current
@@ -39,11 +39,8 @@ export interface PickerLoad {
  * `load` is the query state of the list: the picker renders the loading /
  * retry row itself and shows `emptyText` only once the list is loaded.
  *
- * `featured` puts a group of chosen values first (the Nation dialog's ten
- * nations with the most cards under "Popular") and heads the full list with
- * `restLabel` ("All nations", A–Z, still containing the featured values). A
- * search ignores both groups: it lists each matching item once, in `items`
- * order. A featured value shows in both groups with the same pressed state.
+ * Items are listed in the order given, under their `group` heading (the Team
+ * dialog's league headings); a search keeps that order and those headings.
  */
 export function PickerList<V extends string | number>({
   items,
@@ -55,7 +52,6 @@ export function PickerList<V extends string | number>({
   load,
   emptyText = "Nothing matches.",
   labelOf,
-  featured,
 }: {
   items: ReadonlyArray<PickerItem<V>>;
   selected: readonly V[];
@@ -67,18 +63,16 @@ export function PickerList<V extends string | number>({
   load?: PickerLoad;
   emptyText?: string;
   /** Chip label for a selected value that is not among `items` (e.g. a team
-   *  hidden by the league narrowing); defaults to the item label or the value. */
+   *  name from a link that no stored team has); defaults to the item label or
+   *  the value. */
   labelOf?: (value: V) => string;
-  /** Values listed first under `label` while no search is typed; the full
-   *  list then follows under `restLabel`. */
-  featured?: { label: string; values: readonly V[]; restLabel: string };
 }) {
   const id = useId();
   const searchId = `${id}-search`;
   const [q, setQ] = useState("");
   // Accent-, case- and separator-insensitive ("cote" → Côte d'Ivoire, "saint
   // etienne" → AS Saint-Étienne, "one touch" → One-touch Pass): the same key
-  // as the /skills search.
+  // as the /wiki/skills search.
   const needle = labelSearchKey(q);
   const visible = needle ? items.filter((i) => labelSearchKey(i.label).includes(needle)) : items;
   const full = !single && max !== undefined && selected.length >= max;
@@ -119,22 +113,12 @@ export function PickerList<V extends string | number>({
   const failed = !loading && load?.isError === true;
   const loaded = !loading && !failed;
 
-  // Group preserving first-seen order; with `featured` and no search: the
-  // featured group, then every item under `restLabel`.
+  // Group preserving first-seen order.
   const groups: Array<{ name: string | undefined; items: PickerItem<V>[] }> = [];
-  const featuredItems =
-    featured && !needle
-      ? featured.values.map((v) => items.find((i) => i.value === v)).filter((i): i is PickerItem<V> => i !== undefined)
-      : [];
-  if (featured && !needle) {
-    if (featuredItems.length > 0) groups.push({ name: featured.label, items: featuredItems });
-    if (visible.length > 0) groups.push({ name: featured.restLabel, items: [...visible] });
-  } else {
-    for (const item of visible) {
-      const last = groups[groups.length - 1];
-      if (last && last.name === item.group) last.items.push(item);
-      else groups.push({ name: item.group, items: [item] });
-    }
+  for (const item of visible) {
+    const last = groups[groups.length - 1];
+    if (last && last.name === item.group) last.items.push(item);
+    else groups.push({ name: item.group, items: [item] });
   }
 
   return (

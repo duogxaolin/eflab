@@ -91,6 +91,9 @@ const ADMIN_HEADERS = [
 ];
 
 const config: NextConfig = {
+  // Build output folder. NEXT_DIST_DIR lets a check build (`.next-check`,
+  // git-ignored) run next to the served `.next` without touching it.
+  distDir: process.env.NEXT_DIST_DIR || ".next",
   reactStrictMode: false,
   typedRoutes: true,
   // @eflab/api is imported type-only (AppRouter) and resolved through the
@@ -104,6 +107,17 @@ const config: NextConfig = {
     NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000",
     ...(GIT_SHA ? { NEXT_PUBLIC_GIT_SHA: GIT_SHA } : {}),
     ...(BUILD_UTC ? { NEXT_PUBLIC_BUILD_UTC: BUILD_UTC } : {}),
+  },
+  // The skills wiki moved from /skills to /wiki/skills (change
+  // efootbase-function-parity, design D12): a permanent redirect (308) for the
+  // index; the query is kept (Next appends it). The old skill URLs
+  // (/skills/<slug>) are NOT a rule here: app/skills/[slug]/page.tsx resolves
+  // the slug through the API and answers one 308 straight to the public slug
+  // (a stored slug such as phenomenal-passing → /wiki/skills/phenomenal-pass,
+  // which a `/skills/:slug` → `/wiki/skills/:slug` rule could only reach in
+  // two hops).
+  async redirects() {
+    return [{ source: "/skills", destination: "/wiki/skills", permanent: true }];
   },
   async headers() {
     return [

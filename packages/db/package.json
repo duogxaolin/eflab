@@ -11,7 +11,8 @@
     "./client": "./src/client.ts",
     "./admin-auth": "./src/admin-auth.ts",
     "./efootbase-map": "./src/efootbase-map.ts",
-    "./upsert": "./src/upsert.ts"
+    "./upsert": "./src/upsert.ts",
+    "./boosters": "./src/boosters.ts"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json --noEmit",
@@ -28,7 +29,7 @@
     "admin:create": "tsx --env-file-if-exists=../../.env src/admin-cli.ts create",
     "admin:set-password": "tsx --env-file-if-exists=../../.env src/admin-cli.ts set-password",
     "admin:disable": "tsx --env-file-if-exists=../../.env src/admin-cli.ts disable",
-    "test": "tsx src/admin-auth.test.ts && tsx src/efootbase-map.test.ts"
+    "test": "tsx src/admin-auth.test.ts && tsx src/efootbase-map.test.ts && tsx src/boosters.test.ts"
   },
   "dependencies": {
     "@eflab/config": "workspace:*",

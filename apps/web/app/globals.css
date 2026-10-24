@@ -253,8 +253,7 @@
   }
 
   /* Reduced motion: no smooth scrolling (the card tile's hover scale drops
-     its transition in `.pcb-tile*`; the JS side, usePrefersReducedMotion,
-     makes the pack-row arrows scroll instantly). */
+     its transition in `.pcb-tile*`). */
   @media (prefers-reduced-motion: reduce) {
     .scroll-smooth,
     html {
@@ -665,71 +664,6 @@
     transform: translateY(-0.625cqw);
   }
 
-  /* ── Pack rows (PackCarousel): no auto-advance; 28 px previous / next
-     arrows over the row's edges, shown while the row is hovered or holds
-     focus and always on devices without hover. Hidden arrows keep their
-     place in the Tab order (opacity, never visibility / display), so a
-     keyboard user reaches them and :focus-within reveals them. At an end
-     the arrow is aria-disabled (dimmed glyph), not `disabled`, so the
-     focused arrow keeps focus. ─────────────────────────────────────────── */
-  .pack-row {
-    position: relative;
-  }
-  /* Two classes: must beat `.hit-44 { position: relative }` (the 44 px
-     coarse-pointer hit area), which comes later in this layer. */
-  .pack-row .pack-row__arrow {
-    position: absolute;
-  }
-  .pack-row__arrow {
-    top: 50%;
-    z-index: 20; /* above a hovered card tile (z 10) */
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 1.75rem;
-    height: 1.75rem;
-    margin-top: -0.875rem;
-    border-radius: 9999px;
-    border: 0;
-    background-color: color-mix(in srgb, var(--color-panel) 92%, transparent);
-    box-shadow: inset 0 0 0 1px var(--color-overlay-hairline), 0 4px 12px #00000080;
-    color: var(--color-text-primary);
-    cursor: pointer;
-    opacity: 0;
-    pointer-events: none;
-    transition: opacity 0.15s, background-color 0.15s;
-  }
-  .pack-row__arrow--prev { left: 0.25rem; }
-  .pack-row__arrow--next { right: 0.25rem; }
-  .pack-row:hover .pack-row__arrow,
-  .pack-row:focus-within .pack-row__arrow {
-    opacity: 1;
-    pointer-events: auto;
-  }
-  @media (hover: none) {
-    .pack-row__arrow {
-      opacity: 1;
-      pointer-events: auto;
-    }
-  }
-  .pack-row__arrow:hover {
-    background-color: var(--color-default);
-  }
-  .pack-row__arrow:focus-visible {
-    outline: 2px solid var(--color-focus);
-    outline-offset: 2px;
-  }
-  .pack-row__arrow[aria-disabled="true"] {
-    color: color-mix(in srgb, var(--color-text-primary) 30%, transparent);
-    cursor: default;
-  }
-  .pack-row__arrow[aria-disabled="true"]:hover {
-    background-color: color-mix(in srgb, var(--color-panel) 92%, transparent);
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .pack-row__arrow { transition: none; }
-  }
-
   /* ── Navigation & shell ────────────────────────────────────────────────── */
   /* Header: sticky, 64 px bar + 1 px bottom edge = 65 px. The bar's own
      fill was not measured on the reference. At the top of the page only the
@@ -1024,11 +958,21 @@
     cursor: pointer;
   }
   .efb-palette__link:hover { color: var(--color-text-primary); }
+  /* "Loading more…" at the end of a result list (palette, compare picker,
+     home list): the row whose arrival in view loads the next page of 12. */
+  .efb-palette__more {
+    margin: 0;
+    padding: 0.75rem 1rem;
+    text-align: center;
+    color: var(--color-text-secondary);
+    font-size: 0.75rem;
+    line-height: 1rem;
+  }
 
   /* Player result row (PlayerSearchRow.tsx): 72 px, radius 12, 40 × 56
      card-face thumbnail, name 14/500, 12 px muted meta line with 12 px style
-     icons and a soft lime card-type chip, a 40 × 24 tier-filled overall badge
-     (radius 6, 14/700 black) at the right. */
+     icons and a soft lime pack / campaign chip, a 40 × 24 tier-filled overall
+     badge (radius 6, 14/700 black) at the right. */
   .efb-result-row {
     display: flex;
     width: 100%;
@@ -1052,35 +996,13 @@
     outline: 2px solid var(--color-focus);
     outline-offset: -2px;
   }
-  /* Home combobox: the active option (aria-activedescendant) — DOM focus
-     stays in the input, so the row shows the focus look itself. */
+  /* Palette / picker / home combobox: the active option
+     (aria-activedescendant) — DOM focus stays in the input, so the row shows
+     the focus look itself. */
   .efb-result-row[aria-selected="true"] {
     background-color: var(--color-default);
     outline: 2px solid var(--color-accent);
     outline-offset: -2px;
-  }
-  /* Compare picker: the card already in the other slot ("In slot N"). */
-  .efb-result-row[aria-disabled="true"] {
-    cursor: not-allowed;
-  }
-  .efb-result-row[aria-disabled="true"]:hover {
-    background-color: transparent;
-  }
-  .efb-result-row[aria-disabled="true"] .efb-result-row__thumb,
-  .efb-result-row[aria-disabled="true"] .efb-result-row__body,
-  .efb-result-row[aria-disabled="true"] .efb-result-row__ovr {
-    opacity: 0.45;
-  }
-  .efb-result-row__note {
-    flex-shrink: 0;
-    padding: 0 0.5rem;
-    border-radius: 0.5rem;
-    background-color: var(--color-default);
-    color: var(--color-text-primary);
-    font-size: 0.75rem;
-    line-height: 1.5rem;
-    font-weight: 500;
-    white-space: nowrap;
   }
   .efb-result-row__thumb {
     width: 2.5rem;
@@ -1114,7 +1036,7 @@
     font-size: 0.75rem;
     line-height: 1.25rem;
     white-space: nowrap;
-    /* Never paints under the "In slot N" note or the badge on a narrow row. */
+    /* Never paints under the badge on a narrow row. */
     overflow: hidden;
   }
   .efb-result-row__sep { color: var(--color-text-dim); }
@@ -1131,9 +1053,9 @@
   }
   .efb-result-row__icon--attack { color: var(--color-style-attack); }
   .efb-result-row__icon--defence { color: var(--color-style-defence); }
-  .efb-result-row__type {
-    /* Shrinks (ellipsis) only when the line is too long — e.g. a 320 px
-       picker row that also carries the "In slot N" note. */
+  .efb-result-row__pack {
+    /* Shrinks (ellipsis), as the style names do, only when the line is too
+       long — a long campaign name on a 320 px row. */
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -1167,6 +1089,43 @@
     border-radius: var(--radius-tile);
     background-color: var(--color-panel);
     box-shadow: inset 0 0 1px 0 var(--color-overlay-hairline), 0 25px 50px -12px #00000099;
+  }
+  /* "Players" + "Show all" above the rows (12/16, muted / accent). */
+  .efb-home-results__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.375rem 0.75rem;
+    color: var(--color-text-secondary);
+    font-size: 0.75rem;
+    line-height: 1rem;
+    font-weight: 500;
+  }
+  .efb-home-results__all {
+    color: var(--color-accent);
+    font-weight: 600;
+    text-decoration: none;
+  }
+  .efb-home-results__all:hover { text-decoration: underline; }
+  .efb-home-results__all:focus-visible {
+    outline: 2px solid var(--color-focus);
+    outline-offset: 2px;
+    border-radius: 0.25rem;
+  }
+  /* The rows and the "Loading more…" row scroll inside 20 rem. */
+  .efb-home-results__scroll {
+    max-height: 20rem;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+  .efb-home-results__note {
+    margin: 0;
+    padding: 0.75rem 1rem;
+    text-align: center;
+    color: var(--color-text-secondary);
+    font-size: 0.75rem;
+    line-height: 1rem;
   }
 
   /* ── Stat chips (/packs header, pack page): 30 px, radius 8, padding 4/10,
@@ -1220,11 +1179,13 @@
      (reference: 19.2 / 25.6 / 28 at 768 / 1024 / 1280). Slots 160 × 226
      (full column width below 768), #232323 → #272727 on hover, radius 16,
      padding 12; empty state = 48 px #181818 circle with a plus, "Add Player"
-     14/600 and "Search and select a player" 12/16 muted, 8 px apart. ── */
+     14/600 and "Search and select a player" 12/16 muted, 8 px apart. A filled
+     slot (change efootbase-function-parity) is taller than the empty one —
+     face, name, build, tiles — so the columns start at the top. ── */
   .efb-compare-console {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    align-items: center;
+    align-items: start;
     gap: 0.75rem;
   }
   .efb-compare-console__slot {
@@ -1285,10 +1246,180 @@
     color: var(--color-text-primary);
   }
 
-  /* ── /skills tiles: #181818, radius 16, padding 14/16, inset 1 px ring
-     (#ffffff0a → #ffffff29 on hover), 6 px gap; name 15/19.5 bold (Showtime
-     gold, others white), description 13/18.85 muted on two lines, footer
-     chips 13/600 on #ffffff17 (radius 6–7) with the cards count at the right. */
+  /* ── A filled slot's build (change efootbase-function-parity, "Two-Build
+     Compare"): a #181818 radius-16 block with the inset ring, 12 px padding,
+     10 px gaps — points, Max OVR / Reset, Select Manager (at least 40 px
+     tall with tighter padding; a slot is ~138 px wide at 320, so its text
+     wraps and the trigger grows instead of cutting the label — ManagerTrigger
+     `wrap`), the proficiency line, read-only booster pills (#272727, radius
+     12, cyan 12/600 text) and the category values (one column below 768, two
+     from 768). ── */
+  .efb-compare-build {
+    display: flex;
+    width: 100%;
+    min-width: 0;
+    flex-direction: column;
+    gap: 0.625rem;
+    padding: 0.75rem;
+    border-radius: var(--radius-tile);
+    background-color: var(--color-panel);
+    box-shadow: inset 0 0 0 1px var(--color-line-separator);
+  }
+  .efb-compare-build .efb-manager-trigger {
+    height: auto;
+    min-height: 2.5rem;
+    gap: 0.375rem;
+    padding: 0.375rem 0.5rem;
+    font-size: 0.8125rem;
+    line-height: 1.125rem;
+  }
+  @media (max-width: 47.999rem) {
+    /* Two slots side by side (138–360 px each): a tighter block. */
+    .efb-compare-build { padding: 0.5rem; }
+  }
+  @media (min-width: 48rem) {
+    .efb-compare-build .efb-manager-trigger { gap: 0.5rem; padding: 0.375rem 0.75rem; }
+  }
+  .efb-compare-booster {
+    display: flex;
+    min-width: 0;
+    align-items: flex-start;
+    gap: 0.375rem;
+    padding: 0.375rem 0.625rem;
+    border-radius: 0.75rem;
+    background-color: var(--color-default);
+    color: var(--color-skill-boost);
+    font-size: 0.75rem;
+    line-height: 1rem;
+    font-weight: 600;
+  }
+  .efb-compare-cats {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.125rem 0.75rem;
+    font-size: 0.75rem;
+    line-height: 1rem;
+  }
+  @media (min-width: 48rem) {
+    .efb-compare-cats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
+  .efb-compare-cats__row {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    padding: 0.125rem 0;
+    color: var(--color-text-primary);
+  }
+  .efb-compare-cats__row[data-zero="true"] { color: var(--color-text-secondary); }
+
+  /* ── Compare tables (Stats, Overview, Body Model): three columns — the left
+     value, the label (centred, 14/500, wraps), the right value — on 36 px
+     #272727 rows with 4 px between them (the stat rows' look). Value pills
+     36 px wide, radius 6, 14/700 black on the tier fill; the difference
+     12/600 next to each pill on the outer side — positive (higher) in the
+     success green, negative (lower) in the readable danger tone (both
+     ≥ 5:1 on #272727; the pills themselves show which is higher, so colour is
+     never the only cue, and screen readers hear "higher" / "lower"). ── */
+  .efb-compare-table {
+    width: 100%;
+    table-layout: fixed;
+    border-collapse: separate;
+    border-spacing: 0 0.25rem;
+  }
+  .efb-compare-table__side { width: 5rem; }
+  @media (min-width: 40rem) {
+    .efb-compare-table__side { width: 7rem; }
+  }
+  @media (min-width: 64rem) {
+    .efb-compare-table__side { width: 11rem; }
+  }
+  .efb-compare-head th {
+    padding: 0 0.25rem 0.25rem;
+    text-align: center;
+    font-size: 0.75rem;
+    line-height: 1rem;
+    font-weight: 600;
+  }
+  .efb-compare-head__name {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .efb-compare-section th {
+    padding: 0.75rem 0.25rem 0.125rem;
+    text-align: left;
+    font-size: 0.75rem;
+    line-height: 1rem;
+    font-weight: 500;
+    color: var(--color-text-secondary);
+  }
+  .efb-compare-table tr:not(.efb-compare-head, .efb-compare-section) > :is(td, th) {
+    padding: 0.375rem;
+    background-color: var(--color-default);
+  }
+  .efb-compare-table tr:not(.efb-compare-head, .efb-compare-section) > :first-child { border-radius: 0.5rem 0 0 0.5rem; }
+  .efb-compare-table tr:not(.efb-compare-head, .efb-compare-section) > :last-child { border-radius: 0 0.5rem 0.5rem 0; }
+  .efb-compare-label {
+    min-width: 0;
+    overflow-wrap: break-word;
+    hyphens: auto;
+    text-align: center;
+    font-size: 0.875rem;
+    line-height: 1.25rem;
+    font-weight: 500;
+    color: var(--color-text-primary);
+  }
+  .efb-compare-cell__inner {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    gap: 0.375rem;
+  }
+  /* DOM order pill → difference (read as "90, 9 higher"); the left side draws
+     them reversed so the pill sits next to the label on both sides. */
+  .efb-compare-cell--left .efb-compare-cell__inner { flex-direction: row-reverse; }
+  .efb-compare-pill {
+    width: 2.25rem;
+    flex-shrink: 0;
+    border-radius: 0.375rem;
+    padding: 0.125rem 0;
+    text-align: center;
+    font-size: 0.875rem;
+    line-height: 1.25rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    color: #000;
+  }
+  .efb-compare-delta {
+    min-width: 1.25rem;
+    text-align: center;
+    font-size: 0.75rem;
+    line-height: 1rem;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+  .efb-compare-delta[data-sign="positive"] { color: var(--color-success); }
+  .efb-compare-delta[data-sign="negative"] { color: var(--color-danger-soft-foreground); }
+  .efb-compare-value {
+    min-width: 0;
+    overflow-wrap: anywhere;
+    font-size: 0.875rem;
+    line-height: 1.25rem;
+    font-weight: 600;
+    color: var(--color-text-primary);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ── /wiki/skills tiles: #181818, radius 16, padding 14/16, inset 1 px ring
+     (#ffffff0a → #ffffff29 on hover), 6 px gap; a head row with the name
+     15/19.5 bold (Showtime gold, others white) and, for a skill with stored
+     boosts, the "Stat boost" chip at the right; the description 13/18.85
+     muted on two lines; a footer with the leader chip (16 × 22 card face +
+     the player's name) and the cards count at the right, chips 13/600 on
+     #ffffff17 (radius 6). The footer wraps rather than cut a name. */
   .skill-tile {
     display: flex;
     min-width: 0;
@@ -1314,6 +1445,14 @@
     overflow-wrap: anywhere;
   }
   .skill-tile[data-group="showtime"] .skill-tile__name { color: var(--color-showtime); }
+  .skill-tile__head {
+    display: flex;
+    min-width: 0;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.5rem;
+  }
+  .skill-tile__head > .skill-tile__chip { flex-shrink: 0; margin-top: -0.125rem; }
   .skill-tile__desc {
     display: -webkit-box;
     -webkit-box-orient: vertical;
@@ -1327,11 +1466,36 @@
   }
   .skill-tile__footer {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 0.5rem;
+    gap: 0.375rem 0.5rem;
     margin-top: auto;
     padding-top: 0.375rem;
   }
+  .skill-tile__leader {
+    display: inline-flex;
+    min-width: 0;
+    max-width: 100%;
+    align-items: center;
+    gap: 0.375rem;
+    min-height: 1.5rem;
+    padding: 0.0625rem 0.5rem 0.0625rem 0.1875rem;
+    border-radius: 0.375rem;
+    background-color: #ffffff17;
+    color: var(--color-text-primary);
+    font-size: 0.8125rem;
+    line-height: 1.125rem;
+    font-weight: 600;
+  }
+  .skill-tile__leader-face {
+    width: 1rem;
+    height: 1.375rem;
+    flex-shrink: 0;
+    object-fit: cover;
+    border-radius: 0.1875rem;
+    background-color: var(--color-elevated);
+  }
+  .skill-tile__leader-name { min-width: 0; overflow-wrap: anywhere; }
   .skill-tile__chip {
     display: inline-flex;
     align-items: center;
@@ -1350,6 +1514,223 @@
   .skill-tile__chip--count {
     margin-left: auto;
     font-weight: 700;
+  }
+
+  /* ── /wiki/skills frame: from 1024 px a 176 px sticky wiki rail (top 80)
+     beside the content, 24 px apart. The rail: 12/16 600 muted labels ("Wiki",
+     "Skills"), 40 px rows (radius 12, padding 0 8 0 6, gap 10, 14/600) with a
+     28 px icon tile; the current page's row on #ffffff0f with the accent
+     tile; the in-page links' tiles in the section tones (gold Showtime,
+     amber Classic). */
+  .wiki-layout {
+    display: block;
+  }
+  @media (min-width: 64rem) {
+    .wiki-layout {
+      display: grid;
+      grid-template-columns: 11rem minmax(0, 1fr);
+      gap: 1.5rem;
+      align-items: start;
+    }
+  }
+  .wiki-rail {
+    position: sticky;
+    top: 5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+  .wiki-rail__label {
+    margin: 0.5rem 0 0.25rem;
+    padding: 0 0.5rem;
+    font-size: 0.75rem;
+    line-height: 1rem;
+    font-weight: 600;
+    color: var(--color-text-secondary);
+  }
+  .wiki-rail__label:first-child { margin-top: 0; }
+  .wiki-rail__list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .wiki-rail__link {
+    display: flex;
+    min-height: 2.5rem;
+    align-items: center;
+    gap: 0.625rem;
+    padding: 0.25rem 0.5rem 0.25rem 0.375rem;
+    border-radius: var(--radius-field);
+    color: var(--color-control-foreground);
+    font-size: 0.875rem;
+    line-height: 1.25rem;
+    font-weight: 600;
+    text-decoration: none;
+    transition: background-color 0.15s, color 0.15s;
+  }
+  .wiki-rail__link:hover,
+  .wiki-rail__link[aria-current="page"] {
+    background-color: var(--color-option);
+    color: var(--color-text-primary);
+  }
+  .wiki-rail__link:focus-visible {
+    outline: 2px solid var(--color-focus);
+    outline-offset: -2px;
+  }
+  .wiki-rail__icon {
+    display: inline-flex;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+    width: 1.75rem;
+    height: 1.75rem;
+    border-radius: 0.5rem;
+    background-color: var(--color-row-icon);
+    color: var(--color-text-primary);
+  }
+  .wiki-rail__icon--current { background-color: var(--color-accent-soft); color: var(--color-accent); }
+  .wiki-rail__icon--showtime { background-color: color-mix(in srgb, var(--color-showtime) 14%, transparent); color: var(--color-showtime); }
+  .wiki-rail__icon--classic { background-color: color-mix(in srgb, var(--color-tone-amber) 14%, transparent); color: var(--color-tone-amber); }
+
+  /* ── /wiki/skills/<slug> header card: the text column (group chip, H1,
+     description, the 288 px artwork) and, beside it from 1024 px (below it
+     before), the numbers — "Cards with this skill" 40/44 800 in the Showtime
+     gold for a Showtime skill, the rarity rank and the share — next to the
+     leader's 180 px card face (128 px below 640 px). `.efb-card.skill-hero`:
+     the padding beats the content card's 16 px (defined further down). */
+  .efb-card.skill-hero {
+    display: grid;
+    gap: 1.25rem;
+    padding: 1.25rem;
+  }
+  @media (min-width: 64rem) {
+    .efb-card.skill-hero {
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 2rem;
+      padding: 1.5rem 2rem;
+    }
+  }
+  .skill-hero__aside {
+    display: flex;
+    min-width: 0;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 1rem 1.5rem;
+  }
+  @media (min-width: 64rem) {
+    .skill-hero__aside { flex-wrap: nowrap; align-items: center; justify-content: flex-end; }
+  }
+  .skill-hero__stats {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 0.25rem;
+    margin: 0;
+  }
+  @media (min-width: 64rem) {
+    .skill-hero__stats { text-align: right; }
+  }
+  .skill-hero__stats dd { margin: 0; }
+  .skill-hero__count {
+    font-size: 2.5rem;
+    line-height: 2.75rem;
+    font-weight: 800;
+    font-variant-numeric: tabular-nums;
+    color: var(--color-text-primary);
+  }
+  .skill-hero[data-group="showtime"] .skill-hero__count { color: var(--color-showtime); }
+  .skill-hero__leader {
+    width: 8rem;
+    flex-shrink: 0;
+    margin: 0;
+  }
+  @media (min-width: 40rem) {
+    .skill-hero__leader { width: 11.25rem; }
+  }
+
+  /* "Top cards" rows: one link each — 48 × 68 card face, the name 15/600
+     (wraps, never cut), the two playing styles 12/16 muted with the
+     attack / defence icons, and the max overall 16/700 in a 40 × 32 #272727
+     box at the right; #181818, radius 16, inset ring (→ #ffffff29 on hover),
+     padding 8 12. Two columns from 768 px. */
+  .skill-top-row {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    gap: 0.75rem;
+    min-height: 5.25rem;
+    padding: 0.5rem 0.75rem;
+    border-radius: var(--radius-tile);
+    background-color: var(--color-panel);
+    box-shadow: inset 0 0 0 1px var(--color-line-separator);
+    color: var(--color-text-primary);
+    text-decoration: none;
+    transition: box-shadow 0.15s;
+  }
+  .skill-top-row:hover { box-shadow: inset 0 0 0 1px #ffffff29; }
+  .skill-top-row:focus-visible {
+    outline: 2px solid var(--color-focus);
+    outline-offset: 2px;
+  }
+  .skill-top-row__face {
+    width: 3rem;
+    height: 4.25rem;
+    flex-shrink: 0;
+    object-fit: cover;
+    border-radius: 0.375rem;
+    background-color: var(--color-elevated);
+  }
+  .skill-top-row__body {
+    display: flex;
+    min-width: 0;
+    flex: 1 1 0%;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+  .skill-top-row__name {
+    font-size: 0.9375rem;
+    line-height: 1.25rem;
+    font-weight: 600;
+    overflow-wrap: anywhere;
+  }
+  .skill-top-row__styles {
+    display: flex;
+    min-width: 0;
+    flex-wrap: wrap;
+    gap: 0.125rem 0.625rem;
+    color: var(--color-text-secondary);
+    font-size: 0.75rem;
+    line-height: 1rem;
+  }
+  .skill-top-row__style {
+    display: inline-flex;
+    min-width: 0;
+    align-items: center;
+    gap: 0.25rem;
+  }
+  .skill-top-row__icon {
+    width: 0.75rem;
+    height: 0.75rem;
+    flex-shrink: 0;
+  }
+  .skill-top-row__icon--attack { color: var(--color-style-attack); }
+  .skill-top-row__icon--defence { color: var(--color-style-defence); }
+  .skill-top-row__ovr {
+    flex-shrink: 0;
+    min-width: 2.5rem;
+    padding: 0 0.375rem;
+    border-radius: 0.5rem;
+    background-color: var(--color-default);
+    text-align: center;
+    font-size: 1rem;
+    line-height: 2rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
   }
 
   /* ── Typography roles (Inter only, normal tracking) ────────────────────── */
@@ -1951,9 +2332,12 @@
   .efb-progression--embedded { gap: 0.75rem; }
   .efb-progression__header {
     display: flex;
+    flex-wrap: wrap;
     align-items: flex-start;
-    gap: 0.5rem;
+    gap: 0.25rem 0.5rem;
   }
+  /* The Max Level notice: a full-width line at the end of the header. */
+  .efb-progression__header-notice { flex-basis: 100%; }
   .efb-progression__title {
     font-size: 0.875rem;
     line-height: 1.25rem;
@@ -2010,6 +2394,13 @@
     font-size: 0.875rem;
     line-height: 1.25rem;
     font-weight: 400;
+  }
+  /* Highlight card with a level cap of 1: the note under "Max Level N". */
+  .efb-progression__level-note {
+    margin-top: 0.25rem;
+    color: var(--color-text-secondary);
+    font-size: 0.75rem;
+    line-height: 1rem;
   }
   .efb-progression__proficiency-value {
     color: var(--color-proficiency);
@@ -2345,42 +2736,69 @@
     padding: 0 0.3125rem;
     border-radius: var(--radius-tile);
   }
+  /* The strip lists the categories holding points; each item is a button
+     that opens its Adjust popover (change efootbase-function-parity). With
+     no point spent it holds one button that opens the sheet. */
   .efb-dock-strip {
     bottom: calc(8.5rem + env(safe-area-inset-bottom, 0px));
     display: flex;
     align-items: center;
     justify-content: center;
     gap: 0.75rem;
-    height: 2.375rem;
-    padding: 0 0.75rem;
-    border-radius: 9999px;
+    min-height: 2.375rem;
+    padding: 0.25rem 0.5rem;
+    border-radius: 1.1875rem;
     color: var(--color-text-primary);
-    cursor: pointer;
   }
-  /* The items row clips (not the button, whose ::after is the touch area). */
+  /* One 38 px row; a build that spends in so many categories that they do
+     not fit wraps to a second row (the pill grows upwards from its bottom
+     edge) — no scroll box, which would clip the items' 44 px coarse-pointer
+     hit areas (`.hit-44`; neighbours share their overlapping edge). */
   .efb-dock-strip__items {
     display: flex;
+    flex-wrap: wrap;
     min-width: 0;
     max-width: 100%;
     align-items: center;
     justify-content: center;
-    gap: 0.75rem;
-    overflow: hidden;
+    gap: 0 0.25rem;
   }
-  .efb-dock-strip:focus-visible,
+  .efb-dock-strip__item:focus-visible,
+  .efb-dock-strip__empty:focus-visible,
   .efb-dock button:focus-visible {
     outline: 2px solid var(--color-focus);
     outline-offset: 2px;
   }
   .efb-dock-strip__item {
     display: inline-flex;
+    flex-shrink: 0;
     align-items: center;
     gap: 0.25rem;
+    height: 1.75rem;
+    padding: 0 0.5rem;
+    border: 0;
+    border-radius: 0.5rem;
+    background: transparent;
+    color: var(--color-text-primary);
     font-size: 0.9375rem;
     line-height: 1.25rem;
     font-weight: 700;
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
+    cursor: pointer;
+  }
+  .efb-dock-strip__item[aria-expanded="true"] {
+    background-color: color-mix(in srgb, var(--color-accent) 14%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-accent) 60%, transparent);
+  }
+  .efb-dock-strip__empty {
+    border: 0;
+    background: transparent;
+    color: var(--color-text-secondary);
+    font-size: 0.75rem;
+    line-height: 1rem;
+    font-weight: 500;
+    cursor: pointer;
   }
   .efb-dock-strip__item .efb-category-strip__sub { margin-bottom: 0.125rem; }
   .efb-dock__proficiency {
@@ -2546,6 +2964,44 @@
   .efb-manager-row:focus-visible {
     outline: 2px solid var(--color-focus);
     outline-offset: 2px;
+  }
+  /* The selected manager / second booster: listed first with its accent
+     ring (aria-pressed above) and a "Clear" button under the row. */
+  .efb-manager-list__selected {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 0.5rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--color-line-separator);
+  }
+  .efb-manager-list__clear { flex-shrink: 0; }
+  /* Second-booster rows (SecondBoosterPicker): an icon tile instead of a
+     portrait, the name, then the four "Stat +1" pills (cyan, as booster
+     chips). */
+  .efb-booster-row__icon {
+    display: inline-flex;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+    width: 2.75rem;
+    height: 2.75rem;
+    border-radius: 0.625rem;
+    background-color: var(--color-panel);
+    color: var(--color-skill-boost);
+  }
+  .efb-booster-row__pill {
+    display: inline-flex;
+    align-items: center;
+    height: 1.25rem;
+    padding: 0 0.5rem;
+    border-radius: 0.375rem;
+    background-color: color-mix(in srgb, var(--color-skill-boost) 14%, transparent);
+    color: var(--color-skill-boost);
+    font-size: 0.75rem;
+    line-height: 1rem;
+    font-weight: 500;
+    white-space: nowrap;
   }
   .efb-manager-row__portrait {
     flex-shrink: 0;
@@ -2771,7 +3227,10 @@
   }
   .efb-category-strip__item[data-spent="true"] { color: var(--color-text-primary); }
   .efb-category-strip__item:hover { background-color: var(--color-default); }
-  .efb-category-strip__item[aria-pressed="true"] {
+  /* Lit = its category is highlighted (an open Adjust popover, a preview or
+     the pinned panel label); the item whose popover is open keeps it. */
+  .efb-category-strip__item[data-lit="true"],
+  .efb-category-strip__item[aria-expanded="true"] {
     background-color: color-mix(in srgb, var(--color-accent) 14%, transparent);
     box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-accent) 60%, transparent);
     color: var(--color-text-primary);
@@ -2849,6 +3308,40 @@
   .efb-inline-disclosure:hover { color: var(--color-text-primary); }
   button.efb-booster-button:hover { background-color: var(--color-default-hover); }
   .efb-booster-button[aria-pressed="true"] { color: var(--color-skill-boost); }
+  /* The card's own Booster 2 (change efootbase-function-parity): a fixed
+     pill with an orange accent (ring; orange text while on) — not
+     replaceable, it only turns off and on. */
+  .efb-booster-button--own { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-accent-warn) 55%, transparent); }
+  .efb-booster-button--own[aria-pressed="true"] { color: var(--color-accent-warn); }
+  /* "Select Booster" (a card without its own Booster 2): a muted dashed
+     slot; once a second booster is chosen it reads like an active booster. */
+  .efb-booster-button--select {
+    outline: 1px dashed var(--color-line-tertiary);
+    outline-offset: -1px;
+    color: var(--color-text-secondary);
+  }
+  .efb-booster-button--select:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }
+  .efb-booster-button--chosen { color: var(--color-skill-boost); }
+  /* A Trending card's Booster 1 levels (+3 → off → +1 → +2): gold pill,
+     three level bars (filled = the level) and the level as text. */
+  .efb-booster-button--levels[aria-pressed="true"] { color: var(--color-showtime); }
+  .efb-booster-levels {
+    display: inline-flex;
+    flex-shrink: 0;
+    align-items: flex-end;
+    gap: 2px;
+    height: 0.875rem;
+  }
+  .efb-booster-levels__bar {
+    width: 4px;
+    border-radius: 1px;
+    background-color: var(--color-line-tertiary);
+  }
+  .efb-booster-levels__bar:nth-child(1) { height: 40%; }
+  .efb-booster-levels__bar:nth-child(2) { height: 70%; }
+  .efb-booster-levels__bar:nth-child(3) { height: 100%; }
+  .efb-booster-levels__bar[data-on="true"] { background-color: currentColor; }
+  .efb-booster-button__level { font-weight: 700; font-variant-numeric: tabular-nums; }
   /* Skill chips: 14/600, radius 8, padding 4/10; classic = surface + border,
      Showtime = gold text on a gold tint. */
   .efb-skill-chip {
@@ -2929,16 +3422,18 @@
   .efb-inline-trigger:hover,
   .efb-inline-trigger[aria-expanded="true"] { text-decoration-color: currentColor; color: var(--color-text-primary); }
 
-  /* Stat-row Adjust popover (StatGrid): 280 wide, a 14/600 title (the
-     category), the steppers of the row's categories (label, next cost,
-     − value +), the points left and the value's breakdown. 14 px padding so
-     the 44 px touch areas of the 18 px stepper buttons are not clipped by
-     the popover's scroll box. */
+  /* Adjust popover (CategoryAdjust, change efootbase-function-parity D6):
+     opened from a stat row (280 wide) or a category strip item (240 wide,
+     the reference's): a 14/600 title (the category), then per category
+     − value + (32 px round buttons, 44 px touch area) and a 0–25 slider
+     (16 px track) — no breakdown, next cost or points left. 14 px padding so
+     the touch areas are not clipped by the popover's scroll box. */
   .efb-adjust-popover { width: min(17.5rem, calc(100vw - 1rem)); }
+  .efb-adjust-popover.efb-adjust-popover--strip { width: min(15rem, calc(100vw - 1rem)); }
   .efb-adjust {
     display: flex;
     flex-direction: column;
-    gap: 0.625rem;
+    gap: 0.75rem;
     padding: 0.875rem;
     font-size: 0.875rem;
     line-height: 1.25rem;
@@ -2949,64 +3444,128 @@
     font-weight: 600;
     color: var(--color-text-primary);
   }
-  .efb-adjust__cats {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-  }
   .efb-adjust__cat {
     display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    min-height: 2rem;
-    padding: 0.25rem 0.5rem;
-    border-radius: 0.5rem;
-    background-color: var(--color-default);
+    flex-direction: column;
+    gap: 0.625rem;
+    min-width: 0;
+  }
+  .efb-adjust__cat + .efb-adjust__cat {
+    border-top: 1px solid var(--color-line-separator);
+    padding-top: 0.75rem;
   }
   .efb-adjust__cat-label {
     min-width: 0;
-    flex: 1;
     color: var(--color-text-secondary);
+    font-size: 0.75rem;
+    line-height: 1rem;
+    font-weight: 500;
   }
   .efb-adjust__cat[data-active="true"] .efb-adjust__cat-label { color: var(--color-text-primary); }
-  .efb-adjust__cat[data-active="true"] .efb-stepper__value { color: var(--color-accent); }
-  .efb-adjust__cat .efb-progression-row__next { margin-left: 0; }
-  .efb-adjust__left {
-    color: var(--color-text-secondary);
-    font-size: 0.75rem;
+  .efb-adjust__controls {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+  }
+  .efb-adjust__step {
+    display: inline-flex;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+    width: 2rem;
+    height: 2rem;
+    border: 0;
+    border-radius: 9999px;
+    background-color: var(--color-default);
+    color: var(--color-text-primary);
+    cursor: pointer;
+    transition: background-color 0.1s;
+  }
+  .efb-adjust__step:hover:not([aria-disabled="true"]) { background-color: var(--color-default-hover); }
+  .efb-adjust__step[aria-disabled="true"] { opacity: 0.35; cursor: not-allowed; }
+  .efb-adjust__step:focus-visible {
+    outline: 2px solid var(--color-focus);
+    outline-offset: 2px;
+  }
+  .efb-adjust__value {
+    min-width: 2rem;
+    color: var(--color-text-primary);
+    font-size: 1.25rem;
+    line-height: 1.75rem;
+    font-weight: 700;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+  }
+  .efb-adjust__cat[data-active="true"] .efb-adjust__value { color: var(--color-accent); }
+  @media (prefers-reduced-motion: reduce) {
+    .efb-adjust__step { transition: none; }
+  }
+
+  /* "Stat breakdown" (StatBreakdownTable, inside "About this build"): one
+     row per stat, 11/16 tabular numbers in short columns (full names for
+     screen readers); zero parts dimmed; the box scrolls sideways inside the
+     card when it is narrower than the table — never the page. */
+  .efb-breakdown {
+    max-width: 100%;
+    overflow-x: auto;
+    border-radius: 0.5rem;
+    scrollbar-width: thin;
+  }
+  .efb-breakdown:focus-visible {
+    outline: 2px solid var(--color-focus);
+    outline-offset: 2px;
+  }
+  .efb-breakdown__table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.6875rem;
     line-height: 1rem;
     font-variant-numeric: tabular-nums;
   }
-  .efb-adjust__breakdown {
-    border-top: 1px solid var(--color-line-separator);
-    padding-top: 0.5rem;
-  }
-  .efb-adjust__parts {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    gap: 0.125rem 0.75rem;
-    color: var(--color-text-secondary);
-    font-size: 0.75rem;
-    line-height: 1.125rem;
-  }
-  .efb-adjust__parts dd {
+  .efb-breakdown__caption {
+    padding-bottom: 0.25rem;
     color: var(--color-text-primary);
-    font-variant-numeric: tabular-nums;
+    font-size: 0.75rem;
+    font-weight: 500;
+    text-align: left;
+  }
+  .efb-breakdown__table th,
+  .efb-breakdown__table td {
+    padding: 0.125rem;
     text-align: right;
+    white-space: nowrap;
   }
-  .efb-adjust__total dt,
-  .efb-adjust__total dd {
-    color: var(--color-text-primary);
-    font-weight: 600;
-    font-size: 0.875rem;
-    line-height: 1.25rem;
-  }
-  .efb-adjust__note {
-    margin-top: 0.375rem;
+  .efb-breakdown__table thead th {
     color: var(--color-text-secondary);
+    font-size: 0.625rem;
+    font-weight: 500;
+    border-bottom: 1px solid var(--color-line-separator);
+  }
+  .efb-breakdown__table th:first-child {
+    padding-left: 0;
+    text-align: left;
+    white-space: normal;
+  }
+  .efb-breakdown__table tbody th {
+    color: var(--color-text-secondary);
+    font-weight: 400;
+  }
+  .efb-breakdown__table td { color: var(--color-text-primary); }
+  .efb-breakdown__table td[data-zero="true"] { color: var(--color-text-dim); }
+  .efb-breakdown__table td[data-part="cut"]:not([data-zero="true"]) { color: var(--color-accent-warn); }
+  .efb-breakdown__table td[data-part="shown"] { font-weight: 700; }
+  .efb-breakdown__table tbody tr + tr { border-top: 1px solid var(--color-line-separator); }
+
+  /* "The link's build was adjusted" (player page header): 12/16 warning
+     colour; empty until a corrected link is opened (no space taken). */
+  .efb-link-notice {
+    margin-top: 0.5rem;
+    color: var(--color-accent-warn);
     font-size: 0.75rem;
     line-height: 1rem;
   }
+  .efb-link-notice:empty { margin-top: 0; }
 
   /* ── Overlay primitives (components/ui/Tooltip.tsx, Popover.tsx) ─────────
      Both are native popovers in the top layer, placed in JS (floating.ts:
@@ -3086,6 +3645,42 @@
     font-weight: 600;
     color: var(--color-text-primary);
   }
+  /* Rail title row: "Filters" and, while a filter is active, Reset at the
+     right (the reference's rail header). */
+  .filter-rail__head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    min-height: 1.75rem;
+    margin-bottom: 0.75rem;
+  }
+  .filter-rail__head > .filter-rail__title { margin-bottom: 0; }
+  /* Reset (rail header, phone sheet header): 28 px, 14/20 500, a restart
+     icon; keeps the search and the sort. */
+  .filter-reset {
+    display: inline-flex;
+    flex-shrink: 0;
+    align-items: center;
+    gap: 0.375rem;
+    height: 1.75rem;
+    padding: 0 0.5rem;
+    border: 0;
+    border-radius: 0.5rem;
+    background-color: transparent;
+    color: var(--color-text-primary);
+    font-size: 0.875rem;
+    line-height: 1.25rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background-color 0.15s;
+  }
+  .filter-reset:hover { background-color: var(--color-default); }
+  .filter-reset:focus-visible {
+    outline: 2px solid var(--color-focus);
+    outline-offset: 2px;
+  }
+  .efb-modal--sheet .efb-modal__header > .filter-reset { align-self: center; }
   .filter-panel > * { padding: 0.75rem 0; }
   .filter-panel > :first-child { padding-top: 0; }
   .filter-panel > :last-child { padding-bottom: 0; }
@@ -3098,8 +3693,9 @@
   }
 
   /* Launcher rows: 40 px, radius 12, padding 0 8 0 6, gap 10, 14/21 600;
-     a 28 px icon tile (#2d2d2d), the label, the current selection
-     (accent, truncated) and a chevron. Rows are 2 px apart. */
+     a 28 px icon tile (#2d2d2d; accent tint while the dialog holds a
+     value), the label, the count badge of selected values and a chevron.
+     Rows are 2 px apart. */
   .filter-rows {
     display: flex;
     flex-direction: column;
@@ -3138,24 +3734,35 @@
     background-color: var(--color-row-icon);
     color: var(--color-text-primary);
   }
-  .filter-row__label { flex-shrink: 0; }
-  .filter-row__summary {
-    flex: 1 1 0%;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    text-align: right;
-    font-size: 0.75rem;
-    line-height: 1rem;
-    font-weight: 500;
+  .filter-row[data-active="true"] .filter-row__icon {
+    background-color: var(--color-accent-soft);
     color: var(--color-accent);
+  }
+  .filter-row__label { flex-shrink: 0; }
+  /* Count badge: a 20 px accent circle with the number (12/20 700). */
+  .filter-row__badge {
+    display: inline-flex;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+    min-width: 1.25rem;
+    height: 1.25rem;
+    margin-left: auto;
+    padding: 0 0.375rem;
+    border-radius: 9999px;
+    background-color: var(--color-accent);
+    color: var(--color-accent-foreground);
+    font-size: 0.75rem;
+    line-height: 1.25rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
   }
   .filter-row__chevron {
     flex-shrink: 0;
     margin-left: auto;
     color: var(--color-text-secondary);
   }
+  .filter-row__badge + .filter-row__chevron { margin-left: 0; }
 
   /* Toggles: 34 px, radius 10, 13/13 600, #ffffff12 (hover #ffffff1f),
      6 px apart; pressed = accent fill. Position = pitch rows 3,3,3,3,1 with
@@ -3331,6 +3938,27 @@
     transition: background-color 0.15s;
   }
   .filter-chip:hover { background-color: color-mix(in srgb, var(--color-accent) 22%, transparent); }
+  /* The page's active-filter chips (under the /players search): 32 px pills,
+     13/600, the accent-soft fill and an X; the phone row ends with a neutral
+     "Reset" chip. They wrap, a long name is truncated inside its chip. */
+  .filter-chip--page {
+    height: 2rem;
+    padding: 0 0.625rem 0 0.75rem;
+    border-radius: var(--radius-pill);
+    font-size: 0.8125rem;
+    line-height: 1.25rem;
+    gap: 0.375rem;
+  }
+  .filter-chip--reset {
+    padding: 0 0.75rem;
+    background-color: var(--color-default);
+    color: var(--color-text-primary);
+  }
+  .filter-chip--reset:hover { background-color: var(--color-default-hover); }
+  .filter-chip:focus-visible {
+    outline: 2px solid var(--color-focus);
+    outline-offset: 2px;
+  }
 
   /* Switch ("Max attribute potential"): a native checkbox drawn as a 40 × 22
      track with a round knob (background only, no pseudo-elements). */

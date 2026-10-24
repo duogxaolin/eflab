@@ -16,7 +16,12 @@ import { Tooltip } from "@/components/ui/Tooltip";
 // Overview paragraph: an underlined link, gold for Showtime).
 //
 // - Mouse: hovering shows the preview after the shared tooltip delay (at once
-//   during the warm-up); a click follows the link to /skills/[slug].
+//   during the warm-up); a click follows the link to the skill page,
+//   /wiki/skills/<public slug> (change efootbase-function-parity, D12). The
+//   card DTO lists stored slugs; the public one comes with the skill list
+//   (`SkillDTO.publicSlug`). Without the list (it failed to load) the link
+//   uses the stored slug, which the skill page answers with a 308 to the
+//   public URL.
 // - Keyboard: focus shows the preview at once (`aria-describedby`), Enter
 //   follows the link, Escape hides the preview without moving focus.
 // - Touch / pen: the first tap does not navigate; it opens the same content
@@ -31,6 +36,10 @@ import { Tooltip } from "@/components/ui/Tooltip";
 // (Tooltip / Popover, components/ui/floating.ts): under the name when it
 // fits, else above, ≥ 8 px inside the visible viewport; the popover scrolls
 // inside when taller than the viewport.
+
+/** The skill page of a skill: its public slug once the list is loaded, else
+ *  the stored slug (redirected to the public one by the page). */
+const skillHref = (slug: string, skill: SkillDTO | undefined) => `/wiki/skills/${skill?.publicSlug ?? slug}` as const;
 
 function SkillPreview({ slug, label, skill, titleId }: { slug: string; label: string; skill: SkillDTO | undefined; titleId?: string }) {
   const showtime = skill?.group === "showtime";
@@ -53,7 +62,7 @@ function SkillPreview({ slug, label, skill, titleId }: { slug: string; label: st
         {skill && <SkillEffects effects={skill.effects} activation={skill.activation} compact />}
         {titleId && (
           <Link
-            href={`/skills/${slug}`}
+            href={skillHref(slug, skill)}
             className="inline-flex items-center gap-1 text-xs font-medium text-[var(--color-accent)] hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-focus)]"
           >
             Skill page and cards <ArrowRight className="size-3" aria-hidden />
@@ -94,7 +103,7 @@ export function SkillChip({
     >
       {(tp) => (
         <Link
-          href={`/skills/${slug}`}
+          href={skillHref(slug, skill)}
           {...tp}
           data-showtime={showtime ? "true" : undefined}
           data-skill={slug}

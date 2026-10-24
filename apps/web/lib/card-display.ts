@@ -8,8 +8,9 @@ import {
 } from "@eflab/shared";
 
 // Display label per card type. Single source of truth is `CARD_TYPE_LABELS` in
-// @eflab/shared (derived from efootbase's own `players_meta.json`); this alias
-// keeps the historical `CARD_TYPE_LABEL` import name working for existing pages.
+// @eflab/shared (the names efootbase's pages show: "Icons", "Epic - Big Time";
+// the dump's own labels live apart in `CARD_TYPE_DUMP_LABELS`, for the seed);
+// this alias keeps the historical `CARD_TYPE_LABEL` import name working.
 export const CARD_TYPE_LABEL: Readonly<Record<CardType, string>> = CARD_TYPE_LABELS;
 
 // Card-type accent colour (stripe / badge text / placeholder tint). Keyed by the

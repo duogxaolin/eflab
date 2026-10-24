@@ -124,19 +124,25 @@ export const CARD_TYPES = [
 ] as const;
 export type CardType = (typeof CARD_TYPES)[number];
 
-// Display label per card type — the label efootbase itself declares for the code in
-// dump/efootbase/players_meta.json (`card_type.values[code]`), so the UI never shows a
-// raw enum name. Two codes have no usable meta label and are resolved from the pack
-// names of the cards that carry them (the seeder re-validates this on every run):
+// Two label tables per card type, kept apart so that a display rename never
+// changes what the seed accepts (change efootbase-function-parity, design D14,
+// owner decision 2026-10-24):
+//
+// CARD_TYPE_DUMP_LABELS — the label the dump itself declares for the code in
+// dump/efootbase/players_meta.json (`card_type.values[code]`). Only the seed and
+// the sync worker read it (`buildCardTypeMap` in @eflab/db, the worker's fake
+// source); scripts/verify-seed.py keeps its own copy. Two codes have no usable
+// meta label and are resolved from the pack names of the cards that carry them
+// (the seeder re-validates this on every run; META_LABEL_OVERRIDES in @eflab/db):
 //   · code 4 — meta repeats "Legendary", but every code-4 card comes from a 2022
 //     club/league "Selection" pack (Piqué, Salah, Mbappé…), and efootbase's own card
 //     page labels them "Selection".
 //   · code 7 — meta is blank; all 42 cards come from the "Strike Arena" pack.
 // "Big Time" and "Show Time" are pack campaigns, not card-type codes: Big Time cards
 // are EPIC (code 5) and Show Time cards are HIGHLIGHT (code 6) in the dump, so a
-// filter for "Epic & Big Time" is simply the EPIC type; the campaign is only visible
+// filter for "Epic - Big Time" is simply the EPIC type; the campaign is only visible
 // in `featuredPackId` / the pack name.
-export const CARD_TYPE_LABELS: Readonly<Record<CardType, string>> = {
+export const CARD_TYPE_DUMP_LABELS: Readonly<Record<CardType, string>> = {
   STANDARD: "Standard",
   LEGENDARY: "Legendary",
   TRENDING: "Trending",
@@ -146,9 +152,36 @@ export const CARD_TYPE_LABELS: Readonly<Record<CardType, string>> = {
   STRIKE_ARENA: "Strike Arena",
 };
 
+// CARD_TYPE_LABELS — what the UI shows for a card type (filter toggles and chips,
+// Card Info, page titles, compare, the Overview sentence), so it never shows a raw
+// enum name: the names efootbase's own pages display for the code ("Icons" for
+// code 1, "Epic - Big Time" for code 5 — survey 2026-10-23, S2 card-type toggles
+// and S1 Card Info), the dump labels otherwise. efootbase shows no Strike Arena
+// label; eFootLab keeps its own.
+export const CARD_TYPE_LABELS: Readonly<Record<CardType, string>> = {
+  ...CARD_TYPE_DUMP_LABELS,
+  LEGENDARY: "Icons",
+  EPIC: "Epic - Big Time",
+};
+
+// Order of the card types where they are offered as filter toggles (`/players`
+// Card Type): efootbase's toggle order — Standard, Selection, Icons, Trending,
+// Highlight, Epic - Big Time — then Strike Arena (efootbase has no toggle for it).
+// Only the toggles' order: the URL keeps writing `card=<code>` in code order.
+export const CARD_TYPE_FILTER_ORDER: readonly CardType[] = [
+  "STANDARD",
+  "SELECTION",
+  "LEGENDARY",
+  "TRENDING",
+  "HIGHLIGHT",
+  "EPIC",
+  "STRIKE_ARENA",
+];
+
 // efootbase `card_type` code → CardType. Source of truth for the seeder; the seeder
-// additionally asserts that `players_meta.json` still carries the labels above for
-// every code and that pack names agree, so a changed dump fails loudly.
+// additionally asserts that `players_meta.json` still carries the dump labels above
+// (CARD_TYPE_DUMP_LABELS) for every code and that pack names agree, so a changed dump
+// fails loudly.
 export const CARD_TYPE_BY_EFOOTBASE_CODE: Readonly<Record<number, CardType>> = {
   0: "STANDARD",
   1: "LEGENDARY",
@@ -340,6 +373,10 @@ export const FORM_LABELS = ["Inconsistent", "Standard", "Unwavering"] as const;
 // 1–4 stars (stars = value + 1).
 export const WEAK_FOOT_USAGE_LABELS = ["Almost Never", "Rarely", "Occasionally", "Regularly"] as const;
 export const WEAK_FOOT_ACCURACY_LABELS = ["Low", "Medium", "High", "Very High"] as const;
+/** Stars of a Form level (1★–3★) and of a weak-foot level (1★–4★): the
+ *  /players filters and every star display (`weakFootStars`). */
+export const FORM_STARS = 3;
+export const WEAK_FOOT_STARS = 4;
 
 // Range bounds accepted by the list filters (Zod + UI). Wider than the data
 // (height 155–206, weight 41–113, age 15–50, stats 40–105, body 0–14 in the
@@ -362,36 +399,90 @@ export const FILTER_RANGE_BOUNDS = {
 // and the URL helper of the web.
 export const MAX_FILTER_IDS = 50;
 
-// Shortest name query any search runs (the /players search, the ⌘K palette,
-// the home search and `player.search`, which answers an empty list below it);
-// a one-character query is not sent (change efootbase-behaviour-parity).
-export const SEARCH_MIN_LENGTH = 2;
+// Shortest name query any search runs — the /players search, the ⌘K palette,
+// the home search, the compare picker and `player.search`, which answers 400
+// below it (change efootbase-function-parity: the reference's server ignores a
+// shorter term, survey 2026-10-23 S2 §4 / S3 §1.5). Measured on the folded,
+// trimmed text; `player.list` ignores a shorter `q`, as the reference does.
+export const SEARCH_MIN_LENGTH = 3;
+/** Longest search term `player.search` accepts. */
+export const SEARCH_MAX_LENGTH = 100;
+/** Longest `q` `player.list` accepts (the /players `search` parameter; a
+ *  longer value from a link is cut to this length by the URL reader). */
+export const LIST_SEARCH_MAX_LENGTH = 120;
+/** Rows per `player.search` page (palette, home list, compare picker). */
+export const SEARCH_PAGE_SIZE = 12;
+/** Highest `player.search` page (12 × 50 = 600 rows of one term). */
+export const SEARCH_MAX_PAGE = 50;
 
-// Sort presets of the players page (efootbase "Sort by" radio group:
-// Trending · New cards · Top rated · High to low · Low to high). The keys are
-// efootbase's own URL values where they were observed (`sort=top`,
-// `sort=highest`, `sort=new`; Trending = parameter absent); `lowest` is our
-// name for the unobserved fifth value. Definitions (all end on the id
+// Sort presets of the players page (change efootbase-function-parity, survey
+// 2026-10-23 S2 §2). The keys are efootbase's own URL values; New cards is
+// the default and is written as no `sort`. Definitions (all end on the id
 // tiebreaker, see `orderByFor` in the API's player router):
-//   trending → releaseDate DESC (nulls last), maxOvr DESC, id DESC
-//              (the strongest cards of the newest release first — efootbase's
-//              real "Trending" mixes community signals we do not hold)
 //   new      → releaseDate DESC (nulls last), id DESC
-//   top      → maxOvr DESC, id DESC          (max overall rating)
-//   highest  → ovr DESC, id DESC             (base overall rating)
-//   lowest   → ovr ASC, id ASC
+//   highest  → maxOvr DESC, id DESC          (max overall rating)
+//   lowest   → maxOvr ASC, id ASC
+// The reference's Trending (a live popularity ranking) and Top rated (current
+// community ratings) are not offered: eFootLab holds neither. Their old
+// eFootLab values stay readable through LEGACY_SORT_PRESETS.
 // A preset ignores `order`; the explicit field sorts (SORT_FIELDS) keep it.
-export const SORT_PRESETS = ["trending", "new", "top", "highest", "lowest"] as const;
+export const SORT_PRESETS = ["new", "highest", "lowest"] as const;
 export type SortPreset = (typeof SORT_PRESETS)[number];
-export const DEFAULT_SORT_PRESET: SortPreset = "trending";
+export const DEFAULT_SORT_PRESET: SortPreset = "new";
 export const SORT_PRESET_LABELS: Readonly<Record<SortPreset, string>> = {
-  trending: "Trending",
   new: "New cards",
-  top: "Top rated",
   highest: "High to low",
   lowest: "Low to high",
 };
 export const isSortPreset = (s: string): s is SortPreset => (SORT_PRESETS as readonly string[]).includes(s);
+/** Former preset values still accepted from old links and clients:
+ *  `trending` (the old default) reads as New cards, `top` (max overall
+ *  descending in eFootLab) as High to low, which now sorts by max overall. */
+export const LEGACY_SORT_PRESETS = { trending: "new", top: "highest" } as const satisfies Readonly<Record<string, SortPreset>>;
+export type LegacySortPreset = keyof typeof LEGACY_SORT_PRESETS;
+/** A sort value with a legacy preset replaced by its current one; any other value unchanged. */
+export function resolveLegacySort<S extends string>(sort: S): Exclude<S, LegacySortPreset> | SortPreset {
+  return (Object.prototype.hasOwnProperty.call(LEGACY_SORT_PRESETS, sort)
+    ? LEGACY_SORT_PRESETS[sort as LegacySortPreset]
+    : sort) as Exclude<S, LegacySortPreset> | SortPreset;
+}
+
+// The Nation picker's fixed first nations, in the reference's order (survey
+// 2026-10-23 S2 §6: the same ten on 2026-10-20 and 2026-10-23, not by card
+// count), matched by the stored Country.name; the other nations follow A–Z.
+export const FIXED_FIRST_NATIONS = [
+  "England",
+  "France",
+  "Spain",
+  "Brazil",
+  "Argentina",
+  "Germany",
+  "Italy",
+  "Netherlands",
+  "Portugal",
+  "Belgium",
+] as const;
+
+// Upper bounds of the new list filters of `player.list` (change
+// efootbase-function-parity): several playing styles (OR, either slot), team
+// names (OR, merged with the team ids) and skill keys (AND, merged with the
+// skill ids).
+export const MAX_FILTER_SKILLS = 20;
+export const TEAM_NAME_MAX_LENGTH = 100;
+/** A stored skill key (`Skill.efbKey`, the dump's flag name): `s_fortress`. */
+export const SKILL_KEY_RE = /^s_[a-z0-9_]+$/;
+/** Rows of a skill page's "Top cards" after the leader (one card per base player). */
+export const SKILL_TOP_CARDS = 12;
+
+// Longest slug each slug input of the API accepts — one bound per slug kind,
+// shared by the Zod input and the web pages' path pre-check (`isSkillSlug` /
+// `isBundleSlug` in helpers.ts). The pre-check must never accept a slug the
+// input refuses: the input's 400 reaches a server page as an API failure (an
+// HTTP 500) instead of the 404 an unknown slug deserves.
+/** Skill slug, stored or public (`skill.byId`, `skill.players`; /wiki/skills/<slug>, /skills/<slug>). */
+export const SKILL_SLUG_MAX_LENGTH = 120;
+/** Featured-bundle slug, name + release date (`featured.bySlug`; /packs/<slug>). */
+export const BUNDLE_SLUG_MAX_LENGTH = 200;
 
 // efootbase playing-style id → short description (from efootbase player detail page).
 // Used on the player detail page tactical box. Keys without a known description are

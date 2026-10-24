@@ -1,10 +1,13 @@
 "use client";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { Search, X } from "lucide-react";
-import { SEARCH_MIN_LENGTH, type CardPreview } from "@eflab/shared";
+import { SEARCH_MAX_LENGTH, SEARCH_MIN_LENGTH, type CardPreview } from "@eflab/shared";
 import { trpc } from "@/lib/trpc";
-import { useDebouncedValue } from "@/lib/use-debounced-value";
 import { PlayerSearchRow } from "./PlayerSearchRow";
+import { useLoadMoreOnScroll, usePlayerSearchPages } from "./usePlayerSearchPages";
+
+/** Rows of the "Latest Players" empty state. */
+const LATEST_ROWS = 12;
 
 /**
  * Player search palette — the header's ⌘K search and the compare picker.
@@ -18,48 +21,59 @@ import { PlayerSearchRow } from "./PlayerSearchRow";
  * Look (reference measurements): panel 576 px wide, radius 16, #181818 with an
  * inset #ffffff4d hairline over a #00000099 backdrop; a 45 px input row
  * (search icon, input 14/20, round clear button, Esc chip); rows of
- * `PlayerSearchRow`. Behaviour: 250 ms debounce, nothing under 2 characters,
- * ArrowDown / ArrowUp move between the input and the rows, Enter on the input
- * runs `onSubmitQuery` (header: the full list) or, without it, picks the
- * first result (compare picker). With an empty field it lists the newest
- * cards ("Latest Players", `player.trending` — real data, not a trending
- * ranking). `excludeIds` (compare picker) marks cards that cannot be chosen:
- * their rows stay listed but are `aria-disabled` with the given reason
- * ("In slot 1"), a click or Enter on them does nothing, and Enter on the
- * input picks the first other result.
+ * `PlayerSearchRow`.
+ *
+ * Behaviour (change efootbase-function-parity "Search Result Lists", survey
+ * 2026-10-23 S3 §2 / §10): `usePlayerSearchPages` — 200 ms after the last
+ * keystroke, from 3 characters, name or pack / campaign name, pages of 12 in
+ * max-overall order with the word-start rows lifted inside each page, the
+ * next page when the "Loading more…" row at the end scrolls into view. Below
+ * 3 characters the empty state stays: "Latest Players", the 12 newest
+ * distinct players (`player.trending` — real data, not a trending ranking;
+ * the reference's 2-character "top list" is not copied). The input is an APG
+ * combobox: DOM focus stays in it, the rows are `role="option"` pointed at by
+ * `aria-activedescendant`; the first result row is active as soon as the
+ * results of the current text appear, ArrowDown / ArrowUp move the active
+ * row (ArrowDown on the last loaded row asks for the next page; the list
+ * wraps once everything is loaded), and Enter opens — or, in the compare
+ * picker, picks — the active row; Enter with no active row (no result, the
+ * search still running, the empty state before an arrow key) does nothing.
+ * Every card can be chosen (the compare picker lists the card already in the
+ * other slot like any other).
  */
 export function SearchPalette({
   open,
   onClose,
   title,
   onSelect,
-  onSubmitQuery,
   returnFocusTo,
-  excludeIds,
 }: {
   open: boolean;
   /** Called after the dialog closed (any way). */
   onClose: () => void;
   /** Accessible name of the dialog (visually hidden). */
   title: string;
+  /** A row was chosen (click, tap or Enter on the active row); the palette closes. */
   onSelect: (player: CardPreview) => void;
-  /** Enter on the input with ≥ 2 characters; omitted = pick the first result. */
-  onSubmitQuery?: (q: string) => void;
   /** Focus target after closing; `null` (or omitted) = the element that had
    *  focus when the palette opened. */
   returnFocusTo?: () => HTMLElement | null;
-  /** Card id → the visible reason its row cannot be chosen ("In slot 1"). */
-  excludeIds?: Readonly<Record<string, string>>;
 }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const sentinelRef = useRef<HTMLParagraphElement>(null);
   const openerRef = useRef<HTMLElement | null>(null);
   const [query, setQuery] = useState("");
+  // The row the user moved to with an arrow key, by card id. Null = the
+  // default: the first row of the search results, none in the empty state.
+  const [pickedId, setPickedId] = useState<string | null>(null);
   const titleId = useId();
   const inputId = useId();
-  const resultsId = useId();
+  const listboxId = useId();
+  const groupId = useId();
   const hintId = useId();
+  const optionId = (p: CardPreview) => `${listboxId}-opt-${p.id}`;
 
   // Sync the `open` prop with the native dialog.
   useEffect(() => {
@@ -80,6 +94,7 @@ export function SearchPalette({
 
   const handleClose = useCallback(() => {
     setQuery("");
+    setPickedId(null);
     onClose();
     const opener = openerRef.current;
     openerRef.current = null;
@@ -93,78 +108,98 @@ export function SearchPalette({
   }, [onClose, returnFocusTo]);
 
   const trimmed = query.trim();
-  const debounced = useDebouncedValue(trimmed, 250);
-  const canSearch = debounced.length >= SEARCH_MIN_LENGTH;
-  const typedEnough = trimmed.length >= SEARCH_MIN_LENGTH;
-  const search = trpc.player.search.useQuery({ q: debounced, limit: 8 }, { enabled: open && canSearch });
-  // Empty field: the newest cards (same query and cache as the home grid).
-  const latest = trpc.player.trending.useQuery(undefined, { enabled: open && trimmed.length === 0, staleTime: 5 * 60_000 });
-  const results = search.data ?? [];
-  const waiting = typedEnough && (!canSearch || debounced !== trimmed || search.isLoading);
+  const search = usePlayerSearchPages(query, { enabled: open });
+  // Below 3 characters: the newest cards (same query and cache as the home grid).
+  const showLatest = !search.typedEnough;
+  const latest = trpc.player.trending.useQuery(undefined, { enabled: open && showLatest, staleTime: 5 * 60_000 });
+  const latestRows = (latest.data ?? []).slice(0, LATEST_ROWS);
 
-  // Card ids are digit strings, so a plain lookup never hits an inherited key.
-  const excludedNote = (p: CardPreview): string | undefined => excludeIds?.[p.id];
+  // The rows on screen, in order; the active one by id.
+  const options: readonly CardPreview[] = showLatest ? latestRows : search.rows;
+  const picked = pickedId !== null ? options.find((p) => p.id === pickedId) : undefined;
+  const active = picked ?? (!showLatest ? options[0] : undefined);
+
+  // Keep the active row in view; a new text starts at the top of its list.
+  const activeDomId = active ? optionId(active) : undefined;
+  useEffect(() => {
+    if (activeDomId) document.getElementById(activeDomId)?.scrollIntoView({ block: "nearest" });
+  }, [activeDomId]);
+  useEffect(() => {
+    if (listRef.current) listRef.current.scrollTop = 0;
+  }, [search.query, showLatest]);
+
+  useLoadMoreOnScroll(listRef, sentinelRef, open && search.hasMore && !search.loadMoreFailed, search.pageCount, search.loadMore);
 
   const choose = (p: CardPreview) => {
-    if (excludedNote(p) !== undefined) return; // aria-disabled row
     onSelect(p);
     close();
   };
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!typedEnough) return;
-    if (onSubmitQuery) {
-      onSubmitQuery(trimmed);
-      close();
-    } else if (!waiting && !search.isError) {
-      const first = results.find((p) => excludedNote(p) === undefined);
-      if (first) choose(first);
-    }
+    if (active) choose(active);
   };
 
-  // ArrowDown / ArrowUp between the input and the result rows.
-  const onKeyDown = (e: React.KeyboardEvent<HTMLDialogElement>) => {
-    if (e.key === "Escape") {
-      // Chrome lets a non-empty <input type="search"> swallow the first Escape
-      // (it clears the field) before the dialog's `cancel` — close on the key.
-      e.preventDefault();
-      close();
-      return;
-    }
+  const onInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    // Never act in the middle of an IME composition (CJK names).
+    if (e.nativeEvent.isComposing) return;
     if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
-    const rows = Array.from(listRef.current?.querySelectorAll<HTMLButtonElement>("[data-palette-option]") ?? []);
-    if (rows.length === 0) return;
-    const active = document.activeElement;
-    const idx = rows.findIndex((r) => r === active);
+    const n = options.length;
+    if (n === 0) return;
     e.preventDefault();
+    const at = active ? options.indexOf(active) : -1;
     if (e.key === "ArrowDown") {
-      rows[idx < 0 ? 0 : Math.min(rows.length - 1, idx + 1)]?.focus();
-    } else if (idx <= 0) {
-      inputRef.current?.focus();
+      if (at === n - 1 && search.hasMore && !showLatest) {
+        // The end of the loaded rows: ask for the next page, stay here.
+        search.loadMore();
+        return;
+      }
+      setPickedId(options[at < 0 || at === n - 1 ? 0 : at + 1]!.id);
     } else {
-      rows[idx - 1]?.focus();
+      setPickedId(options[at <= 0 ? n - 1 : at - 1]!.id);
     }
   };
 
-  const status = !typedEnough
-    ? trimmed.length > 0
-      ? `Type at least ${SEARCH_MIN_LENGTH} characters of a player name.`
-      : ""
-    : waiting
-      ? "Searching…"
-      : search.isError
-        ? "Search failed."
-        : `${results.length} ${results.length === 1 ? "player" : "players"} found`;
+  // Escape: Chrome lets a non-empty <input type="search"> swallow the first
+  // Escape (it clears the field) before the dialog's `cancel` — close on the key.
+  const onDialogKeyDown = (e: React.KeyboardEvent<HTMLDialogElement>) => {
+    if (e.key !== "Escape") return;
+    e.preventDefault();
+    close();
+  };
 
-  const rowList = (list: readonly CardPreview[]) => (
-    <ul className="m-0 list-none p-0">
+  const listing = open && options.length > 0 && (showLatest || search.current);
+  const status = showLatest
+    ? trimmed.length > 0
+      ? `Type at least ${SEARCH_MIN_LENGTH} characters to search.`
+      : ""
+    : search.waiting
+      ? "Searching…"
+      : search.failed
+        ? "Search failed."
+        : search.rows.length === 0
+          ? `No players found for "${search.query}".`
+          : search.hasMore
+            ? `${search.rows.length} players listed, more at the end of the list.`
+            : `${search.rows.length} ${search.rows.length === 1 ? "player" : "players"} found.`;
+
+  const optionList = (list: readonly CardPreview[], labelledBy: string) => (
+    <div id={listboxId} role="listbox" aria-labelledby={labelledBy}>
       {list.map((p) => (
-        <li key={p.id}>
-          <PlayerSearchRow player={p} data-palette-option="" disabledNote={excludedNote(p)} onClick={() => choose(p)} />
-        </li>
+        <PlayerSearchRow
+          key={p.id}
+          id={optionId(p)}
+          player={p}
+          role="option"
+          aria-selected={p === active}
+          // Options are not tab stops (focus stays in the input, which points
+          // at them); a mouse press must not move focus out of the input.
+          tabIndex={-1}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => choose(p)}
+        />
       ))}
-    </ul>
+    </div>
   );
 
   return (
@@ -173,7 +208,7 @@ export function SearchPalette({
       className="efb-palette"
       aria-labelledby={titleId}
       onClose={handleClose}
-      onKeyDown={onKeyDown}
+      onKeyDown={onDialogKeyDown}
       onClick={(e) => {
         // A click on the dialog element itself (outside the panel) = backdrop.
         if (e.target === e.currentTarget) close();
@@ -184,8 +219,7 @@ export function SearchPalette({
           {title}
         </h2>
         <p id={hintId} className="sr-only">
-          {onSubmitQuery ? "Enter shows every matching card. " : excludeIds && Object.keys(excludeIds).length > 0 ? "Enter picks the first available result. " : "Enter picks the first result. "}
-          Arrow keys move through the results; Escape closes.
+          Type at least {SEARCH_MIN_LENGTH} characters of a player or pack name. Up and down arrows move through the players, Enter chooses the highlighted one, Escape closes.
         </p>
         <form onSubmit={submit} role="search" className="efb-palette__input-row">
           <Search className="efb-palette__icon" aria-hidden />
@@ -197,11 +231,20 @@ export function SearchPalette({
             id={inputId}
             type="search"
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            onChange={(e) => {
+              setQuery(e.target.value);
+              setPickedId(null);
+            }}
+            onKeyDown={onInputKeyDown}
             placeholder="Search players by name…"
             autoComplete="off"
-            enterKeyHint="search"
-            aria-controls={resultsId}
+            enterKeyHint="go"
+            maxLength={SEARCH_MAX_LENGTH}
+            role="combobox"
+            aria-autocomplete="list"
+            aria-expanded={listing}
+            aria-controls={listing ? listboxId : undefined}
+            aria-activedescendant={listing ? activeDomId : undefined}
             aria-describedby={hintId}
             className="efb-palette__input no-native-clear"
           />
@@ -210,6 +253,7 @@ export function SearchPalette({
               type="button"
               onClick={() => {
                 setQuery("");
+                setPickedId(null);
                 inputRef.current?.focus();
               }}
               className="efb-palette__clear hit-44"
@@ -228,8 +272,10 @@ export function SearchPalette({
           {status}
         </p>
 
-        <div id={resultsId} ref={listRef} className="efb-palette__results">
-          {trimmed.length === 0 ? (
+        <div ref={listRef} className="efb-palette__results">
+          {/* Nothing is listed while closed (the cached latest players would
+              otherwise sit in the hidden dialog). */}
+          {!open ? null : showLatest ? (
             latest.isError ? (
               <p className="efb-palette__note">
                 Could not load the latest players.{" "}
@@ -237,35 +283,45 @@ export function SearchPalette({
                   Retry
                 </button>
               </p>
-            ) : (latest.data ?? []).length > 0 ? (
-              <section aria-labelledby={`${resultsId}-latest`}>
-                <h3 id={`${resultsId}-latest`} className="efb-palette__group">
+            ) : latestRows.length > 0 ? (
+              <section aria-labelledby={groupId}>
+                <h3 id={groupId} className="efb-palette__group">
                   Latest Players
                 </h3>
-                {rowList((latest.data ?? []).slice(0, 8))}
+                {optionList(latestRows, groupId)}
               </section>
             ) : (
               <p className="efb-palette__note">{latest.isPending ? "Loading the latest players…" : `Type at least ${SEARCH_MIN_LENGTH} characters of a player name.`}</p>
             )
-          ) : !typedEnough ? (
-            <p className="efb-palette__note">Type at least {SEARCH_MIN_LENGTH} characters of a player name.</p>
-          ) : waiting ? (
+          ) : search.waiting ? (
             <p className="efb-palette__note animate-pulse">Searching…</p>
-          ) : search.isError ? (
+          ) : search.failed ? (
             <p className="efb-palette__note efb-palette__note--error">
               Search failed.{" "}
-              <button type="button" onClick={() => void search.refetch()} className="efb-palette__link">
+              <button type="button" onClick={search.retry} className="efb-palette__link">
                 Retry
               </button>
             </p>
-          ) : results.length === 0 ? (
-            <p className="efb-palette__note">No cards found matching &quot;{debounced}&quot;.</p>
+          ) : search.rows.length === 0 ? (
+            <p className="efb-palette__note">No cards found matching &quot;{search.query}&quot;.</p>
           ) : (
-            <section aria-labelledby={`${resultsId}-found`}>
-              <h3 id={`${resultsId}-found`} className="efb-palette__group">
+            <section aria-labelledby={groupId}>
+              <h3 id={groupId} className="efb-palette__group">
                 Players
               </h3>
-              {rowList(results)}
+              {optionList(search.rows, groupId)}
+              {search.loadMoreFailed ? (
+                <p className="efb-palette__more">
+                  Could not load more players.{" "}
+                  <button type="button" onClick={search.loadMore} className="efb-palette__link">
+                    Retry
+                  </button>
+                </p>
+              ) : search.hasMore ? (
+                <p ref={sentinelRef} className="efb-palette__more" aria-hidden>
+                  Loading more…
+                </p>
+              ) : null}
             </section>
           )}
         </div>

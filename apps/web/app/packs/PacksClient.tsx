@@ -1,6 +1,7 @@
 "use client";
 import Link from "next/link";
-import { Layers, Package, Users } from "lucide-react";
+import { Clock, Layers, Package, Users } from "lucide-react";
+import { releaseAgeLabel, type FeaturedListDTO } from "@eflab/shared";
 import { trpc } from "@/lib/trpc";
 import { PlayerCard } from "@/components/cards/PlayerCard";
 import { QueryErrorState } from "@/lib/query-state";
@@ -9,19 +10,29 @@ import { PACK_GRID } from "./pack-grid";
 
 // /packs — flat listing of the featured bundles (24 in the 2026-10 data:
 // specialPlayerList + spotlight packs), FeaturedBundle table seeded from the
-// dump's packs.json. No filter UI: a plain-text header with three stat chips
-// (no emoji) + one section per bundle in releaseDate DESC order, each linking
-// to its bundle page by slug. "Players" counts distinct base players across
-// all bundles (a player featured in two bundles, or with two cards, counts
-// once); "cards" counts card rows — never relabelled as players.
+// dump's packs.json. No filter UI: a plain-text header with stat chips (no
+// emoji) + one section per bundle, each title linking to its bundle page by
+// slug.
+//
+// Order (change efootbase-function-parity "Packs Order And Last Updated",
+// survey 2026-10-23 S3 §3): the stored `position` — the current packs newest
+// first, then the manager and player spotlights newest first (two groups, so
+// "Worldwide Sep '26" sits above "Jürgen Klopp"), never one date sort.
+//
+// Chips: "packs"; "players" counts distinct base players across all bundles (a
+// player featured in two bundles, or with two cards, counts once); "cards"
+// counts card rows — never relabelled as players (eFootLab's honest counts,
+// owner decision); then "Last updated <age>", the age of the newest card
+// release in whole UTC days from `todayUtc` — the request's UTC day, passed
+// by the server page so server and client print the same text.
 
-export function PacksClient() {
-  const bundlesQuery = trpc.featured.list.useQuery();
-  const list = [...(bundlesQuery.data ?? [])].sort(
-    (a, b) => new Date(b.releaseDate).getTime() - new Date(a.releaseDate).getTime() || a.position - b.position,
-  );
+export function PacksClient({ todayUtc, initialData }: { todayUtc: string; initialData?: FeaturedListDTO }) {
+  const bundlesQuery = trpc.featured.list.useQuery(undefined, { initialData });
+  const list = [...(bundlesQuery.data?.bundles ?? [])].sort((a, b) => a.position - b.position);
   const totalCards = list.reduce((acc, b) => acc + b.cards.length, 0);
   const totalPlayers = new Set(list.flatMap((b) => b.cards.map((c) => c.baseId))).size;
+  const newestRelease = bundlesQuery.data?.newestCardRelease ?? null;
+  const updatedAge = newestRelease ? releaseAgeLabel(todayUtc, newestRelease) : null;
 
   return (
     <div>
@@ -56,6 +67,14 @@ export function PacksClient() {
             <Layers className="size-4 text-[var(--color-text-secondary)]" aria-hidden />
             {totalCards} cards
           </li>
+          {newestRelease && updatedAge && (
+            <li className="efb-stat-chip">
+              <Clock className="size-4 text-[var(--color-text-secondary)]" aria-hidden />
+              <span>
+                Last updated <time dateTime={newestRelease}>{updatedAge}</time>
+              </span>
+            </li>
+          )}
         </ul>
       )}
 
