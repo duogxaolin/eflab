@@ -48,7 +48,7 @@ import { assignPackSlugs, basename, buildCardTypeMap, buildPlayerRow, skillKeyTo
 import { incrementalWatermark } from "@eflab/shared";
 import { assertLoopbackUrl, sourceImageUrlAllowed } from "../efootbase.js";
 import { SEED_WRITE_WAIT_MS } from "../limits.js";
-import { checkRowId, checkSourceImages, heldSkillKeys, jsonlRows, loadDbLookups, pendingImageIds, playerDigest, storedDigests } from "../catalogue.js";
+import { checkRowId, checkSourceImages, heldSkillKeys, jsonlRows, loadDbLookups, pendingImageIds, playerDigest, seedLeagueIds, storedDigests } from "../catalogue.js";
 import type { RunContext, RunHandler, RunOutcome } from "../runner.js";
 import {
   MAX_PENDING_IMAGE_IDS,
@@ -184,13 +184,15 @@ async function full(ctx: RunContext): Promise<RunOutcome> {
     };
     const lookups = await loadDbLookups(db);
     const stored = await storedDigests(db, lookups.names);
+    // The seed writes the fixture leagues, so the card leagues it will store are those.
+    const leagueIds = seedLeagueIds();
     const newIds: number[] = [];
     const changedIds: number[] = [];
     let unchanged = 0;
     for await (const r of jsonlRows(dumpPath)) {
       let row: Record<string, unknown>;
       try {
-        row = buildPlayerRow(r, BigInt(r.id), cardTypeByCode, countryIds, teamIds, packIds, []);
+        row = buildPlayerRow(r, BigInt(r.id), cardTypeByCode, countryIds, teamIds, packIds, leagueIds, []);
       } catch (e) {
         throw fail(`card ${r.id}: ${(e as Error).message} — nothing was written`);
       }

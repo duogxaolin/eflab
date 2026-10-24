@@ -4,6 +4,8 @@ import {
   BASE_STATS,
   BUNDLE_SLUG_MAX_LENGTH,
   CARD_TYPES,
+  COMMUNITY_RATING_FILTER_MIN,
+  COMMUNITY_RATING_MAX,
   CONDITIONS,
   FILTER_RANGE_BOUNDS,
   LEGACY_SORT_PRESETS,
@@ -45,6 +47,12 @@ const int4 = z
   .union([z.number(), z.string().regex(/^\d{1,10}$/, "expected an integer")])
   .pipe(z.coerce.number().int().min(0).max(INT4_MAX));
 
+// Community Rating minimum (2–10): a number or a digit string, like `int4` — a
+// `null`, `true`, "" or a fraction is a 400, never coerced into a filter.
+const ratingMin = z
+  .union([z.number(), z.string().regex(/^\d{1,2}$/, "expected an integer")])
+  .pipe(z.coerce.number().int().min(COMMUNITY_RATING_FILTER_MIN).max(COMMUNITY_RATING_MAX));
+
 // Bounded optional integer for a range edge ([lo, hi] from FILTER_RANGE_BOUNDS).
 const edge = ([lo, hi]: readonly [number, number]) => z.coerce.number().int().min(lo).max(hi).optional();
 const smallLevel = (max: number) => z.coerce.number().int().min(0).max(max);
@@ -57,9 +65,10 @@ export const playerListInput = z.object({
   page: z.coerce.number().int().min(1).max(10000).default(1),
   limit: z.coerce.number().int().min(1).max(200).default(24),
   // A SORT_FIELDS column (with `order`) or one of the SORT_PRESETS (which fix
-  // their own direction — see constants.ts). The former presets `trending`
-  // and `top` are still accepted and read as `new` and `highest`
-  // (LEGACY_SORT_PRESETS), so an old client never gets a 400.
+  // their own direction — see constants.ts). The former preset `trending` is
+  // still accepted and read as `new`, and `top` as `highest` while Top rated
+  // is not offered (LEGACY_SORT_PRESETS / TOP_RATED), so an old client never
+  // gets a 400.
   sort: z
     .enum([...SORT_FIELDS, ...SORT_PRESETS, ...Object.keys(LEGACY_SORT_PRESETS)] as unknown as [string, ...string[]])
     .default("ovr")
@@ -123,6 +132,10 @@ export const playerListInput = z.object({
   weightMax: edge(FILTER_RANGE_BOUNDS.weight),
   ageMin: edge(FILTER_RANGE_BOUNDS.age),
   ageMax: edge(FILTER_RANGE_BOUNDS.age),
+  // Community Rating (change efootbase-data-refresh-1024): the stored average
+  // community rating is at least this (2–10, no vote minimum); a card without
+  // ratings never matches. 1 ("All") is the absence of the field — a 400 here.
+  ratingMin: ratingMin.optional(),
   // Stat ranges on the 26 base stats; `statsAtMax` switches them to the
   // `max*` columns (efootbase "Max attribute potential").
   statRanges: z

@@ -20,6 +20,10 @@
 //   form          0–2 for 1★–3★, repeated
 //   wfa / wfu     0–3 for 1★–4★, repeated
 //   height / weight / age  `min-max`
+//   rating        Community Rating minimum 2–10 (1 = All, the default, omitted);
+//                 its place after `age` is eFootLab's choice (the reference's
+//                 position of `rating` was not observed — change
+//                 efootbase-data-refresh-1024, design D4)
 //   playingStyle  style id, repeated; an AI style as `p_<dump key>` (`p_trickster`)
 //   skill         skill key, repeated (`s_rabona`)
 //   nat           eFootLab's internal Country.id, repeated (no nation code is stored)
@@ -39,7 +43,8 @@
 // `pos`, condition letters, comma lists of `form`, `wfa` and `wfu` (the old
 // 1-based stars), skill ids (single or comma lists), all-digit `team` values
 // (team ids — no stored team name is all digits), `sort=trending` (the
-// default) and `sort=top` (High to low). A single `form`, `wfa` or `wfu` value
+// default) and `sort=top` (High to low while Top rated is not offered — Top
+// rated once TOP_RATED is set). A single `form`, `wfa` or `wfu` value
 // is read 0-based, the reference's encoding — an intentional change for such
 // old single-value links, which now select one star more. Out-of-range,
 // unknown or inverted values are dropped, never sent.
@@ -57,6 +62,9 @@ import {
   CARD_TYPES,
   CARD_TYPE_BY_EFOOTBASE_CODE,
   CARD_TYPE_FILTER_ORDER,
+  COMMUNITY_RATING_FILTER_MIN,
+  COMMUNITY_RATING_MAX,
+  COMMUNITY_RATING_MIN,
   CONDITIONS,
   DEFAULT_SORT_PRESET,
   FILTER_RANGE_BOUNDS,
@@ -133,6 +141,9 @@ export interface PlayersState {
   height: IntRange | null;
   weight: IntRange | null;
   age: IntRange | null;
+  /** Community Rating minimum (`rating`): 1 = All (no filter, the default), 2–10 =
+   *  the stored average community rating is at least this. */
+  rating: number;
   /** Skill keys (`skill=s_*`) — every listed skill must be present (AND). Code-unit order. */
   skills: string[];
   /** Skill ids of an older link, not yet resolved to keys. Ascending. */
@@ -168,6 +179,7 @@ export const DEFAULT_PLAYERS_STATE: PlayersState = {
   height: null,
   weight: null,
   age: null,
+  rating: COMMUNITY_RATING_MIN,
   skills: [],
   legacySkillIds: [],
   stats: {},
@@ -194,6 +206,7 @@ export const PLAYERS_URL_KEYS = [
   "height",
   "weight",
   "age",
+  "rating",
   "playingStyle",
   "skill",
   "nat",
@@ -422,11 +435,22 @@ function formatRangeMap<K extends string>(map: Partial<Record<K, IntRange>>, ord
   return parts.length ? parts.join(",") : null;
 }
 
+/** `rating`: a Community Rating minimum 2–10; anything else (1, 0, 11, 2.5,
+ *  text) reads as All. */
+function readRating(v: string | null): number {
+  return (v === null ? undefined : digitsIn(v.trim(), COMMUNITY_RATING_FILTER_MIN, COMMUNITY_RATING_MAX)) ?? COMMUNITY_RATING_MIN;
+}
+
+/** The Community Rating minimum a state filters on, or undefined for All. */
+function ratingFilter(rating: number): number | undefined {
+  return Number.isInteger(rating) && rating >= COMMUNITY_RATING_FILTER_MIN && rating <= COMMUNITY_RATING_MAX ? rating : undefined;
+}
+
 /** The page state a /players query string stands for. Never throws. */
 export function readPlayersState(sp: URLSearchParams): PlayersState {
   const footRaw = sp.get("foot");
-  // Former presets: `sort=top` reads as High to low, `sort=trending` as the
-  // default New cards (resolveLegacySort).
+  // Former presets: `sort=trending` reads as the default New cards, `sort=top`
+  // as High to low while Top rated is not offered (resolveLegacySort).
   const sortRaw = resolveLegacySort(sp.get("sort") ?? "");
   const sort: PlayersSort = isSortPreset(sortRaw) ? sortRaw : isSortField(sortRaw) ? sortRaw : DEFAULT_SORT_PRESET;
   const orderRaw = sp.get("order");
@@ -456,6 +480,7 @@ export function readPlayersState(sp: URLSearchParams): PlayersState {
     height: parseRangeParam(sp.get("height"), b.height[0], b.height[1]),
     weight: parseRangeParam(sp.get("weight"), b.weight[0], b.weight[1]),
     age: parseRangeParam(sp.get("age"), b.age[0], b.age[1]),
+    rating: readRating(sp.get("rating")),
     skills,
     legacySkillIds,
     stats: rangeMap(sp.getAll("stat"), isBaseStat, b.stat),
@@ -499,6 +524,8 @@ export function writePlayersState(s: PlayersState): string {
   range("height", s.height);
   range("weight", s.weight);
   range("age", s.age);
+  const rating = ratingFilter(s.rating);
+  if (rating !== undefined) add("rating", rating);
   for (const id of sortIds(s.styles)) add("playingStyle", id);
   for (const k of AI_PLAYING_STYLE_KEYS) if (s.ai.includes(k)) add("playingStyle", AI_STYLE_URL_KEYS[k]);
   // Safety-net slices only: the pickers refuse a selection beyond the bound
@@ -640,6 +667,7 @@ export function playersListQuery(s: PlayersState, limit: number): PlayersListQue
     weightMax: s.weight?.max,
     ageMin: s.age?.min,
     ageMax: s.age?.max,
+    ratingMin: ratingFilter(s.rating),
     skillKeys: list(sortNames(s.skills)),
     skillIds: list(sortIds(s.legacySkillIds)),
     statRanges: list(statRanges),
@@ -663,6 +691,7 @@ export function countActiveFilters(s: PlayersState): number {
   n += s.ai.length;
   if (s.foot !== undefined) n++;
   for (const r of [s.base, s.max, s.height, s.weight, s.age]) if (r) n++;
+  if (ratingFilter(s.rating) !== undefined) n++;
   for (const list of [s.pos, s.nat, s.league, s.condition, s.form, s.wfa, s.wfu]) if (list.length) n++;
   if (s.teams.length + s.legacyTeamIds.length) n++;
   n += s.skills.length + s.legacySkillIds.length;
@@ -712,6 +741,7 @@ export type ActiveFilter =
   | { kind: "foot"; value: 0 | 1 }
   | { kind: "condition"; value: Condition }
   | { kind: "form" | "wfa" | "wfu"; value: number }
+  | { kind: "rating"; value: number }
   | { kind: "style"; value: number }
   | { kind: "ai"; value: AiPlayingStyleKey }
   | { kind: "skill"; value: string }
@@ -742,6 +772,8 @@ export function activeFilters(s: PlayersState): ActiveFilter[] {
   if (s.height) out.push({ kind: "height", range: s.height });
   if (s.weight) out.push({ kind: "weight", range: s.weight });
   if (s.age) out.push({ kind: "age", range: s.age });
+  const rating = ratingFilter(s.rating);
+  if (rating !== undefined) out.push({ kind: "rating", value: rating });
   for (const value of sortIds(s.styles)) out.push({ kind: "style", value });
   for (const value of AI_PLAYING_STYLE_KEYS) if (s.ai.includes(value)) out.push({ kind: "ai", value });
   for (const value of sortNames(s.skills)) out.push({ kind: "skill", value });
@@ -796,6 +828,9 @@ export function withoutFilter(s: PlayersState, f: ActiveFilter): PlayersState {
     case "wfa":
     case "wfu":
       next[f.kind] = s[f.kind].filter((v) => v !== f.value);
+      break;
+    case "rating":
+      next.rating = COMMUNITY_RATING_MIN;
       break;
     case "style":
       next.styles = s.styles.filter((v) => v !== f.value);

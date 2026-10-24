@@ -16,6 +16,17 @@ Usage (from the repo root, stdlib only):
   python3 -I scripts/verify-seed.py --static-dir DIR      # efootbase static snapshot (default dump/efootbase/static)
   python3 -I scripts/verify-seed.py --efhub-db FILE       # eFHUB SQLite (default EFHUB_DB_PATH, then dump/efhub/efhub_db.sqlite)
   python3 -I scripts/verify-seed.py --after-crossfill     # right after `pnpm db:refresh` / `db:crossfill`: nothing may be pending
+  python3 -I scripts/verify-seed.py --manifest FILE       # dump manifest (default: manifest.json next to --jsonl)
+
+Card league, ratings and dump date (openspec efootbase-data-refresh-1024; mirrors
+cardLeagueId / parseDumpedAt in packages/db/src/efootbase-map.ts): every card's
+"leagueId" equals the dump's `league` when that id is a row of "League" (whose ids
+must equal fixtures/leagues.json — the seed writes exactly those), else NULL (the
+NULL count is reported); avgRating / ratingCount / views equal the dump fields of
+the same names; the picker managers' "pickerOrder" is their index in the static
+snapshot and every other manager has none; CatalogueMeta."playersDumpedAt" equals
+the manifest's `dumpedAt` when that is a strict UTC ISO time (else the seed kept
+the stored value — reported, not compared).
 
 Manager duplicates (cross-fill checks). A no-art manager (created by the cross-fill
 from an eFHUB coach) duplicates an art manager when its name equals the art row's
@@ -59,6 +70,7 @@ from __future__ import annotations
 
 import argparse
 import collections
+import datetime
 import json
 import os
 import re
@@ -123,6 +135,44 @@ CROSSFILL_ALIASES = {
 
 def skill_slug(key: str) -> str:
     return SKILL_KEY_ALIASES.get(key, key[2:].replace("_", "-"))
+
+
+# Mirrors DUMPED_AT_RE / parseDumpedAt in packages/db/src/efootbase-map.ts.
+DUMPED_AT_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?Z$")
+
+
+def parse_dumped_at(value: object) -> str | None:
+    """The manifest's dumpedAt as 'YYYY-MM-DDTHH:MM:SS.mmmZ', or None when the seed keeps the stored date."""
+    if not isinstance(value, str):
+        return None
+    m = DUMPED_AT_RE.match(value)
+    if not m:
+        return None
+    y, mo, d, h, mi = (int(m.group(i)) for i in range(1, 6))
+    s = int(m.group(6) or 0)
+    ms = int((m.group(7) or "0").ljust(3, "0"))
+    try:
+        t = datetime.datetime(y, mo, d, h, mi, s, ms * 1000)
+    except ValueError:
+        return None  # an impossible date (month 13, Feb 30, hour 24 …)
+    return t.strftime("%Y-%m-%dT%H:%M:%S.") + f"{ms:03d}Z"
+
+
+def card_league(value: object, known: set[int]) -> int | None:
+    """Mirrors cardLeagueId: an integer league the League table holds, else None (JSON 26.0 is the
+    integer 26 in JavaScript, so an integral float counts as that integer here too)."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    if isinstance(value, float) and not value.is_integer():
+        return None
+    return int(value) if int(value) in known else None
+
+
+def as_int(value: object, fallback: int) -> int:
+    """Mirrors asInt (efootbase-map.ts): a finite number truncated, else the fallback."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value != value or value in (float("inf"), float("-inf")):
+        return fallback
+    return int(value)
 
 failures: list[str] = []
 passes = 0
@@ -295,6 +345,7 @@ def main() -> int:
     ap.add_argument("--database-url")
     ap.add_argument("--jsonl", default=str(DUMP_DIR / "players.jsonl"))
     ap.add_argument("--meta", default=str(DUMP_DIR / "players_meta.json"))
+    ap.add_argument("--manifest", help="the dump's manifest.json (default: next to --jsonl)")
     ap.add_argument("--static-dir", default=str(DUMP_DIR / "static"),
                     help="efootbase static snapshot (skills.json / managers.json); checks are skipped when missing")
     ap.add_argument("--efhub-db", default=os.environ.get("EFHUB_DB_PATH") or str(EFHUB_DB_DEFAULT),
@@ -370,6 +421,9 @@ def main() -> int:
                 "nn": r.get("name_normalized"), "llh": r.get("leg_length_height"),
                 "ovr": r.get("overall_rating"), "ballWinning": r.get("tackling"),
                 "maxJump": (r.get("max_attributes") or {}).get("jumping"),
+                "league": r.get("league"),
+                "avg": r.get("avgRating") if isinstance(r.get("avgRating"), (int, float)) and not isinstance(r.get("avgRating"), bool) else None,
+                "votes": as_int(r.get("ratingCount"), 0), "views": as_int(r.get("views"), 0),
             }
     print(f"  rows {n} | jumping=40&set_piece=40 {jump40} | true s_* flags {true_flags} | s_* keys {len(skill_keys)} | boosters {len(boosters)}")
     check(n > 0, "dump has rows")
@@ -447,6 +501,71 @@ def main() -> int:
     enum_values = {r[0] for r in db.rows('SELECT unnest(enum_range(NULL::"CardType"))::text')}
     empty_types = sorted(v for v in enum_values if db_ctype.get(v, 0) == 0)
     check(not empty_types, f"no CardType enum value is empty ({empty_types or 'none empty'})")
+
+    # ---- card league and community ratings (efootbase-data-refresh-1024) -------
+    # Read on their own: a database without migration 20261024000000_catalogue_data_refresh
+    # fails these checks clearly instead of the whole per-row block above.
+    print("Player card league / ratings")
+    league_ids = {int(r[0]) for r in db.rows('SELECT id FROM "League"')}
+    fixture_leagues = {int(k) for k in json.loads((FIXTURES_DIR / "leagues.json").read_text())["leagues"]}
+    check(league_ids == fixture_leagues,
+          f"League rows {len(league_ids)} == fixtures/leagues.json ids {len(fixture_leagues)} (the seed writes exactly those)")
+    try:
+        lrows = db.rows('SELECT id, coalesce("leagueId"::text, \'\'), coalesce("avgRating"::text, \'\'), "ratingCount", views '
+                        'FROM "Player"', fatal=False)
+    except RuntimeError as e:
+        check(False, f'Player."leagueId" readable (run pnpm db:migrate, then the seed): {e}')
+        lrows = []
+    bad_league: list[str] = []
+    bad_rating: list[str] = []
+    no_league = 0
+    for pid, lid, avg, votes, views in lrows:
+        d = dump.get(int(pid))
+        if d is None:
+            continue
+        want = card_league(d["league"], league_ids)
+        got = int(lid) if lid else None
+        if got != want:
+            bad_league.append(f"id={pid} db={got} dump league={d['league']!r}")
+        if want is None:
+            no_league += 1
+        got_avg = float(avg) if avg else None
+        if (got_avg is None) != (d["avg"] is None) or (got_avg is not None and abs(got_avg - float(d["avg"])) > 1e-9) \
+                or int(votes) != d["votes"] or int(views) != d["views"]:
+            bad_rating.append(f"id={pid} db=({avg or None}, {votes}, {views}) dump=({d['avg']}, {d['votes']}, {d['views']})")
+    if lrows:
+        check(not bad_league, f"leagueId == dump league when the League table holds it, else NULL, on 100% of dump rows"
+                              + (f" — {len(bad_league)} differ, e.g. {bad_league[:3]}" if bad_league else ""))
+        print(f"  info dump rows without a stored league (league missing or not in the League table): {no_league}")
+        check(not bad_rating, "avgRating / ratingCount / views == the dump fields of the same names on 100% of dump rows"
+                              + (f" — {len(bad_rating)} differ, e.g. {bad_rating[:3]}" if bad_rating else ""))
+
+    # ---- dump date (CatalogueMeta) --------------------------------------------
+    print("CatalogueMeta")
+    manifest_path = Path(args.manifest) if args.manifest else jsonl.parent / "manifest.json"
+    manifest_at: str | None = None
+    raw_at: object = None
+    if manifest_path.exists():
+        try:
+            raw_at = (json.loads(manifest_path.read_text()) or {}).get("dumpedAt")
+        except (ValueError, AttributeError):
+            raw_at = None
+        manifest_at = parse_dumped_at(raw_at)
+    try:
+        mrow = db.rows('SELECT count(*) OVER (), coalesce(to_char("playersDumpedAt", \'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"\'), \'\'), '
+                       '("seededAt" IS NOT NULL)::text FROM "CatalogueMeta"', fatal=False)
+    except RuntimeError as e:
+        check(False, f'CatalogueMeta readable (run pnpm db:migrate, then the seed): {e}')
+        mrow = None
+    if mrow is not None:
+        check(len(mrow) == 1 and mrow[0][0] == "1", f"CatalogueMeta holds exactly one row ({len(mrow)})")
+        stored_at = mrow[0][1] if mrow else ""
+        check(bool(mrow) and mrow[0][2] == "true", "CatalogueMeta.seededAt is set (a seed ran after the migration)")
+        if manifest_at is not None:
+            check(stored_at == manifest_at, f"CatalogueMeta.playersDumpedAt {stored_at or 'NULL'} == manifest dumpedAt {manifest_at}")
+        else:
+            print(f"  info {manifest_path} has no strict UTC dumpedAt ({raw_at!r}): the seed kept the stored date "
+                  f"({stored_at or 'NULL'}) — not compared")
 
     # ---- skills --------------------------------------------------------------
     print("Skill / PlayerSkill")
@@ -565,6 +684,19 @@ def main() -> int:
                     or [r[3], r[4]] != want_pills or not r[3] or (r[3] not in BASE_STATS) or (r[4] and r[4] not in BASE_STATS):
                 bad_m.append(f"{mid} {r[1:5]} vs {m['name']} {m['rating']} {want_pills}")
         check(not bad_m, f"picker managers: name, rating 83–90 and pills (eFootLab stat names) match the snapshot ({bad_m[:3]})")
+        # Picker order (efootbase-data-refresh-1024): the 0-based index in the snapshot array
+        # (the reference's drawer order); no order outside the picker.
+        want_order = {m["id"]: i for i, m in enumerate(json.loads(static_managers_path.read_text()))}
+        try:
+            orows = db.rows('SELECT id::text, coalesce("pickerOrder"::text, \'\') FROM "Manager"', fatal=False)
+        except RuntimeError as e:
+            check(False, f'Manager."pickerOrder" readable (run pnpm db:migrate, then the seed): {e}')
+            orows = []
+        if orows:
+            bad_o = [f"{mid}: db {o or 'NULL'} snapshot {want_order.get(mid)}" for mid, o in orows
+                     if (int(o) if o else None) != want_order.get(mid)]
+            check(not bad_o, f"pickerOrder == snapshot index for the {len(want_order)} picker managers, NULL for the "
+                             f"{len(orows) - len(want_order)} others ({len(bad_o)} differ: {bad_o[:3]})")
     else:
         print(f"  picker checks skipped ({static_managers_path} missing)")
 
@@ -579,6 +711,9 @@ def main() -> int:
         # gives 1,477 rows and still 1,475 with tactics: Makino Tomoaki and R. Rodríguez
         # are filled by id (their no-art twins 104079 / 100528 are deleted), Jürgen
         # Klopp 17609902885263 and Cristian Chivu 17610171323785 stay empty on purpose.
+        # With the 70 picker managers of 2026-10-24 (+ Niko Kovač 17610439655559, filled
+        # by name from eFHUB coach 135, which is no Manager row): 1,478 rows (70 art +
+        # 1,408 no-art), 1,476 with tactics.
         tactics = db.count('SELECT count(*) FROM "Manager" WHERE "possessionGame" > 0')
         check(tactics >= 1475, f"managers with non-zero tactics {tactics} >= 1475")
         # The art managers legitimately contain several versions of one coach

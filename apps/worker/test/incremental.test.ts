@@ -121,6 +121,15 @@ if ("skip" in scratch) {
     assert(seeded.code === 0, `baseline seeded with the real seed (exit ${seeded.code})`);
     if (seeded.code !== 0) console.error(seeded.output.split("\n").slice(-15).join("\n"));
     const id = (k: number) => BigInt(FAKE_ID_BASE + k);
+    const leagueOf = async (pid: bigint) => (await prisma.player.findUnique({ where: { id: pid }, select: { leagueId: true } }))?.leagueId;
+    // The seed stores each card's own league (fixture league 1 for the synthetic rows) — the reference
+    // value the incremental write must reproduce for the same row shape (catalogue-data-refresh "Card League").
+    {
+      const seededLeagues = await prisma.player.groupBy({ by: ["leagueId"], _count: { _all: true } });
+      assert(seededLeagues.length === 1 && seededLeagues[0]!.leagueId === 1 && seededLeagues[0]!._count._all === 5, `baseline seed: the 5 cards store their own league 1 (${JSON.stringify(seededLeagues.map((g) => [g.leagueId, g._count._all]))})`);
+      const meta = await prisma.catalogueMeta.findUniqueOrThrow({ where: { id: 1 } });
+      assert(meta.playersDumpedAt === null && meta.seededAt !== null && /manifest\.json missing — the stored dump date/.test(seeded.output), "baseline seed without a manifest: the dump date stays unknown (kept, with a notice), seededAt written");
+    }
     // Cross-fill values on card 0 (columns the efootbase write paths never touch).
     await prisma.$executeRaw`UPDATE "Player" SET stars = 4, reputation = 3, "overallPotential" = 77, "communityTier" = 'S', "ratingCF" = 88, "gkClearing" = 41 WHERE id = ${id(0)}`;
     const crossfill = async (pid: bigint) =>
@@ -164,6 +173,8 @@ if ("skip" in scratch) {
       assert(stats.cardsNew === 3 && stats.cardsChanged === 0 && stats.cardsUnchanged === 5, `new cards: stats new 3 / changed 0 / unchanged 5 (${stats.cardsNew}/${stats.cardsChanged}/${stats.cardsUnchanged})`);
       const links = await prisma.playerSkill.count({ where: { playerId: { in: newIds } } });
       assert(links === fresh.filter((r) => r.s_one_touch_pass).length, `new cards: their skill links were written (${links})`);
+      const newLeagues = await Promise.all(newIds.map(leagueOf));
+      assert(newLeagues.every((l) => l === 1), `new cards: each stores its own league 1, as the seed does for the same rows (${newLeagues.join(", ")})`);
       const api = reqs.filter((r) => r.path.startsWith("/api/"));
       assert(api.length === 2 && api[0]!.path === "/api/meta" && api[1]!.path === "/api/players", `new cards: 2 API requests — meta, then one newest-first page (${api.map((r) => r.path).join(", ")})`);
       assert(api[1]!.query.get("sort") === "time_added" && api[1]!.query.get("order") === "desc" && api[1]!.query.get("page") === "1", "new cards: players page requested newest first");
@@ -221,6 +232,7 @@ if ("skip" in scratch) {
       assert(country?.id === maxCountry + 1 && country.flagUrl === `${bucket.base}/emblems/nationality/${hashOf("newland")}.png`, "new country inserted with the next free id and its flag URL");
       assert(team?.id === maxTeam + 1 && team.countryId === country?.id && team.leagueId === 2 && team.national === false, "new team inserted with the next free id, its country and league");
       assert(p8?.nationalityId === country?.id && p8?.teamId === team?.id, "the new card points at the new country and team");
+      assert(p8?.leagueId === 2, `the new card stores its own league 2 (${p8?.leagueId})`);
       const changedTables = digestDiff(before, await catalogueDigests(prisma, [id(0), id(8)]));
       assert(JSON.stringify(changedTables) === JSON.stringify(["Country", "Team"]), `only the inserted Country / Team rows were added elsewhere (differs: ${changedTables.join(", ")})`);
       const cdnGets = reqs.filter((r) => r.path.startsWith("/cdn/") && r.method === "GET").map((r) => r.path).sort();
@@ -423,6 +435,22 @@ if ("skip" in scratch) {
       assert(row.status === "CANCELLED", `W3: cancel during the write transaction → CANCELLED (${row.status}: ${row.error ?? ""})`);
       assert(written === 0 && digestDiff(before, await catalogueDigests(prisma)).length === 0, `W3: the transaction was rolled back — nothing committed (${written} of the 2 new cards in the database; differs: ${digestDiff(before, await catalogueDigests(prisma)).join(", ") || "none"})`);
       assert((await prisma.syncRun.count({ where: { status: "RUNNING" } })) === 0, "W3: no run remains RUNNING");
+    }
+
+    // ---- card league (catalogue-data-refresh "Card League"): the card's own league, not its team's;
+    //      a league the League table does not hold stores none — the run is not refused for it (the
+    //      card's team is known), and no League row is invented ----
+    {
+      const other = seedableRows(1, { cdnBase: fake.cdnBase, newestTimeAdded: T + 500_000, startIndex: 80, extra: () => ({ league: 4 }) });
+      const unknown = seedableRows(1, { cdnBase: fake.cdnBase, newestTimeAdded: T + 499_000, startIndex: 81, extra: () => ({ league: 999 }) });
+      fake.setRows([...other, ...unknown, ...baseline]);
+      const leagues0 = await prisma.league.count();
+      const { row } = await runOnce();
+      assert(row.status === "OK", `card league: run OK (${row.error ?? ""})`);
+      const teamLeague = (await prisma.team.findFirst({ where: { name: "Test FC" }, select: { leagueId: true } }))?.leagueId;
+      assert(teamLeague === 1 && (await leagueOf(id(80))) === 4, `a card of team Test FC (league ${teamLeague}) whose own league is 4 stores 4 (${await leagueOf(id(80))})`);
+      assert((await leagueOf(id(81))) === null && (await prisma.player.count({ where: { id: id(81) } })) === 1, `a card whose league 999 is not in the League table is written with no league (${await leagueOf(id(81))})`);
+      assert((await prisma.league.count()) === leagues0, "card league: no League row was added for the unknown league");
     }
 
     // ---- the key never reaches a stored log, error or statistic ----

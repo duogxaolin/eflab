@@ -307,10 +307,12 @@ export function PlayersClient() {
   const chooseSort = (sort: PlayersSort) => update({ sort, order: defaultSortOrder(sort) });
   const fieldSortActive = !isSortPreset(state.sort);
 
-  // Sort row: the three presets — New cards (the default, no `sort` in the
-  // URL), High to low and Low to high by max overall (change
-  // efootbase-function-parity; the reference's Trending and Top rated need
-  // data eFootLab does not hold) — as a 32 px segmented radiogroup next to the
+  // Sort row: the presets — New cards (the default, no `sort` in the URL),
+  // High to low and Low to high by max overall (change
+  // efootbase-function-parity; the reference's Trending needs popularity data
+  // eFootLab does not hold), and Top rated while its measured rule is set
+  // (TOP_RATED in @eflab/shared, change efootbase-data-refresh-1024: at least
+  // 10 votes, average DESC, card id DESC — measured 2026-10-24) — as a 32 px segmented radiogroup next to the
   // field-sort select (our addition: "More sorts…") and, while a field sort
   // is active, its direction. From 768 px the row sits right of the title and
   // wraps right-aligned when it does not fit (one line from 1280 px); below

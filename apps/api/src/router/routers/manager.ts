@@ -1,12 +1,16 @@
 // managerRouter — the managers efootbase offers in its picker (change
-// efootbase-exact-model-managers). 69 rows carry `Manager.inPicker` (seeded from
-// the static efootbase snapshot, docs/efootbase-static-snapshot.md); their two
-// stat pills are stored as eFootLab stat names in booster1Stat / booster2Stat
-// (24 of the 69 have only booster1Stat — efootbase lists them with one pill).
+// efootbase-exact-model-managers). The rows of the static efootbase snapshot
+// carry `Manager.inPicker` (docs/efootbase-static-snapshot.md; 70 since the
+// 2026-10-24 snapshot, 69 before); their two stat pills are stored as eFootLab
+// stat names in booster1Stat / booster2Stat (24 of the 70 have only
+// booster1Stat — efootbase lists them with one pill).
 // The web's Progression panel uses the rating (it becomes the Manager
 // Proficiency level) and the pills (+1 each after the boosters).
-// Order: rating DESC, then id ASC — efootbase sorts by rating too but keeps its
-// own source order inside a rating, which the Manager table has no column for.
+// Order: rating DESC, then the reference's own order inside a rating — the
+// stored position in the static snapshot, read from its drawer
+// (`Manager.pickerOrder`, change efootbase-data-refresh-1024,
+// catalogue-data-refresh "Manager Picker Order") — then id ASC for a picker
+// row without one (none after a seed with the snapshot).
 import { TRPCError } from "@trpc/server";
 import { prisma } from "@eflab/db";
 import { BASE_STATS, type BaseStat, type PickerManagerDTO } from "@eflab/shared";
@@ -37,7 +41,7 @@ export const managerRouter = router({
   picker: publicProcedure.query(async (): Promise<PickerManagerDTO[]> => {
     const rows = await prisma.manager.findMany({
       where: { inPicker: true },
-      orderBy: [{ rating: "desc" }, { id: "asc" }],
+      orderBy: [{ rating: "desc" }, { pickerOrder: { sort: "asc", nulls: "last" } }, { id: "asc" }],
       select: { id: true, name: true, rating: true, imageUrl: true, booster1Stat: true, booster2Stat: true },
     });
     return rows.map((r) => ({

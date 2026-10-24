@@ -87,8 +87,8 @@ if ("skip" in scratch) {
     fake = await startFakeSource({ key: TEST_SECRETS.EFBASE_API_KEY, teams: [{ id: 1, name: "Test FC", emblem_images: {} }] });
     bucket = await startFakeBucket(uploadDest);
     const workerEnv = loadWorkerEnv({ ...workerTestEnv({ databaseUrl: scratch.url, apiBase: fake.apiBase, uploadDest, r2PublicBase: bucket.base }), EFOOTBASE_STATIC_DIR: staticDir });
-    const deps = (env: WorkerEnv = workerEnv): WorkerDeps => ({ db: prisma, env, handlers: defaultHandlers, log: () => undefined });
-    const runOnce = async (env: WorkerEnv = workerEnv) => {
+    const deps = (env: WorkerEnv = workerEnv, now?: () => Date): WorkerDeps => ({ db: prisma, env, handlers: defaultHandlers, log: () => undefined, ...(now ? { now } : {}) });
+    const runOnce = async (env: WorkerEnv = workerEnv, now?: () => Date) => {
       await prisma.syncConfig.update({ where: { id: 1 }, data: { blockedUntil: null, blockedReason: null, enabled: false } });
       fake!.setMode("ok");
       fake!.setBlockAfter(null);
@@ -96,7 +96,7 @@ if ("skip" in scratch) {
       const n0 = fake!.requests.length;
       const b0 = bucket!.requests.length;
       const t0 = Date.now() - 1;
-      await runner.tick(deps(env));
+      await runner.tick(deps(env, now));
       const row = await prisma.syncRun.findUniqueOrThrow({ where: { id: run.id } });
       return { row, stats: row.stats as SyncRunStats, reqs: fake!.requests.slice(n0), bucketReqs: bucket!.requests.slice(b0), t0 };
     };
@@ -141,8 +141,18 @@ if ("skip" in scratch) {
     const rows = seedableRows(5, { cdnBase: fake.cdnBase, newestTimeAdded: T });
     fake.setRows(rows);
     {
-      const { row, stats, reqs, t0 } = await runOnce();
+      // A fixed run clock (with milliseconds): the dump child gets it as --dumped-at, the seed child reads
+      // it back from the staging manifest and stores it as the catalogue's dump date.
+      const runClock = new Date(Math.floor(Date.now() / 1000) * 1000 + 123);
+      const { row, stats, reqs, t0 } = await runOnce(workerEnv, () => runClock);
       assert(row.status === "OK", `first full run: OK (${row.error ?? ""})`);
+      const meta = await prisma.catalogueMeta.findUniqueOrThrow({ where: { id: 1 } });
+      const metaText = (await prisma.$queryRaw<Array<{ t: string | null }>>`SELECT "playersDumpedAt"::text AS t FROM "CatalogueMeta" WHERE id = 1`)[0]?.t;
+      assert(meta.playersDumpedAt?.toISOString() === runClock.toISOString() && metaText === runClock.toISOString().replace("T", " ").replace("Z", ""),
+        `first full run: the dump date = the run's --dumped-at ${runClock.toISOString()}, stored as UTC under the ${sessionTz} session (${meta.playersDumpedAt?.toISOString()}, column text ${metaText})`);
+      assert(meta.seededAt !== null && meta.seededAt.getTime() >= t0 && meta.seededAt.getTime() <= Date.now(), "first full run: seededAt = the seed's own time");
+      const byLeague = await prisma.player.groupBy({ by: ["leagueId"], _count: { _all: true } });
+      assert(byLeague.length === 1 && byLeague[0]!.leagueId === 1 && byLeague[0]!._count._all === 5, `first full run: every card stores its own league (1) (${JSON.stringify(byLeague.map((g) => [g.leagueId, g._count._all]))})`);
       assert(stats.cardsNew === 5 && stats.cardsChanged === 0 && stats.cardsUnchanged === 0, `first full run: 5 new (${stats.cardsNew}/${stats.cardsChanged}/${stats.cardsUnchanged})`);
       assert((await prisma.player.count()) === 5 && (await prisma.skill.count()) > 0 && (await prisma.league.count()) > 0, "first full run: the seed wrote the players and the fixture catalogue");
       const api = reqs.filter((r) => r.path.startsWith("/api/")).map((r) => r.path);

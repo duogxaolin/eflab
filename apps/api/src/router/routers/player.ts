@@ -11,10 +11,12 @@ import {
   POSITIONS,
   SEARCH_MIN_LENGTH,
   SEARCH_PAGE_SIZE,
+  TOP_RATED,
   escapeLike,
   hasNonAscii,
   isSortPreset,
   normalizeSearchQuery,
+  topRatedQuery,
   type BaseStat,
   type PhysiqueField,
   type BoosterDTO,
@@ -324,7 +326,11 @@ function primaryOrder(sort: string, direction: Dir): OrderBy {
 // The efootbase-style presets (SORT_PRESETS in @eflab/shared) carry their own
 // direction and ignore `order`; High to low / Low to high sort by the max
 // overall (the reference's rule, survey 2026-10-23 S2 §2). The former
-// `trending` / `top` arrive here already read as `new` / `highest` (Zod).
+// `trending` arrives here already read as `new`, and `top` as `highest` while
+// Top rated is not offered (Zod, LEGACY_SORT_PRESETS). Top rated (only with a
+// measured TOP_RATED rule, change efootbase-data-refresh-1024 design D7):
+// average rating DESC, the measured tiebreak, card id DESC — its vote minimum
+// is a filter (topRatedWhere).
 function orderByFor(sort: string, direction: Dir): OrderBy[] {
   if (isSortPreset(sort)) {
     switch (sort) {
@@ -334,9 +340,19 @@ function orderByFor(sort: string, direction: Dir): OrderBy[] {
         return [{ maxOvr: "desc" }, { id: "desc" }];
       case "lowest":
         return [{ maxOvr: "asc" }, { id: "asc" }];
+      case "top":
+        // isSortPreset("top") holds only when TOP_RATED is set (measured
+        // 2026-10-24: avgRating DESC NULLS LAST, id DESC — topRatedQuery).
+        if (TOP_RATED) return topRatedQuery(TOP_RATED).orderBy;
+        break;
     }
   }
   return [primaryOrder(sort, direction), { id: direction }];
+}
+
+/** Top rated's set: the cards with at least TOP_RATED.minVotes votes (and an average). */
+function topRatedWhere(sort: string): Prisma.PlayerWhereInput | null {
+  return sort === "top" && TOP_RATED ? topRatedQuery(TOP_RATED).where : null;
 }
 
 // `{ column: { gte, lte } }` for an optional min/max pair; null when both are
@@ -594,8 +610,12 @@ export const playerRouter = router({
       if (input.strongerFoot !== undefined) and.push({ strongerFoot: input.strongerFoot });
       // Nation / Team / League: OR within the list (`IN`), AND with everything
       // else. clubIds and teamNames (Team.name, unique) → one set of the
-      // card's Team; leagueIds → the Team's League. Names that match no team
-      // add nothing; a team filter left with no team matches no card.
+      // card's Team; leagueIds → the card's OWN league (Player.leagueId, the
+      // dump's `league` — change efootbase-data-refresh-1024, catalogue-data-refresh
+      // "Card League": the reference's rule; a team with cards in two leagues
+      // is split by them, and a card without a stored league matches no
+      // League selection). Names that match no team add nothing; a team
+      // filter left with no team matches no card.
       if (nations.length > 0) and.push({ nationalityId: { in: nations } });
       if (clubs.length + teamNames.length > 0) {
         const named = teamNames.length > 0
@@ -605,7 +625,7 @@ export const playerRouter = router({
         if (teams.length === 0) return empty;
         and.push({ teamId: { in: teams } });
       }
-      if (leagues.length > 0) and.push({ team: { is: { leagueId: { in: leagues } } } });
+      if (leagues.length > 0) and.push({ leagueId: { in: leagues } });
       // Skills: every selected skill must be present (one EXISTS per skill);
       // skillKeys go through Skill.efbKey, and a key that is no stored skill
       // matches no card.
@@ -625,6 +645,12 @@ export const playerRouter = router({
         rangeWhere("weight", input.weightMin, input.weightMax),
         rangeWhere("age", input.ageMin, input.ageMax),
       ]) if (r) and.push(r);
+      // Community Rating (change efootbase-data-refresh-1024): the stored
+      // average is at least ratingMin (2–10), no vote minimum; NULL never
+      // matches `>=`, so a card without ratings is never listed.
+      if (input.ratingMin !== undefined) and.push({ avgRating: { gte: input.ratingMin } });
+      const topRated = topRatedWhere(input.sort);
+      if (topRated) and.push(topRated);
       // Stat ranges — base columns, or the max* columns with `statsAtMax`.
       for (const sr of input.statRanges ?? []) {
         const base = statDbColumn[sr.stat];

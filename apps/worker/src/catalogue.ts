@@ -11,7 +11,9 @@
 //   · popularity counters (views, ratingCount, avgRating) are not card data and
 //     are ignored (they move on every dump; counting them would mark nearly
 //     every card "changed" and make the full run compare every image).
-// Cross-fill columns are not in the mapping, so they never count.
+// Cross-fill columns are not in the mapping, so they never count. The card's
+// own league (`leagueId`, openspec efootbase-data-refresh-1024) is a League id
+// (the source's own code, stable across seeds), so it is compared by value.
 //
 // Values are compared through a canonical text form (bigint / Date / number /
 // boolean / string are kept apart), so a value read back from Postgres equals
@@ -50,7 +52,7 @@ let compared: string[] | null = null;
 /** Mapped Player columns compared by value (buildPlayerRow sets the same keys for every row). */
 export function comparedPlayerColumns(): string[] {
   if (compared) return compared;
-  const probe = buildPlayerRow({ id: 1, pos: 0, condition: 0 }, 1n, new Map(), new Map(), new Map(), new Map(), []);
+  const probe = buildPlayerRow({ id: 1, pos: 0, condition: 0 }, 1n, new Map(), new Map(), new Map(), new Map(), new Set(), []);
   compared = Object.keys(probe).filter((k) => k !== "id" && !VOLATILE_PLAYER_COLUMNS.has(k) && !LOOKUP_COLUMNS.has(k)).sort();
   return compared;
 }
@@ -130,6 +132,12 @@ export async function loadDbLookups(db: PrismaClientType): Promise<DbLookups> {
 export function leagueFixture(): Record<string, { name: string; region: string }> {
   const raw = JSON.parse(readFileSync(join(DB_PACKAGE_DIR, "fixtures/leagues.json"), "utf8")) as { leagues: Record<string, { name: string; region: string }> };
   return raw.leagues;
+}
+
+/** The League ids a seed writes (= fixtures/leagues.json): the known-league set
+ *  of the rows a seed will write (`buildPlayerRow`'s `knownLeagueIds`). */
+export function seedLeagueIds(): Set<number> {
+  return new Set(Object.keys(leagueFixture()).map(Number));
 }
 
 const PAGE = 2_000;

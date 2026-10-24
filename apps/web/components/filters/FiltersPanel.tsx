@@ -17,6 +17,7 @@ import {
   type Position,
 } from "@eflab/shared";
 import { conditionUrl } from "@/lib/r2-images";
+import { CommunityRatingFilter } from "./CommunityRatingFilter";
 import { RangeFields } from "./RangeFields";
 import { ToggleGroup } from "./ToggleGroup";
 
@@ -33,7 +34,8 @@ const STARS = (n: number) => Array.from({ length: n }, (_, i) => i + 1);
  * long lists (Stats, Body Model, Playing Style, Skills, Nation, League, Team)
  * followed by the inline sections — Position, Card Type, Base / Max Overall
  * Rating, Strong Foot, Condition, Form, WF Accuracy, WF Usage, Height, Weight,
- * Age. Rendered in the desktop <aside> and inside the mobile "Filters" bottom
+ * Age, Community Rating (the spec's filter priority order; change
+ * efootbase-data-refresh-1024). Rendered in the desktop <aside> and inside the mobile "Filters" bottom
  * sheet. Every change goes through `update`, which writes the URL and resets
  * the page. Look (`.filter-*` in globals.css): 40 px launcher rows with a
  * Lucide icon tile and a chevron, 34 px toggles, 36 px number fields, 12 px
@@ -174,6 +176,8 @@ export function FiltersPanel({
       <RangeFields label="Height" unit=" cm" value={state.height} bounds={b.height} onChange={(height) => update({ height })} resetKey={resetKey} />
       <RangeFields label="Weight" unit=" kg" value={state.weight} bounds={b.weight} onChange={(weight) => update({ weight })} resetKey={resetKey} />
       <RangeFields label="Age" value={state.age} bounds={b.age} onChange={(age) => update({ age })} resetKey={resetKey} />
+
+      <CommunityRatingFilter value={state.rating} onChange={(rating) => update({ rating })} />
     </div>
   );
 }

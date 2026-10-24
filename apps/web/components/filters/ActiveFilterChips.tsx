@@ -87,6 +87,8 @@ export function ActiveFilterChips({
         return `Weight ${rangeText(f.range, " kg")}`;
       case "age":
         return `Age ${rangeText(f.range)}`;
+      case "rating":
+        return `Rating ≥ ${f.value}`;
       case "style":
         return PLAYING_STYLES[f.value] ?? String(f.value);
       case "ai":
