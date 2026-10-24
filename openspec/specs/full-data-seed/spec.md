@@ -8,11 +8,11 @@ The `pnpm db:seed` script MUST ingest all player cards (50,691 in the 2026-10-18
 
 #### Scenario: Running full seed
 - **WHEN** `pnpm db:seed` completes
-- **THEN** `SELECT COUNT(*) FROM "Player"` returns 50691, managers, teams, leagues, skills, boosters, packs and featured bundles are loaded, and user, account and session rows are unchanged.
+- **THEN** `SELECT COUNT(*) FROM "Player"` returns at least the number of rows of the dump (50,691 on the 2026-10-18 dump; earlier cards missing from a newer dump are kept unless `--prune`), managers, teams, leagues, skills, boosters, packs and featured bundles are loaded, and user, account and session rows are unchanged.
 
 #### Scenario: Running the refresh
 - **WHEN** `pnpm db:refresh` completes
-- **THEN** the player count is 50694, managers number at least 1,475 with non-zero tactics, and tier badges are present on 10,745 players.
+- **THEN** the player count is the dump's plus the eFHUB-only players (50,694 on the 2026-10-18 dump), the managers the eFHUB file can fill carry non-zero tactics (at least 1,475 on 2026-10-18), and tier badges are present as the eFHUB file gives them (10,745 on 2026-10-18).
 
 ### Requirement: Fuzzy Multilingual Search
 The system MUST enable `pg_trgm` and `unaccent` PostgreSQL extensions through a migration or bootstrap step that runs on a fresh database, and MUST create index(es) that serve name search so accent- and case-insensitive substring and fuzzy queries across English, accented, Japanese, and Chinese names use an index scan.

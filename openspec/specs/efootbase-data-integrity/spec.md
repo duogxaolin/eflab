@@ -12,6 +12,8 @@ The seeder SHALL map every efootbase player field it stores from the field that 
 - `injuryResistance` comes from `injury_resistance`, and `marketValue` from `player_value`.
 - `dribbleHeight` comes from `leg_length_height`.
 - The normalised ASCII name comes from `name_normalized`.
+- The card's own league (`leagueId`) comes from `league`, stored only when that league exists in the League table.
+- `avgRating`, `ratingCount` and `views` come from the dump fields of the same names, and the dump's date (`dumpedAt` of its manifest) is stored once in the catalogue metadata row.
 
 #### Scenario: Base stats are not constants
 - **WHEN** the seed completes
@@ -24,6 +26,10 @@ The seeder SHALL map every efootbase player field it stores from the field that 
 #### Scenario: Condition follows the dump
 - **WHEN** a dump row has `condition` = 2
 - **THEN** the stored condition letter is "C", and the distribution of stored letters equals the dump distribution (E:535, D:2,460, C:38,358, B:6,613, A:2,725 for the 2026-10-18 dump).
+
+#### Scenario: League follows the dump
+- **WHEN** the seed completes
+- **THEN** for every player whose dump `league` exists in the League table the stored league id equals it, the others store none, and `scripts/verify-seed.py` checks both.
 
 ### Requirement: Card Type Labels Match efootbase
 The seeder SHALL derive each player's card type from the dump's card-type code using the labels declared in the dump's `players_meta.json`, checked against one table of those dump labels (`CARD_TYPE_DUMP_LABELS`: Standard, Legendary, Trending, Selection, Epic, Highlight, Strike Arena), and the web UI SHALL display the label names that efootbase displays for that code, taken from one display table (`CARD_TYPE_LABELS`): Standard, Icons, Trending, Selection, Epic - Big Time, Highlight and Strike Arena (efootbase shows no Strike Arena label; eFootLab keeps its own). The two tables SHALL be separate so that a display rename never changes what the seed accepts. Where the card types are offered as filter toggles they SHALL appear in efootbase's order — Standard, Selection, Icons, Trending, Highlight, Epic - Big Time — followed by Strike Arena.
@@ -93,7 +99,7 @@ The repository SHALL provide one command that seeds and then cross-fills, and th
 
 #### Scenario: Refresh result
 - **WHEN** the refresh command completes on the standard dump and eFHUB SQLite
-- **THEN** the database holds 50,694 players (50,691 plus the 3 eFHUB-only players), at least 1,475 managers with non-zero tactic ratings, and tier badges on 10,745 players.
+- **THEN** the database holds every dump card plus the eFHUB-only players (50,691 + 3 = 50,694 on the 2026-10-18 dump), every manager the eFHUB file can fill carries non-zero tactic ratings (at least 1,475 on 2026-10-18), and the tier badges equal the eFHUB file's (10,745 on 2026-10-18); the counts of each refresh are recorded in `CLAUDE.md`.
 
 ### Requirement: Cross-Fill Correctness and Safety
 The cross-fill SHALL write `maxGkClearing` whenever it writes `gkClearing`, SHALL merge managers by exact id before name matching so no manager receives another version's ratings, SHALL leave a manager without tactic ratings when its id is not in the eFHUB file and the eFHUB entry of its name is another manager card in the database, and SHALL pass values from the eFHUB file to the database only as bound parameters or after strict validation.
@@ -114,11 +120,11 @@ Creating a new database from the repository SHALL produce a schema that includes
 - **THEN** the search endpoint returns results without error, and `\di` shows the trigram index on the player name column.
 
 ### Requirement: Manager Picker Roster
-The database SHALL mark exactly the managers that efootbase offers in its picker (69 at the time of the snapshot) as picker managers, SHALL contain every one of them by id, and the seed SHALL leave cross-fill owned manager columns untouched.
+The database SHALL mark exactly the managers that efootbase offers in its picker (the managers of the current static snapshot — 69 on 2026-10-18) as picker managers, SHALL store each one's position in the snapshot as its picker order, SHALL contain every one of them by id, and the seed SHALL leave cross-fill owned manager columns untouched.
 
 #### Scenario: Picker managers
 - **WHEN** the seed completes with the manager snapshot present
-- **THEN** 69 managers are marked as picker managers, each with a name, a rating from 83 to 90 and the stat pills efootbase lists (one or two — 45 of the 69 have a second pill), stored as eFootLab stat names, and the cross-filled tactic data of the other managers is unchanged.
+- **THEN** exactly the snapshot's managers (69 on 2026-10-18, 45 of them with a second pill) are marked as picker managers, each with a name, a rating from 83 to 90, the stat pills efootbase lists (one or two), stored as eFootLab stat names, and its picker order, and the cross-filled tactic data of the other managers is unchanged.
 
 ### Requirement: One Row Mapping For Every efootbase Write Path
 Every code path that writes efootbase player data to the database (the seed and the sync worker) SHALL build rows with the same mapping functions, so that a card written by either path has identical column values for identical input, and the seed SHALL accept its dump, metadata, packs and static-snapshot locations from configuration so a staging directory can be seeded.
