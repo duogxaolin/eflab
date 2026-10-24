@@ -1,14 +1,16 @@
 // playerRouter — trending (newest cards), list (filters + sort, slim previews),
-// byId (full card), search (normalised substring + trigram) and compare
-// (full cards in the caller's order).
+// byId (full card), search (name or pack name, max overall order, pages of 12)
+// and compare (full cards in the caller's order).
 import { prisma, Prisma } from "@eflab/db";
 import { TRPCError } from "@trpc/server";
 import {
   BASE_STATS,
   MAX_FILTER_IDS,
+  MAX_FILTER_SKILLS,
   PHYSIQUE_FIELDS,
   POSITIONS,
   SEARCH_MIN_LENGTH,
+  SEARCH_PAGE_SIZE,
   escapeLike,
   hasNonAscii,
   isSortPreset,
@@ -20,10 +22,12 @@ import {
   type CardType,
   type PlayerCardDTO,
   type PlayerListResult,
+  type PlayerSearchResult,
   type Position,
 } from "@eflab/shared";
 import { playerListInput, playerByIdInput, playerSearchInput, compareInput } from "@eflab/shared";
 import { publicProcedure, router } from "../trpc.js";
+import { ttlCache } from "../ttl-cache.js";
 import { rebaseR2Url } from "../../env.js";
 
 // Helper: convert a list of stat keys into a DB column name.
@@ -318,21 +322,18 @@ function primaryOrder(sort: string, direction: Dir): OrderBy {
 // makes pagination deterministic (design decision 7). The composite indexes
 // (maxOvr,id), (ovr,id), (releaseDate,id) serve the common sorts directly.
 // The efootbase-style presets (SORT_PRESETS in @eflab/shared) carry their own
-// direction and ignore `order`.
+// direction and ignore `order`; High to low / Low to high sort by the max
+// overall (the reference's rule, survey 2026-10-23 S2 §2). The former
+// `trending` / `top` arrive here already read as `new` / `highest` (Zod).
 function orderByFor(sort: string, direction: Dir): OrderBy[] {
   if (isSortPreset(sort)) {
-    const newestFirst = { releaseDate: { sort: "desc", nulls: "last" } } as const;
     switch (sort) {
-      case "trending":
-        return [newestFirst, { maxOvr: "desc" }, { id: "desc" }];
       case "new":
-        return [newestFirst, { id: "desc" }];
-      case "top":
-        return [{ maxOvr: "desc" }, { id: "desc" }];
+        return [{ releaseDate: { sort: "desc", nulls: "last" } }, { id: "desc" }];
       case "highest":
-        return [{ ovr: "desc" }, { id: "desc" }];
+        return [{ maxOvr: "desc" }, { id: "desc" }];
       case "lowest":
-        return [{ ovr: "asc" }, { id: "asc" }];
+        return [{ maxOvr: "asc" }, { id: "asc" }];
     }
   }
   return [primaryOrder(sort, direction), { id: direction }];
@@ -370,12 +371,71 @@ const PHYSIQUE_DB: ReadonlySet<string> = new Set([
 // AI playing-style flags (boolean columns).
 const AI_STYLE_DB: ReadonlySet<string> = new Set(["earlyCross", "incisiveRun", "longBallExpert", "mazingRun", "speedingBullet", "trickster"]);
 
-// Name predicate for player.list `q` (design decision 6): the query is
-// normalised in application code and matched as a substring of the lower-case
-// ASCII `nameNormalized` column with LIKE (served by the trigram GIN index).
-// Japanese/Chinese names are matched case-insensitively on their own columns
-// only when the query still contains non-ASCII characters after normalisation
-// (so "Schär" → "schar" never touches them, "三笘" does).
+// ---- One search rule for player.search and player.list `q` (change
+// efootbase-function-parity, design decision D8; reference survey 2026-10-23
+// S2 §4, S3 §1.5 / §2): the normalised query (accents and case folded,
+// spaces collapsed — normalizeSearchQuery) is a contiguous substring of the
+// card's normalised name OR of the name of the pack / campaign the card
+// belongs to (PackCard), and — for a query that is still non-ASCII after
+// normalisation — of the Japanese or Chinese name. From SEARCH_MIN_LENGTH (3)
+// characters; no fuzzy (trigram-similarity) tier and no word-order matching
+// ("messi lionel" finds nothing).
+//
+// Pack names are folded here in TypeScript with the same normalizeSearchQuery
+// as the query (never SQL `unaccent`, whose folding differs), from a 60-second
+// in-memory cache of (pack id, folded name) — packs change only when the
+// catalogue is re-seeded. The pack part then uses the PackCard primary key
+// (packId, playerId), the name part the trigram GIN index on nameNormalized.
+const PACK_NAME_TTL_MS = 60_000;
+const packNames = ttlCache(PACK_NAME_TTL_MS, async () => {
+  const packs = await prisma.pack.findMany({ select: { id: true, name: true } });
+  return packs.map((p) => ({ id: p.id, folded: normalizeSearchQuery(p.name) }));
+});
+
+interface SearchTerm {
+  /** The folded query (normalizeSearchQuery). */
+  normalized: string;
+  /** The trimmed query as typed (for the CJK columns). */
+  raw: string;
+  /** LIKE patterns, wildcards escaped (`ESCAPE '\'`). */
+  like: string;
+  rawLike: string;
+  /** Also match the Japanese / Chinese names (non-ASCII after folding: "三笘" yes, "Schär" → "schar" no). */
+  cjk: boolean;
+  /** Packs whose folded name contains the folded query. */
+  packIds: string[];
+}
+
+/** The search term of a query, or null when it is shorter than SEARCH_MIN_LENGTH after folding. */
+async function searchTerm(q: string): Promise<SearchTerm | null> {
+  const normalized = normalizeSearchQuery(q);
+  if (normalized.length < SEARCH_MIN_LENGTH) return null;
+  const raw = q.trim();
+  const packIds = (await packNames()).filter((p) => p.folded.includes(normalized)).map((p) => p.id);
+  return {
+    normalized,
+    raw,
+    like: `%${escapeLike(normalized)}%`,
+    rawLike: `%${escapeLike(raw)}%`,
+    cjk: hasNonAscii(normalized),
+    packIds,
+  };
+}
+
+/** The matched card ids of a term as one SQL fragment (`m` of design D8):
+ *  name LIKE (GIN trigram) ∪ PackCard by pack id (PK) [∪ CJK names]. */
+function matchedIdsSql(term: SearchTerm): Prisma.Sql {
+  const cjk = term.cjk
+    ? Prisma.sql`UNION SELECT id FROM "Player" WHERE "japName" ILIKE ${term.rawLike} ESCAPE '\\' OR "chineseName" ILIKE ${term.rawLike} ESCAPE '\\'`
+    : Prisma.empty;
+  return Prisma.sql`
+    SELECT id FROM "Player" WHERE "nameNormalized" LIKE ${term.like} ESCAPE '\\'
+    UNION SELECT "playerId" FROM "PackCard" WHERE "packId" = ANY(${term.packIds}::text[])
+    ${cjk}`;
+}
+
+// The same rule as a Prisma predicate for player.list (its count and page
+// queries are Prisma queries with every other filter).
 //
 // `%`, `_` and `\` must match literally. Prisma's `contains` does NOT escape
 // them (verified: `contains: "%"` matched all 50,694 rows), so:
@@ -384,40 +444,44 @@ const AI_STYLE_DB: ReadonlySet<string> = new Set(["earlyCross", "incisiveRun", "
 //     predicate stays inside the one count/page query);
 //   · a query that contains a wildcard character is resolved by raw SQL with
 //     `LIKE … ESCAPE '\'` into a (tiny) id list — no real name contains these
-//     characters, and a `WHERE id IN (…)` with tens of thousands of ids would
-//     exceed the 32,767 bind-variable limit of a prepared statement.
+//     characters.
+// The pack part is resolved into the member card ids (one PackCard query) and
+// OR-ed as `id IN (…)`, which Postgres serves with a BitmapOr of the trigram
+// index and the primary key (read-only EXPLAIN ANALYZE: "messi", 113 cards,
+// 0.6 ms). A `packCards: { some }` relation filter would turn the OR into a
+// sequential scan (44 ms, 546 ms with JIT) — kept only as the fallback above
+// PACK_MEMBER_INLINE_MAX ids, so a statement never nears the bind-variable limit.
 const LIKE_WILDCARDS = /[\\%_]/;
+const PACK_MEMBER_INLINE_MAX = 10_000;
 
-// Backslash-escape every character that is special in a PostgreSQL advanced
-// regular expression, so a query is matched literally after the `\m` anchor.
-function escapeRegex(s: string): string {
-  return s.replace(/[\\.^$*+?()[\]{}|]/g, (ch) => `\\${ch}`);
-}
-
-async function nameFilter(q: string): Promise<Prisma.PlayerWhereInput | null> {
-  const normalized = normalizeSearchQuery(q);
-  const cjk = hasNonAscii(normalized);
-  const raw = q.trim();
-  if (normalized.length === 0) return null;
-  if (!LIKE_WILDCARDS.test(normalized) && !LIKE_WILDCARDS.test(raw)) {
-    const or: Prisma.PlayerWhereInput[] = [{ nameNormalized: { contains: normalized } }];
-    if (cjk) {
+/** player.list's `q` predicate, or null when nothing can match. */
+async function searchWhere(term: SearchTerm): Promise<Prisma.PlayerWhereInput | null> {
+  const or: Prisma.PlayerWhereInput[] = [];
+  if (!LIKE_WILDCARDS.test(term.normalized) && !LIKE_WILDCARDS.test(term.raw)) {
+    or.push({ nameNormalized: { contains: term.normalized } });
+    if (term.cjk) {
       or.push(
-        { japName: { contains: raw, mode: "insensitive" } },
-        { chineseName: { contains: raw, mode: "insensitive" } },
+        { japName: { contains: term.raw, mode: "insensitive" } },
+        { chineseName: { contains: term.raw, mode: "insensitive" } },
       );
     }
-    return { OR: or };
+  } else {
+    const cjkWhere = term.cjk
+      ? Prisma.sql`OR "japName" ILIKE ${term.rawLike} ESCAPE '\\' OR "chineseName" ILIKE ${term.rawLike} ESCAPE '\\'`
+      : Prisma.empty;
+    const rows = await prisma.$queryRaw<Array<{ id: bigint }>>(Prisma.sql`
+      SELECT id FROM "Player" WHERE "nameNormalized" LIKE ${term.like} ESCAPE '\\' ${cjkWhere} LIMIT 10000
+    `);
+    if (rows.length > 0) or.push({ id: { in: rows.map((r) => r.id) } });
   }
-  const like = `%${escapeLike(normalized)}%`;
-  const rawLike = `%${escapeLike(raw)}%`;
-  const cjkWhere = cjk
-    ? Prisma.sql`OR "japName" ILIKE ${rawLike} ESCAPE '\\' OR "chineseName" ILIKE ${rawLike} ESCAPE '\\'`
-    : Prisma.empty;
-  const rows = await prisma.$queryRaw<Array<{ id: bigint }>>(Prisma.sql`
-    SELECT id FROM "Player" WHERE "nameNormalized" LIKE ${like} ESCAPE '\\' ${cjkWhere} LIMIT 10000
-  `);
-  return rows.length > 0 ? { id: { in: rows.map((r) => r.id) } } : null;
+  if (term.packIds.length > 0) {
+    const members = await prisma.$queryRaw<Array<{ playerId: bigint }>>(Prisma.sql`
+      SELECT "playerId" FROM "PackCard" WHERE "packId" = ANY(${term.packIds}::text[])
+    `);
+    if (members.length > PACK_MEMBER_INLINE_MAX) or.push({ packCards: { some: { packId: { in: term.packIds } } } });
+    else if (members.length > 0) or.push({ id: { in: members.map((m) => m.playerId) } });
+  }
+  return or.length > 0 ? { OR: or } : null;
 }
 
 export const playerRouter = router({
@@ -425,32 +489,49 @@ export const playerRouter = router({
   // (design decision 14). Walks the (releaseDate, id) index in a window of 200
   // rows, de-duplicates by baseId in application code and widens the window ×4
   // (up to 12 800 rows) until 18 distinct bases are found — no full-table
-  // DISTINCT ON scan per request.
+  // DISTINCT ON scan per request. Each row carries its pack / campaign name
+  // (`packName`, as in player.search — the search palette's "Latest Players"
+  // rows show the same pack chip as its result rows; change
+  // efootbase-function-parity): one primary-key lookup of the picked rows'
+  // `featuredPackId`s.
   trending: publicProcedure.query(async (): Promise<CardPreview[]> => {
     const WANT = 18;
     const MAX_WINDOW = 12_800;
     const picked: CardPreview[] = [];
+    const packIdOf = new Map<string, string | null>();
     const seenBase = new Set<string>();
     for (let window = 200; ; window *= 4) {
       const rows = await prisma.player.findMany({
         where: { releaseDate: { not: null } },
         orderBy: [{ releaseDate: "desc" }, { id: "desc" }],
         take: window,
-        select: previewSelect,
+        select: { ...previewSelect, featuredPackId: true },
       });
       picked.length = 0;
+      packIdOf.clear();
       seenBase.clear();
       for (const r of rows) {
         const base = r.baseId.toString();
         if (seenBase.has(base)) continue;
         seenBase.add(base);
-        picked.push(toPreview(r, undefined));
+        const preview = toPreview(r, undefined);
+        picked.push(preview);
+        packIdOf.set(preview.id, r.featuredPackId);
         if (picked.length === WANT) break;
       }
       if (picked.length === WANT || rows.length < window || window >= MAX_WINDOW) break;
     }
-    const flags = await flagUrlsFor(picked.map((p) => p.nationalityId ?? 0));
-    for (const p of picked) p.flagUrl = flags.get(p.nationalityId ?? 0) ?? null;
+    const packIds = Array.from(new Set(Array.from(packIdOf.values()).filter((id): id is string => id !== null)));
+    const [flags, packs] = await Promise.all([
+      flagUrlsFor(picked.map((p) => p.nationalityId ?? 0)),
+      packIds.length > 0 ? prisma.pack.findMany({ where: { id: { in: packIds } }, select: { id: true, name: true } }) : Promise.resolve([]),
+    ]);
+    const packName = new Map(packs.map((p) => [p.id, p.name]));
+    for (const p of picked) {
+      p.flagUrl = flags.get(p.nationalityId ?? 0) ?? null;
+      const packId = packIdOf.get(p.id);
+      p.packName = packId ? packName.get(packId) ?? null : null;
+    }
     return picked;
   }),
 
@@ -461,25 +542,45 @@ export const playerRouter = router({
       const page = input.page;
       const limit = input.limit;
       const skip = (page - 1) * limit;
+      const empty: PlayerListResult = { items: [], total: 0, page, limit, totalPages: 1 };
       const and: Prisma.PlayerWhereInput[] = [];
+      // Every bound first (a 400 never depends on the data), then the lookups.
+      const positions = mergeFilterValues(input.positions, input.position, POSITIONS.length, "positions");
+      const styles = mergeFilterValues(input.playingStyles, input.playingStyle, MAX_FILTER_IDS, "playingStyles");
+      const nations = mergeFilterValues(input.nationalityIds, input.nationalityId, MAX_FILTER_IDS, "nationalityIds");
+      const clubs = mergeFilterValues(input.clubIds, input.clubId, MAX_FILTER_IDS, "clubIds");
+      const teamNames = Array.from(new Set(input.teamNames ?? []));
+      if (clubs.length + teamNames.length > MAX_FILTER_IDS) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: `teams (clubIds + teamNames): at most ${MAX_FILTER_IDS} distinct values` });
+      }
+      const leagues = mergeFilterValues(input.leagueIds, input.leagueId, MAX_FILTER_IDS, "leagueIds");
+      const skillIds = mergeFilterValues(input.skillIds, input.skillId, MAX_FILTER_SKILLS, "skillIds");
+      const skillKeys = Array.from(new Set(input.skillKeys ?? []));
+      if (skillIds.length + skillKeys.length > MAX_FILTER_SKILLS) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: `skills (skillIds + skillKeys): at most ${MAX_FILTER_SKILLS} distinct values` });
+      }
+      // Name or pack name (searchTerm / searchWhere); a query shorter than
+      // SEARCH_MIN_LENGTH after folding is ignored, as on the reference.
       if (input.q) {
-        const nameWhere = await nameFilter(input.q);
-        if (!nameWhere) return { items: [], total: 0, page, limit, totalPages: 1 };
-        and.push(nameWhere);
+        const term = await searchTerm(input.q);
+        if (term) {
+          const nameWhere = await searchWhere(term);
+          if (!nameWhere) return empty;
+          and.push(nameWhere);
+        }
       }
       if (input.cardType) and.push({ cardType: input.cardType });
       if (input.cardTypeIn && input.cardTypeIn.length > 0) and.push({ cardType: { in: input.cardTypeIn } });
-      // Position: a card "plays" a position when its aptitude there is full (0)
-      // or half (1). Several positions are OR-ed (CF or SS); the single `position`
-      // field is merged into the list.
-      const positions = mergeFilterValues(input.positions, input.position, POSITIONS.length, "positions");
-      if (positions.length === 1) and.push({ [POS_APTITUDE_DB[positions[0]!]]: { in: [0, 1] } });
-      else if (positions.length > 1) and.push({ OR: positions.map((p) => ({ [POS_APTITUDE_DB[p]]: { in: [0, 1] } })) });
-      // A playing style matches in either slot (efootbase groups and filters by
-      // style, not by slot — PLAYING_STYLE_GROUPS in @eflab/shared); the
-      // defence-only variant stays for callers that want the defence slot.
-      if (input.playingStyle !== undefined) {
-        and.push({ OR: [{ playingStyleAttack: input.playingStyle }, { playingStyleDefense: input.playingStyle }] });
+      // Position: the card's registered position (the reference's rule, survey
+      // 2026-10-23 S2 §5 — the aptitude is not used). Several positions are
+      // OR-ed; the single `position` field is merged into the list.
+      if (positions.length > 0) and.push({ registeredPosition: { in: positions.map((p) => POSITIONS.indexOf(p)) } });
+      // Main playing styles: OR-ed, each in either slot (efootbase groups and
+      // filters by style, not by slot — PLAYING_STYLE_GROUPS in @eflab/shared);
+      // the AI styles below are AND-ed with each other and with this group.
+      // The defence-only variant stays for callers that want the defence slot.
+      if (styles.length > 0) {
+        and.push({ OR: [{ playingStyleAttack: { in: styles } }, { playingStyleDefense: { in: styles } }] });
       }
       if (input.defensiveStyle !== undefined) and.push({ playingStyleDefense: input.defensiveStyle });
       for (const flag of input.aiStyles ?? []) {
@@ -492,16 +593,29 @@ export const playerRouter = router({
       if (input.weakFoot) and.push({ weakFootAccuracy: { gte: Number(input.weakFoot) } });
       if (input.strongerFoot !== undefined) and.push({ strongerFoot: input.strongerFoot });
       // Nation / Team / League: OR within the list (`IN`), AND with everything
-      // else. clubIds → the card's Team; leagueIds → the Team's League.
-      const nations = mergeFilterValues(input.nationalityIds, input.nationalityId, MAX_FILTER_IDS, "nationalityIds");
+      // else. clubIds and teamNames (Team.name, unique) → one set of the
+      // card's Team; leagueIds → the Team's League. Names that match no team
+      // add nothing; a team filter left with no team matches no card.
       if (nations.length > 0) and.push({ nationalityId: { in: nations } });
-      const clubs = mergeFilterValues(input.clubIds, input.clubId, MAX_FILTER_IDS, "clubIds");
-      if (clubs.length > 0) and.push({ teamId: { in: clubs } });
-      const leagues = mergeFilterValues(input.leagueIds, input.leagueId, MAX_FILTER_IDS, "leagueIds");
+      if (clubs.length + teamNames.length > 0) {
+        const named = teamNames.length > 0
+          ? (await prisma.team.findMany({ where: { name: { in: teamNames } }, select: { id: true } })).map((t) => t.id)
+          : [];
+        const teams = Array.from(new Set([...clubs, ...named]));
+        if (teams.length === 0) return empty;
+        and.push({ teamId: { in: teams } });
+      }
       if (leagues.length > 0) and.push({ team: { is: { leagueId: { in: leagues } } } });
-      if (input.skillId !== undefined) and.push({ skills: { some: { skillId: input.skillId } } });
-      // Skills: every selected skill must be present (one EXISTS per skill).
-      for (const skillId of new Set(input.skillIds ?? [])) and.push({ skills: { some: { skillId } } });
+      // Skills: every selected skill must be present (one EXISTS per skill);
+      // skillKeys go through Skill.efbKey, and a key that is no stored skill
+      // matches no card.
+      const skillSet = new Set(skillIds);
+      if (skillKeys.length > 0) {
+        const keyed = await prisma.skill.findMany({ where: { efbKey: { in: skillKeys } }, select: { id: true } });
+        if (keyed.length < skillKeys.length) return empty;
+        for (const s of keyed) skillSet.add(s.id);
+      }
+      for (const skillId of skillSet) and.push({ skills: { some: { skillId } } });
       if (input.conditionIn && input.conditionIn.length > 0) and.push({ condition: { in: input.conditionIn } });
       if (input.formIn && input.formIn.length > 0) and.push({ form: { in: input.formIn } });
       if (input.weakFootAccuracyIn && input.weakFootAccuracyIn.length > 0) and.push({ weakFootAccuracy: { in: input.weakFootAccuracyIn } });
@@ -587,77 +701,35 @@ export const playerRouter = router({
     return toCardDTO(row);
   }),
 
-  // Name search for the home palette, header and compare picker.
-  // Tiers (design decision 6; whole-word ranking: efootbase-behaviour-parity
-  // design decision 7):
-  //   0 = the query is a whole word (or whole words) of the normalised name
-  //       ("ronald" in "ronald koeman", "ronaldo" in "cristiano ronaldo") —
-  //       a regex `\m<q>\M`
-  //   1 = the query starts a word but does not end one ("ronald" in
-  //       "ronaldinho gaucho", "cristiano ronaldo") — a regex `\m<q>`
-  //   2 = any other substring of the normalised name ("aldo" ⊆ "ronaldo")
-  //   3 = substring of the Japanese/Chinese name (non-ASCII queries only)
-  //   4 = pg_trgm fuzzy match on the normalised name ("scharr", "mbapp")
-  // `\m` / `\M` need a word character (letter, digit, "_") next to them, so a
-  // query that starts or ends with another character ("jr.", "-") cannot
-  // reach tier 0 / tiers 0–1 and is ranked as a partial match (tier 2).
-  // Inside tiers 0–3: maxOvr DESC, id DESC (the best card of a famous name
-  // first — "ronaldo" lists Cristiano Ronaldo before a 73-rated "Ronaldo").
-  // Inside the fuzzy tier similarity DESC comes first (a near-miss spelling is
-  // only useful when it is close), then maxOvr DESC, id DESC.
-  // Only the WHERE filters rows, and it is unchanged: both the LIKE and the `%`
-  // predicates use the GIN trigram index on nameNormalized; the regexes are
-  // evaluated on the matched rows only, inside ORDER BY. Wildcards in the query
-  // are escaped (LIKE and regex) so "%" or "." only match themselves.
-  search: publicProcedure.input(playerSearchInput).query(async ({ input }): Promise<CardPreview[]> => {
-    const normalized = normalizeSearchQuery(input.q);
-    if (normalized.length < SEARCH_MIN_LENGTH) return [];
-    const like = `%${escapeLike(normalized)}%`;
-    // Bound as parameters: `\m` / `\M` (start / end of a word) cannot be
-    // written into the Prisma.sql template itself, whose cooked strings would
-    // drop the backslash.
-    const wordStart = `\\m${escapeRegex(normalized)}`;
-    const wholeWord = `${wordStart}\\M`;
-    // CJK columns only when the *normalised* query is still non-ASCII ("Schär"
-    // normalises to ASCII and must not pay for two extra ILIKE scans).
-    const cjk = hasNonAscii(normalized);
-    const rawLike = `%${escapeLike(input.q.trim())}%`;
-    const cjkWhere = cjk
-      ? Prisma.sql`OR "japName" ILIKE ${rawLike} ESCAPE '\\' OR "chineseName" ILIKE ${rawLike} ESCAPE '\\'`
-      : Prisma.empty;
-    const cjkTier = cjk
-      ? Prisma.sql`WHEN "japName" ILIKE ${rawLike} ESCAPE '\\' OR "chineseName" ILIKE ${rawLike} ESCAPE '\\' THEN 3`
-      : Prisma.empty;
-    const rows = await prisma.$queryRaw<PreviewRow[]>(Prisma.sql`
-      SELECT id, "baseId", name, "cardType", ovr, "maxOvr",
-             "registeredPosition", condition, "nationalityId",
-             "playingStyleAttack", "playingStyleDefense"
-      FROM (
-        SELECT id, "baseId", name, "cardType"::text AS "cardType", ovr, "maxOvr",
-               "registeredPosition", condition, "nationalityId",
-               "playingStyleAttack", "playingStyleDefense",
-               CASE
-                 WHEN "nameNormalized" ~ ${wholeWord} THEN 0
-                 WHEN "nameNormalized" ~ ${wordStart} THEN 1
-                 WHEN "nameNormalized" LIKE ${like} ESCAPE '\\' THEN 2
-                 ${cjkTier}
-                 ELSE 4
-               END AS tier,
-               similarity("nameNormalized", ${normalized}) AS sim
-        FROM "Player"
-        WHERE "nameNormalized" LIKE ${like} ESCAPE '\\'
-           OR "nameNormalized" % ${normalized}
-           ${cjkWhere}
-      ) matched
-      ORDER BY
-        tier ASC,
-        CASE WHEN tier = 4 THEN sim ELSE 0 END DESC,
-        "maxOvr" DESC,
-        id DESC
-      LIMIT ${input.limit}
+  // Player search for the ⌘K palette, the home search and the compare picker
+  // (change efootbase-function-parity, design decision D8): the name-or-pack
+  // rule above (searchTerm / matchedIdsSql), ordered by max overall DESC,
+  // then card id DESC — no relevance tiers, no fuzzy tier — in pages of
+  // SEARCH_PAGE_SIZE (12) with `hasMore` (one row more is read). The result
+  // lists lift the word-start rows inside each page themselves
+  // (liftWordStartRows). Each row carries its pack / campaign name
+  // (Player.featuredPackId → Pack, the PackCard pair of the card).
+  search: publicProcedure.input(playerSearchInput).query(async ({ input }): Promise<PlayerSearchResult> => {
+    const term = await searchTerm(input.q);
+    if (!term) return { rows: [], hasMore: false };
+    const offset = (input.page - 1) * SEARCH_PAGE_SIZE;
+    const rows = await prisma.$queryRaw<Array<PreviewRow & { packName: string | null }>>(Prisma.sql`
+      WITH m AS (${matchedIdsSql(term)})
+      SELECT p.id, p."baseId", p.name, p."cardType"::text AS "cardType", p.ovr, p."maxOvr",
+             p."registeredPosition", p.condition, p."nationalityId",
+             p."playingStyleAttack", p."playingStyleDefense", pk.name AS "packName"
+      FROM "Player" p
+      JOIN m USING (id)
+      LEFT JOIN "Pack" pk ON pk.id = p."featuredPackId"
+      ORDER BY p."maxOvr" DESC, p.id DESC
+      LIMIT ${SEARCH_PAGE_SIZE + 1} OFFSET ${offset}
     `);
-    const flags = await flagUrlsFor(rows.map((r) => r.nationalityId));
-    return rows.map((r) => toPreview(r, flags.get(r.nationalityId)));
+    const page = rows.slice(0, SEARCH_PAGE_SIZE);
+    const flags = await flagUrlsFor(page.map((r) => r.nationalityId));
+    return {
+      rows: page.map((r) => ({ ...toPreview(r, flags.get(r.nationalityId)), packName: r.packName ?? null })),
+      hasMore: rows.length > SEARCH_PAGE_SIZE,
+    };
   }),
 
   // Compare 1–4 cards — full DTOs in the caller's `cardIds` order (duplicates
@@ -691,20 +763,17 @@ export const playerRouter = router({
     return ordered.map(toCardDTO);
   }),
 
-  // All countries for the Nation filter (flag URLs rebased onto R2_PUBLIC_BASE),
-  // A–Z, each with its number of cards (`playerCount`) — the picker's "Popular"
-  // group is the ten nations with the most cards. One grouped count over the
-  // Player nationality index (one row per nation, ≤ 185).
+  // All countries for the Nation filter and its chips (flag URLs rebased onto
+  // R2_PUBLIC_BASE), A–Z. The Nation dialog puts the reference's fixed ten
+  // first (FIXED_FIRST_NATIONS, matched by name). No card count: the former
+  // per-nation `playerCount` fed the dialog's "Popular" group and was removed
+  // with it (owner decision 2026-10-24, change efootbase-function-parity).
   countries: publicProcedure.query(async () => {
-    const [rows, counts] = await Promise.all([
-      prisma.country.findMany({
-        select: { id: true, name: true, flagUrl: true },
-        orderBy: [{ name: "asc" }, { id: "asc" }],
-      }),
-      prisma.player.groupBy({ by: ["nationalityId"], _count: { _all: true } }),
-    ]);
-    const countOf = new Map(counts.map((c) => [c.nationalityId, c._count._all]));
-    return rows.map((c) => ({ id: c.id, name: c.name, flagUrl: rebaseR2Url(c.flagUrl), playerCount: countOf.get(c.id) ?? 0 }));
+    const rows = await prisma.country.findMany({
+      select: { id: true, name: true, flagUrl: true },
+      orderBy: [{ name: "asc" }, { id: "asc" }],
+    });
+    return rows.map((c) => ({ id: c.id, name: c.name, flagUrl: rebaseR2Url(c.flagUrl) }));
   }),
 
   // All leagues for the League filter (34 rows; `leagueId` on player.list).
@@ -715,8 +784,9 @@ export const playerRouter = router({
     });
   }),
 
-  // All teams for the Team filter (736 rows; `clubId` on player.list). The
-  // leagueId lets the picker narrow the list to the chosen league.
+  // All teams for the Team filter (736 rows; `teamNames` / `clubIds` on
+  // player.list). The leagueId puts each team under its league heading in
+  // the picker (the list is not narrowed by a League selection).
   teams: publicProcedure.query(async () => {
     return prisma.team.findMany({
       select: { id: true, name: true, leagueId: true, national: true },

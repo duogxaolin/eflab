@@ -47,12 +47,21 @@ export function makeQueryClient(): QueryClient {
   });
 }
 
+/** True when the operation's caller aborted it on purpose — a superseded
+ *  search page: TanStack Query cancels an in-flight query whose text changed
+ *  (components/search/usePlayerSearchPages.ts, change
+ *  efootbase-function-parity). The logger receives the operation, `signal`
+ *  included, in both directions. Not a failure, so never logged as one. */
+function abortedByCaller(opts: object): boolean {
+  return (opts as { signal?: AbortSignal | null }).signal?.aborted === true;
+}
+
 function makeLinks() {
   return [
     loggerLink({
       enabled: (opts) =>
-        process.env.NODE_ENV === "development" ||
-        (opts.direction === "down" && opts.result instanceof Error),
+        !abortedByCaller(opts) &&
+        (process.env.NODE_ENV === "development" || (opts.direction === "down" && opts.result instanceof Error)),
     }),
     httpBatchLink({
       url: `${API_URL}/trpc`,

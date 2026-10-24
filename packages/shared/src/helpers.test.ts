@@ -7,22 +7,42 @@ import {
   formatRangeParam,
   hasNonAscii,
   heightToFeetInches,
+  isBundleSlug,
+  isSkillSlug,
   labelSearchKey,
+  liftWordStartRows,
+  nameHasWordStart,
   normalizeSearchQuery,
   parseIntListParams,
   parsePositionParams,
   parseRangeParam,
+  releaseAgeLabel,
+  secondBoosterSlug,
+  skillKeyFromPublicSlug,
+  skillPublicSlug,
+  skillRarityRank,
   sortIds,
   sortPositions,
+  utcDayKey,
+  weakFootStars,
 } from "./helpers";
 import {
   BASE_STATS,
+  BUNDLE_SLUG_MAX_LENGTH,
   CARD_TYPES,
+  CARD_TYPE_DUMP_LABELS,
+  CARD_TYPE_FILTER_ORDER,
   CARD_TYPE_LABELS,
   EFOOTBASE_STAT_MAP,
   CARD_TYPE_BY_EFOOTBASE_CODE,
   DEFAULT_SORT_PRESET,
+  FIXED_FIRST_NATIONS,
+  FORM_STARS,
   MAX_FILTER_IDS,
+  MAX_FILTER_SKILLS,
+  SEARCH_MIN_LENGTH,
+  SKILL_SLUG_MAX_LENGTH,
+  resolveLegacySort,
   PLAYING_STYLES,
   PLAYING_STYLES_UNAVAILABLE,
   PLAYING_STYLE_GROUPS,
@@ -30,10 +50,11 @@ import {
   SORT_FIELDS,
   SORT_PRESETS,
   SORT_PRESET_LABELS,
+  WEAK_FOOT_STARS,
   isSortPreset,
   playingStyleName,
 } from "./constants";
-import { playerListInput } from "./schemas";
+import { featuredBySlugInput, playerListInput, playerSearchInput, skillByIdInput, skillPlayersInput } from "./schemas";
 
 function assert(cond: unknown, msg: string): void {
   if (!cond) {
@@ -97,6 +118,18 @@ function assert(cond: unknown, msg: string): void {
   assert(!matches("cotes", "Côte d'Ivoire"), "still a substring test, not fuzzy");
   assert(labelSearchKey("Côte d'Ivoire") === "cote d'ivoire", "apostrophes are kept");
   assert(labelSearchKey("") === "", "empty stays empty");
+  // Typographic apostrophes read as ' (verify S1 of change efootbase-function-parity:
+  // "Striker’s" typed on a phone missed Striker's Instinct in the second-booster drawer).
+  for (const typed of ["striker’s", "striker‘s", "strikerʼs", "STRIKER’S INST"]) {
+    assert(matches(typed, "Striker's Instinct +1"), `labelSearchKey: "${typed}" finds "Striker's Instinct +1"`);
+  }
+  assert(matches("cote d'ivoire", "Côte d’Ivoire"), "a typographic apostrophe in the label matches the ASCII one in the query");
+  assert(labelSearchKey("Striker’s Instinct +1") === "striker's instinct +1", "’ → ' in the key");
+  assert(!matches("strikers", "Striker's Instinct +1"), "the apostrophe is folded, not dropped");
+  // The player search keeps its exact rule: normalizeSearchQuery does not fold
+  // apostrophes (the API compares it with the stored nameNormalized and with the
+  // pack names, and a non-ASCII query also searches the CJK names).
+  assert(normalizeSearchQuery("N’Golo") === "n’golo", "normalizeSearchQuery keeps ’ (player search unchanged)");
 }
 
 // 3. escapeLike — %, _ and \ become literal under ESCAPE '\'.
@@ -117,6 +150,23 @@ function assert(cond: unknown, msg: string): void {
   const mapped = new Set(Object.values(CARD_TYPE_BY_EFOOTBASE_CODE));
   for (const t of CARD_TYPES) assert(mapped.has(t), `dump code map covers ${t}`);
   assert(!("BIG_TIME" in CARD_TYPE_LABELS) && !("SHOW_TIME" in CARD_TYPE_LABELS), "removed enum values are gone from the label table");
+  // Display table vs dump table (D14, owner decision 2026-10-24): they differ for
+  // LEGENDARY ("Icons") and EPIC ("Epic - Big Time") only; the dump table holds
+  // exactly the dump's players_meta labels the seed checks against.
+  const differ = CARD_TYPES.filter((t) => CARD_TYPE_LABELS[t] !== CARD_TYPE_DUMP_LABELS[t]);
+  assert(differ.join(",") === "LEGENDARY,EPIC", `the display and dump tables differ only for LEGENDARY and EPIC (got ${differ.join(",")})`);
+  assert(CARD_TYPE_LABELS.LEGENDARY === "Icons" && CARD_TYPE_LABELS.EPIC === "Epic - Big Time", "display labels: LEGENDARY → Icons, EPIC → Epic - Big Time");
+  assert(
+    CARD_TYPES.map((t) => CARD_TYPE_DUMP_LABELS[t]).join("|") === "Standard|Legendary|Trending|Selection|Epic|Highlight|Strike Arena",
+    "dump labels: Standard, Legendary, Trending, Selection, Epic, Highlight, Strike Arena",
+  );
+  assert(Object.keys(CARD_TYPE_DUMP_LABELS).length === CARD_TYPES.length && Object.keys(CARD_TYPE_LABELS).length === CARD_TYPES.length, "both tables have exactly one label per card type");
+  // Filter toggle order: a permutation of CARD_TYPES in efootbase's order, Strike Arena last.
+  assert(CARD_TYPE_FILTER_ORDER.length === CARD_TYPES.length && new Set(CARD_TYPE_FILTER_ORDER).size === CARD_TYPES.length && CARD_TYPES.every((t) => CARD_TYPE_FILTER_ORDER.includes(t)), "CARD_TYPE_FILTER_ORDER lists every card type once");
+  assert(
+    CARD_TYPE_FILTER_ORDER.map((t) => CARD_TYPE_LABELS[t]).join("|") === "Standard|Selection|Icons|Trending|Highlight|Epic - Big Time|Strike Arena",
+    "toggle order: Standard, Selection, Icons, Trending, Highlight, Epic - Big Time, Strike Arena",
+  );
 }
 
 // 5. SORT_FIELDS only contains sorts backed by a real Player column.
@@ -148,7 +198,26 @@ function assert(cond: unknown, msg: string): void {
 // 7. Sort presets and playing-style groups stay consistent with the tables.
 {
   for (const p of SORT_PRESETS) assert(typeof SORT_PRESET_LABELS[p] === "string", `SORT_PRESET_LABELS has ${p}`);
-  assert(DEFAULT_SORT_PRESET === "trending" && isSortPreset("top") && !isSortPreset("ovr"), "default preset is Trending; presets are distinct from field sorts");
+  assert(
+    JSON.stringify(SORT_PRESETS) === JSON.stringify(["new", "highest", "lowest"]) && DEFAULT_SORT_PRESET === "new",
+    "presets are New cards (default), High to low, Low to high",
+  );
+  assert(
+    SORT_PRESET_LABELS.new === "New cards" && SORT_PRESET_LABELS.highest === "High to low" && SORT_PRESET_LABELS.lowest === "Low to high",
+    "preset labels",
+  );
+  assert(!isSortPreset("trending") && !isSortPreset("top") && !isSortPreset("ovr"), "Trending / Top rated are no longer presets; presets are distinct from field sorts");
+  // Legacy values (change efootbase-function-parity): accepted, read as the current presets.
+  assert(resolveLegacySort("trending") === "new" && resolveLegacySort("top") === "highest" && resolveLegacySort("speed") === "speed", "resolveLegacySort: trending → new, top → highest, others unchanged");
+  {
+    const sortOf = (v: unknown) => {
+      const r = playerListInput.safeParse({ sort: v });
+      return r.success ? r.data.sort : "400";
+    };
+    assert(sortOf("trending") === "new" && sortOf("top") === "highest", "player.list sort=trending / top are accepted and read as new / highest (no 400)");
+    assert(sortOf("highest") === "highest" && sortOf("lowest") === "lowest" && sortOf("name") === "name" && sortOf(undefined) === "ovr", "other sorts unchanged; the API default stays ovr");
+    assert(sortOf("bogus") === "400" && sortOf("hasOwnProperty") === "400" && sortOf("toString") === "400", "an unknown sort is a 400 (no prototype key slips through)");
+  }
   for (const s of SORT_PRESETS) assert(!(SORT_FIELDS as readonly string[]).includes(s), `preset ${s} does not collide with a field sort`);
   for (const group of ["attack", "defence"] as const) {
     for (const id of PLAYING_STYLE_GROUPS[group]) assert(typeof PLAYING_STYLES[id] === "string", `${group} style ${id} has a label`);
@@ -264,6 +333,156 @@ function assert(cond: unknown, msg: string): void {
     "gkAwareness", "gkCatching", "gkParrying", "gkReflexes", "gkReach"];
   const mapped = new Set(superSub.map((k) => EFOOTBASE_STAT_MAP[k]));
   assert(!mapped.has(undefined) && mapped.size === 25 && !mapped.has("stamina"), "Super-sub's 25 effect keys → 25 stats, all but Stamina");
+}
+
+// 9. change efootbase-function-parity — search input, slugs, word-start lift,
+//    the fixed first nations.
+{
+  const eq = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+  // player.search: 3..100 characters after trimming, page 1..50, no limit.
+  const search = (v: unknown) => playerSearchInput.safeParse(v);
+  assert(SEARCH_MIN_LENGTH === 3, "the shared search minimum is 3 characters");
+  assert(!search({ q: "me" }).success && !search({ q: "  me  " }).success && !search({ q: "" }).success, "a 2-character (or blank-padded) term is rejected (400)");
+  {
+    const r = search({ q: " mes " });
+    assert(r.success && r.data.q === "mes" && r.data.page === 1, "a 3-character term is accepted (trimmed), page defaults to 1");
+  }
+  assert(search({ q: "x".repeat(100), page: 50 }).success && !search({ q: "x".repeat(101) }).success && !search({ q: "mes", page: 51 }).success && !search({ q: "mes", page: 0 }).success, "100 characters and page 50 accepted; 101 characters, page 51 and page 0 rejected");
+  {
+    const r = search({ q: "messi", limit: 8 });
+    assert(r.success && !("limit" in r.data), "an older client's limit is accepted and dropped");
+  }
+  // skill.players: page / limit accepted and ignored.
+  assert(skillPlayersInput.safeParse({ slug: "fortress" }).success && skillPlayersInput.safeParse({ slug: "fortress", page: 3, limit: 24 }).success, "skill.players accepts the old page / limit");
+  // New list inputs and their bounds.
+  const list = (v: unknown) => playerListInput.safeParse(v).success;
+  assert(list({ playingStyles: [1, 22, 24], teamNames: ["Arsenal FC", "Vissel Kobe"], skillKeys: ["s_rabona", "s_sombrero"] }), "playingStyles / teamNames / skillKeys parse");
+  assert(!list({ playingStyles: Array.from({ length: MAX_FILTER_IDS + 1 }, (_, i) => i) }) && !list({ playingStyles: [-1] }) && !list({ playingStyles: [null] }), `more than ${MAX_FILTER_IDS} styles / a negative / a null style are rejected`);
+  assert(!list({ teamNames: [""] }) && !list({ teamNames: ["x".repeat(101)] }) && list({ teamNames: ["x".repeat(100)] }) && !list({ teamNames: Array.from({ length: MAX_FILTER_IDS + 1 }, (_, i) => `T${i}`) }), "team names: 1–100 characters, at most 50");
+  assert(!list({ skillKeys: ["rabona"] }) && !list({ skillKeys: ["s_Rabona"] }) && !list({ skillKeys: ["s_"] }) && !list({ skillKeys: Array.from({ length: MAX_FILTER_SKILLS + 1 }, (_, i) => `s_k${i}`) }), "skill keys: ^s_[a-z0-9_]+$, at most 20");
+
+  // secondBoosterSlug — the reference's one observed slug, and the rule.
+  assert(secondBoosterSlug("Striker's Instinct +1") === "strikers-instinct1", "Striker's Instinct +1 → strikers-instinct1");
+  assert(secondBoosterSlug("Ball-carrying +1") === "ball-carrying1" && secondBoosterSlug("Free-kick Taking +1") === "free-kick-taking1", "hyphens kept as single hyphens");
+  assert(secondBoosterSlug("Off the Ball +1") === "off-the-ball1" && secondBoosterSlug("Aerial Block +1") === "aerial-block1", "spaces → hyphens");
+  assert(secondBoosterSlug("Striker’s Instinct +1") === "strikers-instinct1", "a typographic apostrophe is removed too");
+
+  // skillPublicSlug — key without s_, _ → -; the stored slug without a key.
+  const pub = (slug: string, efbKey: string | null) => skillPublicSlug({ slug, efbKey });
+  assert(pub("phenomenal-passing", "s_phenomenal_pass") === "phenomenal-pass" && pub("s-heading", "s_heading") === "heading", "phenomenal-pass, heading (the stored slugs differ)");
+  assert(pub("rising-shots", "s_rising_shot") === "rising-shot" && pub("acrobatic-clear", "s_acrobatic_clearance") === "acrobatic-clearance", "rising-shot, acrobatic-clearance");
+  assert(pub("long-reach-tackle", "s_long_reach_tackle") === "long-reach-tackle" && pub("fortress", "s_fortress") === "fortress", "usual keys give the stored slug");
+  assert(pub("some-other-entry", null) === "some-other-entry", "no key → the stored slug");
+  assert(skillKeyFromPublicSlug("phenomenal-pass") === "s_phenomenal_pass" && skillKeyFromPublicSlug("Bad Slug") === null && skillKeyFromPublicSlug("a--b") === null, "public slug → key (or null)");
+  for (const key of ["s_fortress", "s_phenomenal_pass", "s_one_touch_pass", "s_gk_long_throw"]) {
+    assert(skillKeyFromPublicSlug(pub("x", key)) === key, `key round trip ${key}`);
+  }
+
+  // liftWordStartRows — stable partition by "a word starts with the query".
+  {
+    const m = (i: number) => ({ name: "Lionel Messi", id: `m${i}` });
+    const james = { name: "James Rodríguez", id: "jr" };
+    const page = [m(1), m(2), m(3), m(4), m(5), m(6), m(7), james, m(8), m(9), m(10), m(11)];
+    const lifted = liftWordStartRows(page, "mes");
+    assert(lifted.length === 12 && lifted[11] === james, "\"mes\": James Rodríguez (8th in the server order) moves to the end of the page (12th)");
+    assert(eq(lifted.slice(0, 11).map((r) => r.id), Array.from({ length: 11 }, (_, i) => `m${i + 1}`)), "the eleven Messi rows keep their server order");
+    const same = [m(1), m(2)];
+    assert(eq(liftWordStartRows(same, "messi"), same), "every row matching at a word start → order unchanged");
+    const reece = { name: "Reece James", id: "rj" };
+    const kroos = { name: "Toni Kroos", id: "tk" };
+    assert(eq(liftWordStartRows([kroos, reece, m(1)], "mes").map((r) => r.id), ["m1", "tk", "rj"]), "only word-start rows are lifted; the others keep their order");
+  }
+  assert(nameHasWordStart("Lionel Messi", "MES") && nameHasWordStart("Mesut Özil", "mes") && !nameHasWordStart("James Rodríguez", "mes"), "word start is case-insensitive; inside a word does not count");
+  assert(nameHasWordStart("N'Golo Kanté", "golo") && nameHasWordStart("Jean-Pierre Papin", "pierre") && nameHasWordStart("Thomas Müller", "mull"), "after an apostrophe / hyphen; accents folded");
+  assert(nameHasWordStart("Lionel Messi", "lionel mes") && !nameHasWordStart("Lionel Messi", "messi lionel"), "a multi-word query is matched as one contiguous run");
+  assert(!nameHasWordStart("Messi", "") && !nameHasWordStart("Messi", "   "), "an empty query lifts nothing");
+
+  // FIXED_FIRST_NATIONS — the reference's ten, in its order.
+  assert(
+    eq(FIXED_FIRST_NATIONS, ["England", "France", "Spain", "Brazil", "Argentina", "Germany", "Italy", "Netherlands", "Portugal", "Belgium"]),
+    "FIXED_FIRST_NATIONS: England, France, Spain, Brazil, Argentina, Germany, Italy, Netherlands, Portugal, Belgium",
+  );
+}
+
+// /packs "Last updated" (efootbase-function-parity "Packs Order And Last
+// Updated"): whole UTC days between the request's UTC day and the newest card
+// release, with a fixed "today" — the same text on the server and the client.
+{
+  assert(releaseAgeLabel("2026-10-20", "2026-10-15T00:00:00.000Z") === "5 days ago", "today 2026-10-20, newest release 2026-10-15 → \"5 days ago\" (the spec scenario)");
+  assert(releaseAgeLabel("2026-10-15", "2026-10-15T00:00:00.000Z") === "today", "same UTC day → \"today\"");
+  assert(releaseAgeLabel("2026-10-23", "2026-10-22T23:30:00.000Z") === "yesterday", "a 23:30Z release one UTC day earlier → \"yesterday\" (whole calendar days, not 24-hour periods)");
+  assert(releaseAgeLabel("2026-10-23", "2026-10-22T00:00:00.000Z") === "yesterday", "one day → \"yesterday\"");
+  assert(releaseAgeLabel("2026-10-23", "2026-10-21T00:00:00.000Z") === "2 days ago", "two days → \"2 days ago\"");
+  assert(releaseAgeLabel("2026-10-20", "2026-10-25T00:00:00.000Z") === "today", "a release after today is clamped to \"today\"");
+  assert(releaseAgeLabel("2026-03-01", "2026-02-28T12:00:00.000Z") === "yesterday" && releaseAgeLabel("2027-01-01", "2026-12-31T00:00:00.000Z") === "yesterday", "month and year boundaries");
+  assert(releaseAgeLabel("2026-10-20", "not a date") === null && releaseAgeLabel("20 Oct 2026", "2026-10-15T00:00:00.000Z") === null && releaseAgeLabel("2026-02-31", "2026-02-01T00:00:00.000Z") === null, "unreadable input → null (no chip)");
+  assert(utcDayKey(new Date("2026-10-23T23:59:59.999Z")) === "2026-10-23" && utcDayKey(new Date("2026-10-24T00:00:00.000Z")) === "2026-10-24", "utcDayKey = the UTC calendar day");
+}
+
+// Weak-foot stars (task 12.1): the stored 0-based level + 1 of 4 — one rule
+// for the player page and compare. Ricardo Quaresma stores usage 0 and
+// accuracy 2 → 1★ and 3★.
+const eq = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+{
+  assert(WEAK_FOOT_STARS === 4 && FORM_STARS === 3, "weak foot is out of 4 stars, form out of 3");
+  assert(eq([0, 1, 2, 3].map(weakFootStars), [1, 2, 3, 4]), "stored 0 / 1 / 2 / 3 → 1★ / 2★ / 3★ / 4★");
+  assert(weakFootStars(0) === 1 && weakFootStars(2) === 3, "Quaresma: usage 0 → 1★, accuracy 2 → 3★");
+  assert(weakFootStars(-1) === 1 && weakFootStars(7) === 4 && weakFootStars(Number.NaN) === 0, "out of range held to 1–4; not a number → 0");
+}
+
+// Rarity rank (spec "Skill Leader, Rarity Rank And Top Cards"): over the
+// listed (grouped) skills, 1 + the number with fewer holders; ties share.
+{
+  const skills = [
+    { slug: "fortress", group: "showtime", playerCount: 121 },
+    { slug: "long-reach-tackle", group: "showtime", playerCount: 118 },
+    { slug: "one-touch-pass", group: "classic", playerCount: 9125 },
+    { slug: "fighting-spirit", group: "classic", playerCount: 9125 },
+    { slug: "rare", group: "showtime", playerCount: 2 },
+    { slug: "acceleration-burst", group: "showtime", playerCount: 97 },
+    { slug: "blitz-curler", group: "showtime", playerCount: 97 },
+    { slug: "other-entry", group: null, playerCount: 0 },
+  ];
+  const r = (slug: string) => skillRarityRank(skills, slug);
+  assert(eq(r("rare"), { rank: 1, total: 7 }), "the fewest holders → #1; T counts the listed (grouped) skills only");
+  assert(eq(r("fortress"), { rank: 5, total: 7 }) && eq(r("long-reach-tackle"), { rank: 4, total: 7 }), "rank = 1 + listed skills with fewer holders (an ungrouped entry with 0 holders does not count)");
+  assert(eq(r("one-touch-pass"), r("fighting-spirit")) && r("one-touch-pass")?.rank === 6, "One-touch Pass and Fighting Spirit (9,125 each) share #6");
+  assert(eq(r("acceleration-burst"), r("blitz-curler")) && r("acceleration-burst")?.rank === 2, "a tie lower down shares its rank too, and the next count starts after both (Long Reach Tackle #4)");
+  assert(r("other-entry") === null && r("unknown") === null, "an entry without a group (or an unknown slug) has no rank");
+}
+
+// Slug pre-checks of the web pages against the API inputs (task 13.1): the
+// pre-check and its input share one bound, so a well-formed slug passes both
+// or neither — a long slug is a 404 on the page (no request), never an API
+// 400 that the server page turns into a 500.
+{
+  assert(SKILL_SLUG_MAX_LENGTH === 120 && BUNDLE_SLUG_MAX_LENGTH === 200, "skill slugs are bounded at 120 characters, bundle slugs at 200");
+  const skillIn = (slug: string) => skillByIdInput.safeParse({ slug }).success && skillPlayersInput.safeParse({ slug }).success;
+  const bundleIn = (slug: string) => featuredBySlugInput.safeParse({ slug }).success;
+  const lengths = [1, 2, 119, 120, 121, 150, 199, 200, 201, 500];
+  const shapes = (n: number) => ["a".repeat(n), ("a" + "-b".repeat(n)).slice(0, n), "9".repeat(n), "A".repeat(n)];
+  let total = 0;
+  let skillAgree = 0;
+  let bundleAgree = 0;
+  for (const n of lengths) {
+    for (const s of shapes(n)) {
+      total++;
+      if (isSkillSlug(s) === skillIn(s)) skillAgree++;
+      if (isBundleSlug(s) === bundleIn(s)) bundleAgree++;
+    }
+  }
+  assert(skillAgree === total && bundleAgree === total, `pre-check and API input agree on every well-formed slug of ${lengths.join(" / ")} characters (skill ${skillAgree}/${total}, bundle ${bundleAgree}/${total})`);
+  assert(
+    isSkillSlug("a".repeat(120)) && !isSkillSlug("a".repeat(121)) && !isSkillSlug("a".repeat(150)) && !isSkillSlug("a".repeat(200)) && !isSkillSlug("a".repeat(201)),
+    "isSkillSlug: 120 characters pass; 121, 150, 200 and 201 fail (404 on /skills/<slug> and /wiki/skills/<slug>)",
+  );
+  assert(!skillIn("a".repeat(121)) && skillIn("a".repeat(120)), "skill.byId / skill.players refuse 121 characters and accept 120");
+  assert(isBundleSlug("a".repeat(200)) && !isBundleSlug("a".repeat(201)) && bundleIn("a".repeat(200)) && !bundleIn("a".repeat(201)), "bundle slugs: 200 characters pass the pre-check and featured.bySlug, 201 neither");
+  assert(isSkillSlug("phenomenal-pass") && isSkillSlug("s-heading") && isBundleSlug("spanish-league-midfielders-2026-10-19"), "real skill and bundle slugs pass");
+  assert(!isSkillSlug("") && !isSkillSlug("-fortress") && !isSkillSlug("Bad_Slug!") && !isSkillSlug("a b") && !isBundleSlug("") && !isBundleSlug("x/y"), "empty, leading-hyphen, underscore / punctuation / space / slash segments fail");
+  // Malformed segments too: whatever a pre-check lets through, its input takes.
+  const odd = ["-", "a-", "a--b", "A-B", "0", " a", "a ", "ä", "a.b", `${"a".repeat(120)} `, `${"a".repeat(200)} `];
+  assert(odd.every((s) => !isSkillSlug(s) || skillIn(s)) && odd.every((s) => !isBundleSlug(s) || bundleIn(s)), "every segment a pre-check accepts is accepted by its API input");
 }
 
 if (process.exitCode === 1) process.exit(1);

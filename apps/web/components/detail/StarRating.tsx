@@ -1,4 +1,5 @@
 import { Star } from "lucide-react";
+import { WEAK_FOOT_STARS, weakFootStars } from "@eflab/shared";
 
 /** `filled` of `max` stars with an accessible summary — weak foot (4), form
  *  and injury resistance (3, efootbase shows the stored 0–2 as value + 1). */
@@ -25,4 +26,10 @@ export function StarRating({
       ))}
     </span>
   );
+}
+
+/** A stored weak-foot level (usage or accuracy, 0–3) as stars: value + 1 of 4
+ *  (`weakFootStars`, the one rule of the player page and compare). */
+export function WeakFootStars({ level, label, className }: { level: number; label: string; className?: string }) {
+  return <StarRating filled={weakFootStars(level)} max={WEAK_FOOT_STARS} label={label} className={className} />;
 }

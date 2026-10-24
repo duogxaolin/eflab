@@ -1,7 +1,8 @@
 "use client";
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import type { Route } from "next";
+import { useSearchParams } from "next/navigation";
 import { CalendarDays, ChevronDown, Circle, CircleCheck, Footprints, MoveVertical, Sparkles, Swords, Weight } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { PlayerCard } from "@/components/cards/PlayerCard";
@@ -9,44 +10,69 @@ import { PitchMap } from "@/components/players/PitchMap";
 import { QueryErrorState } from "@/lib/query-state";
 import { formatUtcDate } from "@/lib/format-date";
 import { conditionUrl } from "@/lib/r2-images";
+import { forgetRememberedManager, readRememberedManager, rememberManager } from "@/lib/remembered-manager";
 import {
   CARD_TYPE_LABELS,
   PLAYING_STYLE_DESCRIPTIONS,
   POSITIONS,
+  TRENDING_BOOSTER_CYCLE,
+  TRENDING_BOOSTER_MAGNITUDE,
   bestFitPosition,
+  booster1Levels,
+  buildMode,
+  decodeBuildQuery,
+  encodeBuildQuery,
   formatFeetInches,
+  isIdParam,
+  modeHasBuild,
+  nextBoosterLevel,
+  openingBuildState,
+  ownBooster2Levels,
+  positionFromIndex,
   positionTiles,
-  simulateBuild,
+  resolveBuildLists,
+  sameBuildState,
+  simulateCardBuild,
+  takesSecondBooster,
   type BaseStat,
+  type BoosterLevel,
+  type BuildQueryLists,
+  type BuildUrlState,
   type CardPreview,
   type Position,
   type PlayerCardDTO,
+  type SecondBoosterDTO,
   type SkillDTO,
   type TrainingCategory,
 } from "@eflab/shared";
-import { DeferredModal, prefetchModal } from "@/components/build-simulator/deferred";
+import { DeferredModal, DeferredSecondBoosterPicker, prefetchModal, prefetchSecondBoosterPicker } from "@/components/build-simulator/deferred";
 import {
   BuildSettings,
   CategoryAdjust,
   ProgressionDock,
   ProgressionPanel,
   boosterSummary,
-  defaultProgressionState,
+  canSpendPoints,
   isCustomBuild,
+  openingProgressionState,
   progressionIds,
+  type BuildChangeMeta,
+  type BuildNotice,
+  type BuildRefs,
+  type ProgressionChange,
   type ProgressionState,
 } from "@/components/build-simulator/ProgressionPanel";
 // Type only: the static copy is passed in by the server page (`notes`).
 import type { BuildNotes } from "@/components/build-simulator/build-notes";
 import { CardInfo } from "@/components/detail/CardInfo";
 import { BodyModel } from "@/components/detail/BodyModel";
-import { StarRating } from "@/components/detail/StarRating";
-import { CategoryRow, KeyStats, STAT_CATEGORIES, StatGrid, useCategoryPreview, type StatHighlight } from "@/components/detail/StatGrid";
+import { StarRating, WeakFootStars } from "@/components/detail/StarRating";
+import { CategoryRow, KeyStats, STAT_CATEGORIES, StatGrid, useCategoryPreview, type ActiveCategories, type StatHighlight } from "@/components/detail/StatGrid";
 import { isShowtimeSkill, orderSkills, skillDisplayName } from "@/components/detail/skill-display";
 import { SkillChip } from "@/components/detail/SkillChip";
 import { PlaystyleTrigger } from "@/components/detail/PlaystyleTrigger";
 import { Tooltip } from "@/components/ui/Tooltip";
-import { POSITION_LABEL, conditionLabel, positionOf, playingStyleLabel, statTierClass } from "@/lib/card-display";
+import { POSITION_LABEL, boosterLabel, conditionLabel, positionOf, playingStyleLabel, statTierClass } from "@/lib/card-display";
 
 // Player detail page body (layout of change efootbase-ui-redesign, measured
 // on the reference capture of 2026-10-20):
@@ -54,7 +80,8 @@ import { POSITION_LABEL, conditionLabel, positionOf, playingStyleLabel, statTier
 //            "{maxOvr} OVR" (the dump's max-level overall) + a muted 12 px
 //            "dump max · no proficiency bonus" note; a line with position ·
 //            attack style · defence style · condition (12 px icons; the two
-//            styles are description triggers, PlaystyleTrigger);
+//            styles are description triggers, PlaystyleTrigger); the polite
+//            "link adjusted" message;
 //   left     (280 px from lg) 180 px card face (condition letter, no MAX
 //            badges; its OVR block prints the live build overall at the
 //            selected position, with that position's label), three 28 px
@@ -64,56 +91,75 @@ import { POSITION_LABEL, conditionLabel, positionOf, playingStyleLabel, statTier
 //            minus the Build settings card at its end, so the card stays in
 //            view while the main column scrolls and never covers anything),
 //            then the non-sticky Build settings card (Max Level, Position,
-//            the overall there, "About this build") — efootbase-behaviour-
-//            parity;
+//            the overall there, "About this build" with the Stat breakdown);
 //   row      under both columns, full width: Card Info and Other Versions
 //            (56 px thumbnails, "+N" tile), side by side from lg;
-//   phone    (< lg) no panel in the column: a floating category strip and a
-//            dock above the tab bar (ProgressionDock) — its proficiency chip
-//            and avatar open a small non-modal manager / proficiency popover,
-//            the strip, points and Progression button open the bottom sheet
-//            holding the same panel and the Build settings, scrolled to the
-//            category rows; one state source (`build`) for all;
+//   phone    (< lg) no panel in the column: a floating category strip (its
+//            items open the Adjust popover) and a dock above the tab bar
+//            (ProgressionDock) — its proficiency chip and avatar open a small
+//            non-modal manager / proficiency popover, the points and the
+//            Progression button open the bottom sheet holding the same panel
+//            and the Build settings, scrolled to the category rows; one
+//            state source (`build`) for all;
 //   main     one "Overview" content card — a Compare shortcut in its heading,
 //            description (playstyle triggers, up to two skill links, "and
-//            other N player skills"), spec line, category strip (build's
-//            points per category), booster buttons (the only booster
-//            toggles, `build.boosters`; readable stat names), stat view
-//            switch, stat grid (3 columns from lg, 2 below; five tier
-//            colours, filled "+N" booster / "+1" manager chips; a row opens
-//            its Adjust popover with the category steppers and the
-//            breakdown), skills (Showtime first, links with a preview) —
-//            then Body Model and Position & Playstyle (Best Fit / At POS /
-//            "N Full · N Half", pitch, style panel, WF / Form / Injury
-//            Resistance stars).
+//            other N player skills"), spec line, category strip (its items
+//            open the Adjust popover), booster buttons (Booster 1 on / off or,
+//            on a Trending card, through its levels; the card's own Booster 2
+//            on / off, else the "Select Booster" slot), stat view switch, stat
+//            grid (3 columns from lg, 2 below; five tier colours, filled "+N"
+//            booster / "+1" manager chips; a row opens its Adjust popover
+//            when the build can spend points, else it is plain), skills
+//            (Showtime first, links with a preview) — then Body Model and
+//            Position & Playstyle (Best Fit / At POS / "N Full · N Half",
+//            pitch, style panel, WF / Form / Injury Resistance stars).
 // The root carries `data-card-tint` (the card type) for the backdrop's static
 // tint (globals.css `.efb-backdrop__tint`).
-// The Progression state lives here because the stat grid, the card face, the
-// booster buttons and the Pitch Map render the engine's projection; it opens
-// on the Max-OVR build with every usable booster on and no manager
-// (defaultProgressionState). Best Fit, "At POS" and the 13 Pitch Map values
-// come from the exact overall formula (`positionTiles`) on the stats shown —
-// the build's when the card has a Progression panel, otherwise the stat
-// grid's — never from the stored eFHUB ratings (change
-// efootbase-exact-model-managers).
+//
+// The build (change efootbase-function-parity, card kinds by `buildMode`):
+// a card with a level cap above 1 has the full Progression panel; a
+// Highlight card with a level cap of 1 a panel with a 1–80 Max Level slider
+// (empty at Max Level 1); a Trending card the "Build" panel (manager and
+// proficiency, Booster 1 levels); any other card with a level cap of 1 no
+// build (the dump's stats and the note). It lives here because the stat grid,
+// the card face, the booster buttons and the Pitch Map render the engine's
+// projection (`simulateCardBuild`). Best Fit, "At POS" and the 13 Pitch Map
+// values come from the exact overall formula on the stats shown, never from
+// the stored eFHUB ratings (change efootbase-exact-model-managers).
+//
+// Build in the URL (D2, spec "Build State In The Card URL"): the state is
+// read from the query on the server and the first client render alike
+// (`decodeBuildQuery`, so hydration matches) and every change made here is
+// written with `history.replaceState` (`encodeBuildQuery`; Next's router
+// adopts it — no navigation, no server request — and useSearchParams
+// follows). The opening state, and the opening state with the remembered
+// manager, write no query. Every query this page writes is remembered until
+// the router hands it back, so an echo changes nothing; any other query is a
+// navigation to this card and is adopted. A link that had to be corrected
+// (over budget, out of range, unknown manager or booster) is rewritten at
+// once — one tick after mount, when Next has patched the history — and a
+// polite message says so. The remembered manager (D3) is read after mount
+// and applied only to a plain URL, without writing it.
 
 // Key stats shown on the attack / defence playing-style cards.
 const ATTACK_KEY_STATS: readonly BaseStat[] = ["offensiveAwareness", "finishing", "dribbling", "lowPass"];
 const DEFENCE_KEY_STATS: readonly BaseStat[] = ["defensiveAwareness", "ballWinning", "defensiveEngagement", "aggression"];
 
-const WEAK_FOOT_MAX = 4;
-/** Form / injury resistance are stored 0–2 and shown as value + 1 stars of 3 (efootbase). */
+/** Form / injury resistance are stored 0–2 and shown as value + 1 stars of 3
+ *  (efootbase); weak foot (stored 0–3) goes through `WeakFootStars`. */
 const THREE_STAR_MAX = 3;
 /** Skills linked in the Overview paragraph (Showtime first), as the reference. */
 const OVERVIEW_SKILL_LINKS = 2;
 /** Other Versions slots before the "+N" tile (4 × 2 grid of 56 px cards). */
 const VERSIONS_PREVIEW = 8;
+/** The message of a link whose build had to be corrected. */
+const LINK_ADJUSTED = "The link's build was adjusted to fit this card.";
 
-/** Which values the stat grid shows: the Progression build's projection, the
- *  dump's max-level stats (`max_attributes`, a different lift that includes
- *  the dump's own booster handling) or the level-1 base. Any change in the
- *  Progression panel switches back to "build", so the two "max" meanings
- *  never mix without the user choosing one. */
+/** Which values the stat grid shows: the build's projection, the dump's
+ *  max-level stats (`max_attributes`, a different lift that includes the
+ *  dump's own booster handling) or the level-1 base. Any change in the build
+ *  switches back to "build", so the two "max" meanings never mix without the
+ *  user choosing one. */
 type StatView = "build" | "max" | "base";
 
 /** True from lg (1024 px), false below, null before the first client
@@ -133,6 +179,66 @@ function useDesktopLayout(): boolean | null {
   return desktop;
 }
 
+/** The stats a booster raises, as readable names ("Offensive Awareness, Ball Control, …"). */
+const boosterStatNames = (b: { stats: Partial<Record<BaseStat, number>> }): string =>
+  boosterLabel("Booster", (Object.entries(b.stats) as Array<[BaseStat, number]>).filter(([, v]) => typeof v === "number" && v !== 0)).replace(/^[^·]*·\s*/, "");
+
+/** One booster control of the Overview card: the shared look, the readable
+ *  label truncated on a wide mouse layout with the full text in a tooltip
+ *  (wrapped on phones and touch devices). */
+function BoosterButton({
+  slot,
+  tooltip,
+  children,
+  className = "",
+  ...button
+}: {
+  slot: 1 | 2;
+  tooltip: string;
+  children: ReactNode;
+  className?: string;
+  onClick: () => void;
+  onPointerEnter?: () => void;
+  onFocus?: () => void;
+  "aria-pressed"?: boolean;
+  "aria-haspopup"?: "dialog";
+  "aria-expanded"?: boolean;
+  "aria-label"?: string;
+  "data-state"?: string;
+  "data-kind"?: string;
+}) {
+  return (
+    <Tooltip content={<p className="text-sm text-white">{tooltip}</p>} className="efb-booster-tip">
+      {(tp) => (
+        <button
+          {...tp}
+          {...button}
+          // The tooltip repeats the visible label; do not announce it twice.
+          aria-describedby={undefined}
+          type="button"
+          onClick={(e) => {
+            tp.onClick(e);
+            button.onClick();
+          }}
+          onPointerEnter={(e) => {
+            tp.onPointerEnter(e);
+            button.onPointerEnter?.();
+          }}
+          onFocus={(e) => {
+            tp.onFocus(e);
+            button.onFocus?.();
+          }}
+          className={`efb-booster-button hit-44 ${className}`}
+          data-testid={`progression-booster-${slot}`}
+          data-usable="true"
+        >
+          {children}
+        </button>
+      )}
+    </Tooltip>
+  );
+}
+
 export function PlayerDetailClient({
   baseId,
   cardId,
@@ -146,13 +252,22 @@ export function PlayerDetailClient({
    *  (build-notes.ts): sent with the server render, not in this bundle. */
   notes: BuildNotes;
 }) {
-  const hasProgressionInitial = initialData.levelCap > 1;
-  const [statView, setStatView] = useState<StatView>(hasProgressionInitial ? "build" : "max");
-  // Pinned category highlight (strip counter / panel label press) and the
-  // transient hover / keyboard-focus preview of a category, which wins while
-  // it lasts (owner feedback 2026-10-23).
+  const searchParams = useSearchParams();
+  const urlQs = searchParams.toString();
+  const pagePath = `/players/${baseId}/${cardId}`;
+  const mode = buildMode(initialData);
+  const hasBuild = modeHasBuild(mode);
+  const [statView, setStatView] = useState<StatView>(hasBuild ? "build" : "max");
+  // Pinned category highlight (a Progression panel label press), the
+  // transient hover / keyboard-focus preview of a category, and the open
+  // Adjust popover's categories (a stat row, a strip item) — the popover wins,
+  // then the preview, then the pin.
   const [highlight, setHighlight] = useState<StatHighlight>(null);
   const categoryPreview = useCategoryPreview();
+  const [adjust, setAdjust] = useState<{ owner: string; cats: readonly TrainingCategory[] } | null>(null);
+  const reportAdjust = useCallback((owner: string, cats: readonly TrainingCategory[] | null) => {
+    setAdjust((cur) => (cats ? { owner, cats } : cur?.owner === owner ? null : cur));
+  }, []);
   const [allVersions, setAllVersions] = useState(false);
   // "+N" in Other Versions: index of the version link to focus once the rest
   // is shown, and the polite announcement of it.
@@ -170,38 +285,177 @@ export function PlayerDetailClient({
   // (always shown from lg).
   const [statsHelpOpen, setStatsHelpOpen] = useState(false);
   const statsHelpId = useId();
-  // Progression build (player-progression-simulator): max level, position,
-  // stat points per category, booster toggles. Kept in React state, not the URL.
-  const [build, setBuildState] = useState<ProgressionState>(() => defaultProgressionState(initialData));
-  // Max Level reset notice of the last change (the panel shows and announces
-  // it); every other change clears it.
-  const [buildNotice, setBuildNotice] = useState<string | null>(null);
-  const setBuild = (next: ProgressionState, notice: string | null = null) => {
+
+  // ---- The build and its URL ----
+  // Read from the query on the server and in the first client render (the
+  // same decode, so hydration matches). Lists a value is checked against
+  // (picker managers, second boosters) are not loaded yet: those checks wait
+  // (`resolveBuildLists` below).
+  const [initial] = useState(() => decodeBuildQuery(urlQs, initialData));
+  const [build, setBuildState] = useState<ProgressionState>(() => ({ ...initial.state, position: positionFromIndex(initialData.registeredPosition) }));
+  const latest = useRef(build);
+  // What the plain URL stands for: the opening state, plus the remembered
+  // manager once it is applied (a build equal to it writes no query).
+  const baseline = useRef<BuildUrlState>(openingBuildState(initialData));
+  // The query last written or adopted, and the queries written but not yet
+  // handed back by the router (their echoes change nothing).
+  const lastQs = useRef(urlQs);
+  const ownWrites = useRef<string[]>([]);
+  // Max Level notice of the last change (the panel shows and announces it);
+  // the link-correction message (page level, announced). Any change clears both.
+  const [buildNotice, setBuildNotice] = useState<BuildNotice | null>(null);
+  const [linkNotice, setLinkNotice] = useState("");
+
+  const commitState = useCallback((next: ProgressionState) => {
+    latest.current = next;
     setBuildState(next);
-    setBuildNotice(notice);
-    setStatView("build");
-  };
-  // Ids shared by the Progression card and the Build settings card, and the
-  // prefix of the stat-row Adjust steppers.
+  }, []);
+  const writeUrl = useCallback(
+    (next: BuildUrlState) => {
+      const qs = sameBuildState(next, baseline.current, initialData) ? "" : encodeBuildQuery(next, initialData).toString();
+      if (qs === lastQs.current) return;
+      lastQs.current = qs;
+      ownWrites.current = [...ownWrites.current.slice(-31), qs];
+      window.history.replaceState(null, "", qs ? `${pagePath}?${qs}` : pagePath);
+    },
+    [initialData, pagePath],
+  );
+  const setBuild = useCallback<ProgressionChange>(
+    (next, meta: BuildChangeMeta = {}) => {
+      commitState(next);
+      setBuildNotice(meta.notice ?? null);
+      setLinkNotice("");
+      setStatView("build");
+      if (meta.manager === "remember" && next.managerId) rememberManager(next.managerId);
+      else if (meta.manager === "forget") forgetRememberedManager();
+      writeUrl(next);
+    },
+    [commitState, writeUrl],
+  );
+
+  // A link that had to be corrected: announce it and rewrite the URL one tick
+  // after mount (Next patches history.replaceState in an effect of the
+  // router, which runs after this page's first effects).
+  useEffect(() => {
+    if (initial.corrections.length === 0) return;
+    setLinkNotice(LINK_ADJUSTED);
+    const t = window.setTimeout(() => writeUrl(latest.current), 0);
+    return () => window.clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // The lists already loaded (set below, after their queries): a query
+  // adopted later is checked against them at once, as their effect does not
+  // run again for lists that did not change.
+  const loadedLists = useRef<BuildQueryLists>({});
+
+  // The router hands back the queries this page wrote (echoes) — forget them;
+  // any other query is a navigation to this card with another build (or the
+  // address edited): adopt it like a link.
+  useEffect(() => {
+    const at = ownWrites.current.indexOf(urlQs);
+    if (at >= 0) {
+      ownWrites.current = ownWrites.current.slice(at + 1);
+      return;
+    }
+    if (urlQs === lastQs.current) return;
+    lastQs.current = urlQs;
+    ownWrites.current = [];
+    baseline.current = openingBuildState(initialData);
+    const d = decodeBuildQuery(urlQs, initialData, loadedLists.current);
+    commitState({ ...d.state, position: latest.current.position });
+    setBuildNotice(null);
+    setLinkNotice(d.corrections.length > 0 ? LINK_ADJUSTED : "");
+    if (d.corrections.length > 0) writeUrl({ ...d.state });
+  }, [urlQs, initialData, commitState, writeUrl]);
+
+  // ---- Remembered manager (D3) ----
+  // Read after mount, only for a plain URL (build parameters decide alone).
+  const [storedManagerId, setStoredManagerId] = useState<string | null>(null);
+  useEffect(() => {
+    if (!hasBuild || initial.hasBuildParams) return;
+    const id = readRememberedManager();
+    if (id === null) return;
+    if (isIdParam(id)) setStoredManagerId(id);
+    else forgetRememberedManager();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Lists: requested on load when the build refers to them (a linked or
+  // remembered manager, a linked second booster); otherwise by the drawers on
+  // their first opening — the cache is shared.
+  const pickerQ = trpc.manager.picker.useQuery(undefined, {
+    enabled: hasBuild && (build.managerId !== null || storedManagerId !== null),
+    staleTime: Infinity,
+    gcTime: Infinity,
+  });
+  const secondQ = trpc.booster.secondChoices.useQuery(undefined, {
+    enabled: build.secondBooster !== null,
+    staleTime: Infinity,
+    gcTime: Infinity,
+  });
+  useLayoutEffect(() => {
+    loadedLists.current = {
+      managerIds: pickerQ.data?.map((m) => m.id) ?? null,
+      secondBoosterSlugs: secondQ.data?.map((b) => b.slug) ?? null,
+    };
+  }, [pickerQ.data, secondQ.data]);
+
+  // The remembered manager, once the list answered: selected (its rating as
+  // the proficiency, its pills) if it is a picker manager and the build is
+  // still the opening one; an id that is not one is forgotten. No URL write.
+  useEffect(() => {
+    if (storedManagerId === null || !pickerQ.data) return;
+    setStoredManagerId(null);
+    const m = pickerQ.data.find((x) => x.id === storedManagerId);
+    if (!m) {
+      forgetRememberedManager();
+      return;
+    }
+    const cur = latest.current;
+    const opening = openingProgressionState(initialData);
+    if (cur.position !== opening.position || !sameBuildState(cur, opening, initialData)) return;
+    const next: ProgressionState = { ...cur, managerId: m.id, managerProficiency: m.rating };
+    baseline.current = { ...openingBuildState(initialData), managerId: m.id, managerProficiency: m.rating };
+    commitState(next);
+  }, [storedManagerId, pickerQ.data, initialData, commitState]);
+
+  // The deferred checks of a link: a manager id that is not a picker manager
+  // and a second-booster slug that is not a choice are dropped once their
+  // list answered — announced and written back.
+  useEffect(() => {
+    if (!pickerQ.data && !secondQ.data) return;
+    const cur = latest.current;
+    const res = resolveBuildLists(cur, { managerIds: pickerQ.data?.map((m) => m.id) ?? null, secondBoosterSlugs: secondQ.data?.map((b) => b.slug) ?? null });
+    if (res.corrections.length === 0) return;
+    const next: ProgressionState = { ...cur, ...res.state };
+    commitState(next);
+    setLinkNotice(LINK_ADJUSTED);
+    writeUrl(next);
+  }, [pickerQ.data, secondQ.data, commitState, writeUrl]);
+
+  // Ids shared by the Progression card and the Build settings card.
   const progressionIdBase = useId().replace(/:/g, "");
   const desktop = useDesktopLayout();
   // Crossing lg unmounts the column's panel (or the dock): a label hovered or
-  // focused at that moment never reports its leave / blur, so the preview is
-  // dropped with it.
+  // focused, or a dock popover open, at that moment never reports its leave /
+  // blur / close, so the preview and the popover highlight are dropped with it.
   const clearCategoryPreview = categoryPreview.clear;
-  useEffect(() => clearCategoryPreview(), [desktop, clearCategoryPreview]);
+  useEffect(() => {
+    clearCategoryPreview();
+    setAdjust(null);
+  }, [desktop, clearCategoryPreview]);
   // Mobile Progression sheet. It can only be open below lg: crossing to lg
   // closes it (the Modal's `open` turns false and its close event resets this).
   const [sheetOpen, setSheetOpen] = useState(false);
   const sheetShown = sheetOpen && desktop === false;
-  // The dock opens the sheet scrolled to the category rows (the manager and
-  // the proficiency have their own popover in the dock). Called by the
-  // Modal once the dialog is shown and laid out (`onShown` — the sheet's
-  // code is loaded on first use, components/build-simulator/deferred.tsx, so
-  // an effect here could run before the dialog exists); the offset is taken
-  // between two rects of the same translated panel, so the slide-in does not
-  // skew it, and only the sheet's scrolling body moves (scrollIntoView could
-  // also scroll the page behind).
+  // Second-booster drawer (a card with a level cap above 1 and no usable
+  // Booster 2 of its own).
+  const [secondOpen, setSecondOpen] = useState(false);
+  // The dock opens the sheet scrolled to the category rows. Called by the
+  // Modal once the dialog is shown and laid out (`onShown`); the offset is
+  // taken between two rects of the same translated panel, so the slide-in
+  // does not skew it, and only the sheet's scrolling body moves.
   const scrollSheetToCategories = (dialog: HTMLDialogElement) => {
     const cats = document.getElementById(progressionIds(progressionIdBase).cats);
     const body = cats?.closest<HTMLElement>(".efb-modal__body");
@@ -213,31 +467,18 @@ export function PlayerDetailClient({
   const q = trpc.player.byId.useQuery({ baseId, cardId }, { initialData });
   const p = q.data ?? initialData;
 
-  const buildDefaults = useMemo(() => (p ? defaultProgressionState(p) : null), [p]);
-  // Pure, client-side engine (packages/shared/src/progression.ts).
-  const buildResult = useMemo(
-    () =>
-      p
-        ? simulateBuild({
-            base: p.stats,
-            levelCap: p.levelCap,
-            height: p.height,
-            weakFootAccuracy: p.weakFootAccuracy,
-            config: {
-              playerId: p.id,
-              maxLevel: build.maxLevel,
-              position: build.position,
-              trainingPoints: build.trainingPoints,
-              boosters: build.boosters,
-              managerProficiency: build.managerProficiency,
-            },
-            boosters: [p.booster1, p.booster2],
-            positionAptitudes: p.positionAptitudes,
-            manager: build.manager ? { stats: build.manager.pills } : null,
-          })
-        : null,
-    [p, build],
-  );
+  // The list entries the build refers to, once loaded.
+  const refManager = (build.managerId !== null && pickerQ.data?.find((m) => m.id === build.managerId)) || null;
+  const refSecond = (build.secondBooster !== null && secondQ.data?.find((b) => b.slug === build.secondBooster)) || null;
+  const refs = useMemo<BuildRefs>(() => ({ manager: refManager, second: refSecond }), [refManager, refSecond]);
+  const managerPending = build.managerId !== null && refManager === null;
+
+  // Pure, client-side engine (packages/shared: progression.ts, build.ts).
+  const buildResult = useMemo(() => simulateCardBuild(p, build, build.position, { manager: refs.manager, second: refs.second }), [p, build, refs]);
+  const canSpend = canSpendPoints(mode, build);
+  useEffect(() => {
+    if (!canSpend) setAdjust(null);
+  }, [canSpend]);
 
   // Skill slug → skill (the DTO carries slugs; name, group, artwork, description
   // and boosts live in skill.list).
@@ -251,7 +492,7 @@ export function PlayerDetailClient({
   if (q.isError) {
     return <QueryErrorState error={q.error} onRetry={() => void q.refetch()} title="Could not load this player" />;
   }
-  if (!p || !buildResult || !buildDefaults) {
+  if (!p) {
     // The server wrapper already 404s; this only happens if the card vanished
     // between the server render and a client refetch.
     return (
@@ -284,53 +525,189 @@ export function PlayerDetailClient({
   const fullPositions = POSITIONS.filter((k) => p.positionAptitudes[k] === 0);
   const halfPositions = POSITIONS.filter((k) => p.positionAptitudes[k] === 1);
 
-  // Cards with a level cap of 1 have no training points — no panel for them.
-  const hasProgression = p.levelCap > 1;
-  const customBuild = hasProgression && isCustomBuild(build, buildDefaults, p);
-  const view: StatView = hasProgression ? statView : statView === "build" ? "max" : statView;
+  const customBuild = hasBuild && isCustomBuild(build, p);
+  const view: StatView = hasBuild ? statView : statView === "build" ? "max" : statView;
   const stats = view === "build" ? buildResult.projectedStats : view === "max" ? p.maxStats : p.stats;
   const boosterDeltas = view === "build" ? buildResult.boosterDeltas : undefined;
-  const trainingDeltas = view === "build" ? buildResult.trainingDeltas : undefined;
-  const capDeltas = view === "build" ? buildResult.capDeltas : undefined;
-  const proficiencyDeltas = view === "build" ? buildResult.proficiencyDeltas : undefined;
   const managerDeltas = view === "build" ? buildResult.managerDeltas : undefined;
   const buildOvr = buildResult.overall;
-  // Position tiles (exact formula): the build's when the panel exists (the
+  // Position tiles (exact formula): the build's when the card has one (the
   // tile at the panel's position is the panel's overall), else the stats in
   // the grid. Best Fit = the highest tile (registered position on a tie).
-  const tiles = hasProgression ? buildResult.tiles : positionTiles(stats, { height: p.height, weakFootAccuracy: p.weakFootAccuracy }, p.positionAptitudes);
+  const tiles = hasBuild ? buildResult.tiles : positionTiles(stats, { height: p.height, weakFootAccuracy: p.weakFootAccuracy }, p.positionAptitudes);
   const bestPos = bestFitPosition(tiles, regPos);
   // The "At <POS>" tile reads the position the card face prints: the one
-  // chosen in Build settings when the card has a panel, else the registered
-  // one (QA 2026-10-23 U2 — it used to stay on the registered position while
-  // the face followed the selection).
-  const atPos: Position = hasProgression ? build.position : regPos;
-  // Without a panel the card's level cap is 1: "Max" = base + Booster 1 (dump).
-  const tilesSource = hasProgression ? "current build" : view === "max" ? "max-level stats (Booster 1 on)" : "level-1 stats";
+  // chosen in Build settings when the card has a build, else the registered
+  // one.
+  const atPos: Position = hasBuild ? build.position : regPos;
+  // Without a build the card's level cap is 1: "Max" = base + Booster 1 (dump).
+  const tilesSource = hasBuild ? "current build" : view === "max" ? "max-level stats (Booster 1 on)" : "level-1 stats";
   // The card face prints the build's overall at the selected position with
-  // that position's label (as the reference prints "108 RWF" there; B2 —
-  // the face and its accessible name name the same position); the header
-  // pill is the dump's max overall with its visible "dump max · no
-  // proficiency bonus" note, so the two are never confused.
-  const cardPlayer = hasProgression ? { ...p, ovr: buildOvr, registeredPosition: POSITIONS.indexOf(build.position) } : p;
+  // that position's label (as the reference prints "108 RWF" there — also at
+  // level 1, where the proficiency bonus is included); the header pill is the
+  // dump's max overall with its visible "dump max · no proficiency bonus"
+  // note, so the two are never confused.
+  const cardPlayer = hasBuild ? { ...p, ovr: buildOvr, registeredPosition: POSITIONS.indexOf(build.position) } : p;
   const atkDesc = PLAYING_STYLE_DESCRIPTIONS[playstyleAtk];
   const defDesc = PLAYING_STYLE_DESCRIPTIONS[playstyleDef];
   const onHighlight = (next: TrainingCategory | null) => setHighlight(next);
+  // What the grid and the strip light: an open Adjust popover's categories,
+  // else the hovered / focused category, else the pinned one.
+  const activeCats: ActiveCategories = adjust?.cats ?? (categoryPreview.preview ? [categoryPreview.preview] : highlight ? [highlight] : null);
+  const renderAdjust = (cats: readonly TrainingCategory[], headingId: string) => (
+    <CategoryAdjust cats={cats} state={build} result={buildResult} onChange={setBuild} headingId={headingId} />
+  );
 
-  // Booster buttons of the Overview card — the only booster toggles since the
-  // Progression panel dropped its own (efootbase-ui-redesign batch 5; they
-  // carry its `progression-booster-N` test ids). They toggle `build.boosters`
-  // through setBuild, so the stat view returns to "build" exactly as a
-  // change in the panel does. A slot without stat data, or any slot of a
-  // level-cap-1 card (its stats are the dump's, nothing to toggle), is a
-  // static label.
-  const boosterSlots = ([0, 1] as const).map((slot) => ({ slot, info: boosterSummary(p, slot) }));
-  const showBoosters = boosterSlots.some(({ info }) => info.usable);
-  const toggleBooster = (slot: 0 | 1) => {
-    const boosters: [boolean, boolean] = [build.boosters[0], build.boosters[1]];
-    boosters[slot] = !boosters[slot];
-    setBuild({ ...build, boosters });
+  // ---- Boosters (Overview card; D4) ----
+  const b1Levels = booster1Levels(p);
+  const b2Levels = ownBooster2Levels(p);
+  const takesSecond = takesSecondBooster(p);
+  const boosterInfo = [boosterSummary(p, 0), boosterSummary(p, 1)] as const;
+  const cycleB1 = () => setBuild({ ...build, booster1: nextBoosterLevel(b1Levels, build.booster1) });
+  const toggleB2 = () => setBuild({ ...build, booster2: nextBoosterLevel(b2Levels, build.booster2) });
+  const chooseSecond = (b: SecondBoosterDTO) => {
+    setSecondOpen(false);
+    setBuild({ ...build, secondBooster: build.secondBooster === b.slug ? null : b.slug });
   };
+  const clearSecond = () => {
+    setSecondOpen(false);
+    setBuild({ ...build, secondBooster: null });
+  };
+  const hasSlot1 = p.booster1 !== null || (p.boosterId1 ?? 0) > 0;
+  const boosterControls: ReactNode[] = [];
+  if (!hasBuild) {
+    // No build (a card with a level cap of 1 that is neither Highlight nor
+    // Trending): static labels; Booster 1 is already inside the dump's
+    // max-level stats (said in visible text, not only in a title).
+    if (boosterInfo.some((i) => i.usable)) {
+      boosterInfo.forEach((info, slot) =>
+        boosterControls.push(
+          <div key={slot} className="efb-booster-button" data-testid={`progression-booster-${slot + 1}`} data-usable={info.usable ? "true" : "false"}>
+            <Sparkles className="size-4 shrink-0" aria-hidden />
+            <span className="efb-booster-button__label efb-booster-button__label--wrap min-w-0 break-words">
+              <span className="sr-only">Booster {slot + 1}: </span>
+              {info.label}
+              {info.usable && slot === 0 && <span className="text-[var(--color-text-secondary)]"> (in the max-level stats)</span>}
+            </span>
+          </div>,
+        ),
+      );
+    }
+  } else {
+    // Booster 1: on / off, or a Trending card's +3 → off → +1 → +2 cycle
+    // (level text, three level bars, the level in the accessible name).
+    if (b1Levels.length > 0 && p.booster1) {
+      const trending = b1Levels === TRENDING_BOOSTER_CYCLE;
+      const b1Level: BoosterLevel = build.booster1;
+      const on = b1Level !== 0;
+      const names = boosterStatNames(p.booster1);
+      if (trending) {
+        const n = b1Level === "full" ? TRENDING_BOOSTER_MAGNITUDE : b1Level;
+        const levelText = n === 0 ? "Off" : `+${n}`;
+        boosterControls.push(
+          <BoosterButton
+            key="b1"
+            slot={1}
+            tooltip={`Booster 1: ${levelText} · ${names}`}
+            onClick={cycleB1}
+            aria-pressed={on}
+            aria-label={`Booster 1: ${names}, level ${n === 0 ? "off" : `+${n} of +${TRENDING_BOOSTER_MAGNITUDE}`} — change level`}
+            data-state={String(n)}
+            data-kind="levels"
+            className="efb-booster-button--levels"
+          >
+            <span className="efb-booster-levels" aria-hidden data-testid="booster-level-bars">
+              {Array.from({ length: TRENDING_BOOSTER_MAGNITUDE }, (_, i) => (
+                <span key={i} className="efb-booster-levels__bar" data-on={i < n ? "true" : undefined} />
+              ))}
+            </span>
+            <span className="efb-booster-button__label min-w-0" aria-hidden>
+              <span className="efb-booster-button__level" data-testid="booster-level-text">
+                {levelText}
+              </span>{" "}
+              · {names}
+            </span>
+          </BoosterButton>,
+        );
+      } else {
+        const StateIcon = on ? CircleCheck : Circle;
+        boosterControls.push(
+          <BoosterButton key="b1" slot={1} tooltip={`Booster 1: ${boosterInfo[0].label}`} onClick={cycleB1} aria-pressed={on}>
+            <StateIcon className="size-4 shrink-0" aria-hidden data-testid="booster-state-icon" data-state={on ? "on" : "off"} />
+            <span className="efb-booster-button__label min-w-0">
+              <span className="sr-only">Booster 1: </span>
+              {boosterInfo[0].label}
+            </span>
+          </BoosterButton>,
+        );
+      }
+    } else if (hasSlot1) {
+      // Booster 1 without stat data (or an unknown id): a label, no control.
+      boosterControls.push(
+        <div key="b1" className="efb-booster-button" data-testid="progression-booster-1" data-usable="false">
+          <Sparkles className="size-4 shrink-0" aria-hidden />
+          <span className="efb-booster-button__label efb-booster-button__label--wrap min-w-0 break-words">
+            <span className="sr-only">Booster 1: </span>
+            {boosterInfo[0].label}
+          </span>
+        </div>,
+      );
+    }
+    // Booster 2: the card's own (a fixed orange pill, on / off), else the
+    // "Select Booster" slot (a card with a level cap above 1), else a
+    // Trending card's own one applied as it is.
+    if (b2Levels.length > 0 && p.booster2) {
+      const on = build.booster2 !== 0;
+      const StateIcon = on ? CircleCheck : Circle;
+      boosterControls.push(
+        <BoosterButton key="b2" slot={2} tooltip={`Booster 2 (the card's own): ${boosterInfo[1].label}`} onClick={toggleB2} aria-pressed={on} data-kind="own" className="efb-booster-button--own">
+          <StateIcon className="size-4 shrink-0" aria-hidden data-testid="booster-state-icon" data-state={on ? "on" : "off"} />
+          <span className="efb-booster-button__label min-w-0">
+            <span className="sr-only">Booster 2, the card&apos;s own: </span>
+            {boosterInfo[1].label}
+          </span>
+        </BoosterButton>,
+      );
+    } else if (takesSecond) {
+      const chosen: SecondBoosterDTO | null = refs.second;
+      const pending = build.secondBooster !== null && chosen === null;
+      const chosenLabel = chosen ? boosterLabel(chosen.name, Object.entries(chosen.stats) as Array<[BaseStat, number]>) : null;
+      boosterControls.push(
+        <BoosterButton
+          key="b2"
+          slot={2}
+          tooltip={chosenLabel ? `Booster 2: ${chosenLabel} — change or clear` : "Booster 2: choose a second booster"}
+          onClick={() => {
+            prefetchSecondBoosterPicker();
+            setSecondOpen(true);
+          }}
+          onPointerEnter={prefetchSecondBoosterPicker}
+          onFocus={prefetchSecondBoosterPicker}
+          aria-haspopup="dialog"
+          aria-expanded={secondOpen}
+          data-kind="second"
+          data-state={chosen ? "chosen" : "empty"}
+          className={chosen ? "efb-booster-button--chosen" : "efb-booster-button--select"}
+        >
+          <Sparkles className="size-4 shrink-0" aria-hidden />
+          <span className="efb-booster-button__label min-w-0">
+            <span className="sr-only">Booster 2: </span>
+            {chosenLabel ?? (pending ? "Loading booster…" : "Select Booster")}
+          </span>
+        </BoosterButton>,
+      );
+    } else if (p.booster2 && boosterInfo[1].usable) {
+      boosterControls.push(
+        <div key="b2" className="efb-booster-button" data-testid="progression-booster-2" data-usable="true">
+          <Sparkles className="size-4 shrink-0" aria-hidden />
+          <span className="efb-booster-button__label efb-booster-button__label--wrap min-w-0 break-words">
+            <span className="sr-only">Booster 2: </span>
+            {boosterInfo[1].label}
+          </span>
+        </div>,
+      );
+    }
+  }
 
   const versionPreviews: CardPreview[] = p.otherVersions.map((v) => ({
     id: v.id,
@@ -348,16 +725,17 @@ export function PlayerDetailClient({
   const shownVersions = collapsed ? versionPreviews.slice(0, VERSIONS_PREVIEW - 1) : versionPreviews;
   const hiddenVersions = versionPreviews.length - shownVersions.length;
 
+  const level = buildResult.config.managerProficiency;
   const statsHeading =
     view === "build"
-      ? `Stats · ${customBuild ? "custom build" : "Max-OVR build"} · level ${build.maxLevel} · ${
-          build.manager ? `${build.manager.name} (${buildResult.config.managerProficiency})` : `proficiency ${buildResult.config.managerProficiency}`
+      ? `Stats · ${customBuild ? "custom build" : mode === "capped" ? "Max-OVR build" : "opening build"} · ${mode === "trending" ? "" : `level ${build.maxLevel} · `}${
+          refs.manager ? `${refs.manager.name} (${level})` : `proficiency ${level}`
         } · ${buildOvr} at ${build.position}`
       : view === "max"
         ? `Stats at max level ${p.levelCap} (dump)`
         : "Stats at level 1";
 
-  const viewOptions: Array<[StatView, string]> = hasProgression
+  const viewOptions: Array<[StatView, string]> = hasBuild
     ? [
         ["build", `Build (${buildOvr})`],
         ["max", `Max (${p.maxOvr})`],
@@ -455,6 +833,12 @@ export function PlayerDetailClient({
             </span>
           )}
         </div>
+        {/* A corrected link (over budget, out of range, an unknown manager
+            or booster): always rendered — empty in the server HTML, filled
+            after mount — so the message is announced. */}
+        <p role="status" aria-live="polite" className="efb-link-notice" data-testid="build-link-notice">
+          {linkNotice}
+        </p>
       </header>
 
       {/* ======= TWO COLUMNS, then the full-width row (DOM order = phone order) ======= */}
@@ -471,7 +855,7 @@ export function PlayerDetailClient({
           <div className="w-[180px]">
             <PlayerCard player={cardPlayer} size="full" caption="none" priority />
           </div>
-          {hasProgression && (
+          {hasBuild && (
             // The face's OVR block is the build's overall (no tag on the face).
             <p className="sr-only" data-testid="card-build-overall">
               The card shows the overall of the current build: {buildOvr} at {build.position}.
@@ -502,19 +886,21 @@ export function PlayerDetailClient({
           </div>
         </div>
 
-        {/* Progression — none for level-cap-1 cards (no training points).
-            From lg: the card pinned at 64 px (it fits a 900 px viewport; a
-            max height of the viewport below the header, scrolling inside, is
-            only a safety net). Below lg it is not rendered here (the dock and
-            the sheet below take over); before the first client measurement
-            CSS hides it on a phone. */}
-        {hasProgression ? (
+        {/* Progression (or the Trending card's "Build") — none for the other
+            level-cap-1 cards. From lg: the card pinned at 64 px (it fits a
+            900 px viewport; a max height of the viewport below the header,
+            scrolling inside, is only a safety net). Below lg it is not
+            rendered here (the dock and the sheet below take over); before
+            the first client measurement CSS hides it on a phone. */}
+        {hasBuild ? (
           desktop !== false && (
             <div className="efb-progression-sticky hidden lg:block">
               <ProgressionPanel
                 player={p}
                 state={build}
                 result={buildResult}
+                refs={refs}
+                managerPending={managerPending}
                 onChange={setBuild}
                 notice={buildNotice}
                 idBase={progressionIdBase}
@@ -527,13 +913,13 @@ export function PlayerDetailClient({
           )
         ) : (
           <p data-testid="progression-none" className="efb-card text-sm text-[var(--color-text-secondary)]">
-            No Progression panel for this card: its max level is 1, so it has no training points to spend (and no build to choose a manager for).
+            No Progression panel for this card: its max level is 1, so it has no training points to spend.
           </p>
         )}
         </div>
-        {hasProgression && desktop !== false && (
+        {hasBuild && desktop !== false && (
           <div className="hidden lg:block">
-            <BuildSettings player={p} state={build} result={buildResult} onChange={setBuild} idBase={progressionIdBase} notes={notes} />
+            <BuildSettings player={p} state={build} result={buildResult} refs={refs} onChange={setBuild} idBase={progressionIdBase} notes={notes} />
           </div>
         )}
         </div>
@@ -547,9 +933,11 @@ export function PlayerDetailClient({
                 Overview
               </h2>
               {/* Compare shortcut (the reference's 32 × 32 ghost icon link at
-                  the right of its tab row): this card in the first slot. */}
+                  the right of its tab row): this card in the left slot, with
+                  its default compare build (the `left` / `right` form of the
+                  two-build compare; an old `?ids=` link still opens). */}
               <Link
-                href={`/compare?ids=${p.id}` as Route}
+                href={`/compare?left=${p.id}` as Route}
                 aria-label={`Compare ${p.name}`}
                 className="button button--sm button--ghost button--icon-only mb-1 shrink-0"
                 data-testid="overview-compare"
@@ -613,76 +1001,30 @@ export function PlayerDetailClient({
               </span>
               <span aria-hidden className="text-[var(--color-text-secondary)]">·</span>
               <span className="inline-flex items-center gap-1.5">
-                WF Accuracy <StarRating filled={p.weakFootAccuracy} max={WEAK_FOOT_MAX} label="Weak foot accuracy" />
+                WF Accuracy <WeakFootStars level={p.weakFootAccuracy} label="Weak foot accuracy" />
               </span>
               <span className="inline-flex items-center gap-1.5">
-                WF Usage <StarRating filled={p.weakFootUsage} max={WEAK_FOOT_MAX} label="Weak foot usage" />
+                WF Usage <WeakFootStars level={p.weakFootUsage} label="Weak foot usage" />
               </span>
             </div>
 
-            {hasProgression && (
-              <CategoryRow allocation={build.trainingPoints} highlight={highlight} onHighlight={onHighlight} preview={categoryPreview.bind} />
+            {canSpend && (
+              <CategoryRow
+                allocation={build.allocation}
+                active={activeCats}
+                preview={categoryPreview.bind}
+                renderAdjust={(cat, headingId) => renderAdjust([cat], headingId)}
+                onAdjust={reportAdjust}
+              />
             )}
 
-            {showBoosters && (
-              <div className="grid grid-cols-2 gap-2" role="group" aria-label="Boosters">
-                {boosterSlots.map(({ slot, info }) => {
-                  const on = hasProgression && info.usable && build.boosters[slot];
-                  if (!hasProgression || !info.usable) {
-                    // Static label (no toggle): a slot without stat data, or
-                    // any slot of a level-cap-1 card, whose Booster 1 is
-                    // already inside the dump's max-level stats (said in
-                    // visible text, not only in a title).
-                    return (
-                      <div
-                        key={slot}
-                        className="efb-booster-button"
-                        data-testid={`progression-booster-${slot + 1}`}
-                        data-usable={info.usable ? "true" : "false"}
-                      >
-                        <Sparkles className="size-4 shrink-0" aria-hidden />
-                        <span className="efb-booster-button__label efb-booster-button__label--wrap min-w-0 break-words">
-                          <span className="sr-only">Booster {slot + 1}: </span>
-                          {info.label}
-                          {info.usable && slot === 0 && <span className="text-[var(--color-text-secondary)]"> (in the max-level stats)</span>}
-                        </span>
-                      </div>
-                    );
-                  }
-                  // Toggle: the readable label ("+5 · Dribbling, Tight
-                  // Possession, Speed, Balance"), truncated on a wide
-                  // mouse layout with the full list in a tooltip (wrapped on
-                  // phones and touch devices); on / off = a check / an empty
-                  // circle icon plus the cyan colour, and aria-pressed.
-                  const StateIcon = on ? CircleCheck : Circle;
-                  return (
-                    <Tooltip key={slot} content={<p className="text-sm text-white">Booster {slot + 1}: {info.label}</p>} className="efb-booster-tip">
-                      {(tp) => (
-                        <button
-                          {...tp}
-                          // The tooltip repeats the accessible name; do not announce it twice.
-                          aria-describedby={undefined}
-                          type="button"
-                          aria-pressed={on}
-                          onClick={(e) => {
-                            tp.onClick(e);
-                            toggleBooster(slot);
-                          }}
-                          className="efb-booster-button hit-44"
-                          data-testid={`progression-booster-${slot + 1}`}
-                          data-usable="true"
-                        >
-                          <StateIcon className="size-4 shrink-0" aria-hidden data-testid="booster-state-icon" data-state={on ? "on" : "off"} />
-                          <span className="efb-booster-button__label min-w-0">
-                            <span className="sr-only">Booster {slot + 1}: </span>
-                            {info.label}
-                          </span>
-                        </button>
-                      )}
-                    </Tooltip>
-                  );
-                })}
+            {boosterControls.length > 0 && (
+              <div className="grid grid-cols-2 gap-2" role="group" aria-label="Boosters" data-testid="booster-row">
+                {boosterControls}
               </div>
+            )}
+            {takesSecond && (
+              <DeferredSecondBoosterPicker open={secondOpen} onClose={() => setSecondOpen(false)} selectedSlug={build.secondBooster} onChoose={chooseSecond} onClear={clearSecond} />
             )}
 
             {/* Stat view: build projection (default) / dump max / base. */}
@@ -723,28 +1065,20 @@ export function PlayerDetailClient({
             {view === "build" && (
               <p id={statsHelpId} className={`text-xs text-[var(--color-text-secondary)] ${statsHelpOpen ? "" : "max-lg:hidden"}`}>
                 {notes.statsHelp}
-                {highlight
-                  ? " click the pinned category again to clear the highlight."
-                  : " hovering or focusing a category previews the stats it trains, a click pins it."}
+                {canSpend
+                  ? highlight
+                    ? " click the pinned Progression category again to clear its highlight."
+                    : " hovering or focusing a category previews the stats it trains; a strip item or a stat opens its category's controls, a Progression category label pins the highlight."
+                  : " this card's build has no training points to spend."}
               </p>
             )}
             <StatGrid
               values={stats}
               boosterDeltas={boosterDeltas}
-              trainingDeltas={trainingDeltas}
-              capDeltas={capDeltas}
-              proficiencyDeltas={proficiencyDeltas}
               managerDeltas={managerDeltas}
-              source={view}
-              highlight={categoryPreview.preview ?? highlight}
-              renderAdjust={
-                hasProgression
-                  ? (stat) => (
-                      <CategoryAdjust cats={STAT_CATEGORIES[stat]} state={build} result={buildResult} onChange={setBuild} idBase={`${progressionIdBase}-adjust-${stat}`} />
-                    )
-                  : undefined
-              }
-              baseValues={hasProgression ? undefined : p.stats}
+              highlight={activeCats}
+              renderAdjust={canSpend ? (stat, headingId) => renderAdjust(STAT_CATEGORIES[stat], headingId) : undefined}
+              onAdjust={reportAdjust}
             />
 
             {/* Skills — Showtime first (gold), classic after; each chip links
@@ -828,7 +1162,7 @@ export function PlayerDetailClient({
                 <PitchMap positionAptitudes={p.positionAptitudes} tiles={tiles} registeredPosition={regPos} />
                 <p className="w-full text-xs leading-relaxed text-[var(--color-text-secondary)]" data-testid="pitch-note">
                   Overall at each position, computed with the game&apos;s overall formula from the {tilesSource}.
-                  {hasProgression ? "" : " The formula matched every measured tile on the five surveyed cards; other cards are checked in bulk only, not tile by tile."}
+                  {hasBuild ? "" : " The formula matched every measured tile on the five surveyed cards; other cards are checked in bulk only, not tile by tile."}
                 </p>
               </div>
 
@@ -909,13 +1243,13 @@ export function PlayerDetailClient({
                   <div className="flex items-center justify-between gap-3">
                     <dt className="text-[var(--color-text-secondary)]">WF Usage</dt>
                     <dd>
-                      <StarRating filled={p.weakFootUsage} max={WEAK_FOOT_MAX} label="Weak foot usage" />
+                      <WeakFootStars level={p.weakFootUsage} label="Weak foot usage" />
                     </dd>
                   </div>
                   <div className="flex items-center justify-between gap-3">
                     <dt className="text-[var(--color-text-secondary)]">WF Accuracy</dt>
                     <dd>
-                      <StarRating filled={p.weakFootAccuracy} max={WEAK_FOOT_MAX} label="Weak foot accuracy" />
+                      <WeakFootStars level={p.weakFootAccuracy} label="Weak foot accuracy" />
                     </dd>
                   </div>
                   <div className="flex items-center justify-between gap-3">
@@ -999,26 +1333,33 @@ export function PlayerDetailClient({
 
       {/* Phone (< lg): category strip + dock above the tab bar, opening the
           bottom sheet with the full panel (same `build` state). */}
-      {hasProgression && (
+      {hasBuild && (
         <>
           {desktop !== true && (
             <ProgressionDock
+              player={p}
               state={build}
               result={buildResult}
+              refs={refs}
+              managerPending={managerPending}
               onChange={setBuild}
               onOpen={() => setSheetOpen(true)}
               onOpenIntent={prefetchModal}
               expanded={sheetShown}
+              renderAdjust={(cat, headingId) => renderAdjust([cat], headingId)}
+              onAdjust={reportAdjust}
             />
           )}
           {/* Loaded and mounted on the first opening (deferred.tsx), then kept
               for the slide-out; its content exists only while open, so there
               is never a second panel instance next to the column's. */}
-          <DeferredModal open={sheetShown} onClose={() => setSheetOpen(false)} title="Progression" variant="sheet" onShown={scrollSheetToCategories}>
+          <DeferredModal open={sheetShown} onClose={() => setSheetOpen(false)} title={mode === "trending" ? "Build" : "Progression"} variant="sheet" onShown={scrollSheetToCategories}>
             <ProgressionPanel
               player={p}
               state={build}
               result={buildResult}
+              refs={refs}
+              managerPending={managerPending}
               onChange={setBuild}
               notice={buildNotice}
               idBase={progressionIdBase}

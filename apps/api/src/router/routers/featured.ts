@@ -8,7 +8,7 @@
 // autoincrement id, so links survive a reseed.
 import { prisma } from "@eflab/db";
 import { featuredBySlugInput } from "@eflab/shared";
-import type { CardPreview, CardType, FeaturedBundleDTO } from "@eflab/shared";
+import type { CardPreview, CardType, FeaturedBundleDTO, FeaturedListDTO } from "@eflab/shared";
 import { publicProcedure, router } from "../trpc.js";
 
 const cardSelect = {
@@ -63,13 +63,24 @@ function toBundleDTO(b: BundleRow): FeaturedBundleDTO {
 }
 
 export const featuredRouter = router({
-  // All bundles in efootbase homepage order: releaseDate DESC, position ASC.
-  list: publicProcedure.query(async (): Promise<FeaturedBundleDTO[]> => {
-    const bundles = await prisma.featuredBundle.findMany({
-      orderBy: [{ releaseDate: "desc" }, { position: "asc" }],
-      include: bundleInclude,
-    });
-    return bundles.map(toBundleDTO);
+  // All bundles (releaseDate DESC, position ASC — unchanged; each carries its
+  // stored `position`, the reference's /packs order, which the web sorts by)
+  // and the newest card release in the catalogue (change
+  // efootbase-function-parity, design decision D10: the "Last updated" chip
+  // of /packs is the age of the newest card release, not of the newest pack).
+  // MAX over the (releaseDate, id) index.
+  list: publicProcedure.query(async (): Promise<FeaturedListDTO> => {
+    const [bundles, newest] = await Promise.all([
+      prisma.featuredBundle.findMany({
+        orderBy: [{ releaseDate: "desc" }, { position: "asc" }],
+        include: bundleInclude,
+      }),
+      prisma.player.aggregate({ _max: { releaseDate: true } }),
+    ]);
+    return {
+      bundles: bundles.map(toBundleDTO),
+      newestCardRelease: newest._max.releaseDate ? newest._max.releaseDate.toISOString() : null,
+    };
   }),
 
   // One bundle by slug with its ordered cards, or null (→ 404 on the web).

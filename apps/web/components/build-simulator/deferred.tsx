@@ -1,12 +1,15 @@
 "use client";
 import { useEffect, useRef, useState, type ComponentType } from "react";
 import type { ManagerPicker as ManagerPickerComponent } from "@/components/build-simulator/ManagerPicker";
+import type { SecondBoosterPicker as SecondBoosterPickerComponent } from "@/components/build-simulator/SecondBoosterPicker";
 import type { Modal as ModalComponent } from "@/components/filters/Modal";
 
 // Code that the player detail page needs only after an interaction, split
 // out of the route's first-load JavaScript (efootbase-behaviour-parity, F.2
 // bundle budget): the "Select Manager" drawer (ManagerPicker, with the
-// shared Modal it is built on) and the phone Progression sheet (Modal).
+// shared Modal it is built on), the "Select second booster" drawer
+// (SecondBoosterPicker, change efootbase-function-parity) and the phone
+// Progression sheet (Modal).
 // Both are modal <dialog>s whose content exists only while open, so nothing
 // of them is in the server HTML; their own mount effect does showModal(),
 // the initial focus and the focus return, so mounting a moment later (once
@@ -100,6 +103,10 @@ const managerPicker = deferred(
   () => import("@/components/build-simulator/ManagerPicker"),
   (m) => m.ManagerPicker,
 );
+const secondBoosterPicker = deferred(
+  () => import("@/components/build-simulator/SecondBoosterPicker"),
+  (m) => m.SecondBoosterPicker,
+);
 const modal = deferred(
   () => import("@/components/filters/Modal"),
   (m) => m.Modal,
@@ -109,6 +116,11 @@ const modal = deferred(
 export const DeferredManagerPicker: ComponentType<Parameters<typeof ManagerPickerComponent>[0]> = managerPicker.Deferred;
 /** Start loading the manager drawer's code. */
 export const prefetchManagerPicker = managerPicker.prefetch;
+
+/** The "Select second booster" drawer, loaded and mounted on its first opening. */
+export const DeferredSecondBoosterPicker: ComponentType<Parameters<typeof SecondBoosterPickerComponent>[0]> = secondBoosterPicker.Deferred;
+/** Start loading the second-booster drawer's code. */
+export const prefetchSecondBoosterPicker = secondBoosterPicker.prefetch;
 
 /** The shared Modal, loaded and mounted on its first opening. */
 export const DeferredModal: ComponentType<Parameters<typeof ModalComponent>[0]> = modal.Deferred;

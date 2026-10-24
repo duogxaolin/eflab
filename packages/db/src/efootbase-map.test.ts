@@ -36,7 +36,7 @@ const throws = (fn: () => unknown): boolean => {
 };
 
 const meta = {
-  // CARD_TYPE_LABELS per code; code 4 repeats "Legendary" and code 7 is blank in the real meta.
+  // CARD_TYPE_DUMP_LABELS per code; code 4 repeats "Legendary" and code 7 is blank in the real meta.
   card_type: { values: ["Standard", "Legendary", "", "Trending", "Legendary", "Epic", "Highlight", ""] },
   pos: { values: [...POSITIONS] },
   condition: { values: ["E", "D", "C", "B", "A"] },
@@ -47,11 +47,17 @@ const meta = {
   let map: Map<number, CardType> | null = null;
   const ok = !throws(() => { map = buildCardTypeMap(meta, "meta.json"); });
   if (!ok) {
-    // The labels above must match CARD_TYPE_LABELS; print why if they do not.
+    // The labels above must match CARD_TYPE_DUMP_LABELS; print why if they do not.
     try { buildCardTypeMap(meta, "meta.json"); } catch (e) { console.error(String(e)); }
   }
   assert(ok && map!.get(5) === "EPIC" && map!.get(6) === "HIGHLIGHT" && map!.get(0) === "STANDARD", "card-type codes map (5 EPIC, 6 HIGHLIGHT, 0 STANDARD)");
   assert(throws(() => buildCardTypeMap({ ...meta, card_type: { values: ["Standard"] } }, "meta.json")), "a meta label that disagrees aborts");
+  // The display table (CARD_TYPE_LABELS: "Icons", "Epic - Big Time") is never what the
+  // seed accepts: a meta carrying a display label for a code still aborts (D14).
+  const withLabel = (code: number, label: string) => ({ ...meta, card_type: { values: meta.card_type.values.map((v, i) => (i === code ? label : v)) } });
+  assert(throws(() => buildCardTypeMap(withLabel(1, "Icons"), "meta.json")), "a meta with the display label \"Icons\" for code 1 aborts");
+  assert(throws(() => buildCardTypeMap(withLabel(5, "Epic - Big Time"), "meta.json")), "a meta with the display label \"Epic - Big Time\" for code 5 aborts");
+  assert(throws(() => buildCardTypeMap(withLabel(3, "Legendary"), "meta.json")), "a meta with another dump label for a code aborts");
   assert(throws(() => buildCardTypeMap({ ...meta, condition: { values: ["A", "B", "C", "D", "E"] } }, "meta.json")), "a changed condition order aborts");
   assert(throws(() => buildCardTypeMap({ ...meta, pos: { values: ["GK"] } }, "meta.json")), "a changed position order aborts");
 }

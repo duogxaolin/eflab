@@ -1,30 +1,73 @@
 "use client";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { useSearchParams, useRouter } from "next/navigation";
-import type { Route } from "next";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { trpc } from "@/lib/trpc";
-import { PlayerCard } from "@/components/cards/PlayerCard";
 import { SearchPalette } from "@/components/search/SearchPalette";
 import { QueryErrorState } from "@/lib/query-state";
-import { CARD_TYPE_LABELS, INT8_MAX, positionTiles, type BoosterDTO, type PlayerCardDTO, type BaseStat, type Position } from "@eflab/shared";
-import { ATTACKING_STATS, DEFENDING_STATS, STRENGTH_STATS, POSITION_BY_INDEX, boosterLabel, statLabel } from "@/lib/card-display";
-import { Plus, ArrowLeftRight, Link as LinkIcon, X, Check, Sparkles } from "lucide-react";
+import {
+  COMPARE_NO_MANAGER_PROFICIENCY,
+  COMPARE_SIDES,
+  appendCompareSideBuild,
+  appendRawCompareSide,
+  compareSideDefault,
+  decodeCompareSide,
+  defaultMaxLevel,
+  emptyAllocation,
+  isIdParam,
+  parseCompareCards,
+  registeredPositionOf,
+  simulateCardBuild,
+  type BaseStat,
+  type BuildResult,
+  type CompareSide,
+  type PickerManagerDTO,
+  type PlayerCardDTO,
+} from "@eflab/shared";
+import { Plus, ArrowLeftRight, Link as LinkIcon, Check } from "lucide-react";
+import { CompareSlot, type SlotBuild } from "./CompareSlot";
+import { CompareTable } from "./CompareTable";
 
-// Pitch position grid (left→right, top→bottom) — 12 outfield slots + GK.
-const PITCH_SLOTS: Position[] = ["LWF", "SS", "RWF", "LMF", "AMF", "RMF", "CMF", "DMF", "LB", "CB", "RB", "GK"];
-// Two slots (a two-card tool): `?ids` is trimmed to the first two valid ids,
-// so the API — which accepts up to four — never returns a card that has no
-// tile on this page.
-const MAX_SLOTS = 2;
-const ID_PATTERN = /^\d{1,19}$/;
-// A card id is a Postgres int8: 19 digits can still exceed INT8_MAX, and the
-// API rejects the whole batch for one oversized id — drop it here instead.
-const isValidId = (s: string): boolean => ID_PATTERN.test(s) && BigInt(s) <= INT8_MAX;
+// /compare — two slots, `left` and `right`, each a card with its own build
+// (change efootbase-function-parity, design D11; specs "Two-Build Compare",
+// comparison-tool "Multi-Card Side-by-Side Comparison", behaviour-parity
+// "Compare Guards" / "Focus Is Never Lost").
+//
+// URL (packages/shared/src/compare-url.ts): `left=<id>&right=<id>`, then each
+// side's build when it differs from its default — `l_*` / `r_*` category
+// keys, `lb=1` / `rb=1` for a side without any category point, `l_mgr` /
+// `r_mgr`. The page holds the state; every change is written with
+// `history.replaceState` (Next's router adopts it — no navigation, no server
+// request — and useSearchParams follows). Every query written here is
+// remembered until the router hands it back (its echo changes nothing); any
+// other query (Back / Forward, a link to /compare) is adopted like a link —
+// the card page's pattern. A side's build is read from the link once its card
+// has loaded (`decodeCompareSide`: its budget and default need the card);
+// until then the side keeps the link's raw parameters, so a Swap, a Remove or
+// a pick in the other slot never loses them (`appendRawCompareSide`). A side
+// picked from the palette opens with its default build: the Max-OVR
+// allocation, both usable boosters on, no manager and NO proficiency bonus
+// (the engine at COMPARE_NO_MANAGER_PROFICIENCY = 70, whose band gives 0); a
+// chosen manager applies its rating and its "+1" pills.
+// Corrections (an id that is malformed or not found, a build over budget, an
+// unknown manager, build keys of an empty side) are applied, the URL is
+// rewritten at once and a polite line says what happened. A legacy
+// `?ids=a,b,…` link is looked up (batches of 4, at most 20 ids): the first
+// two cards that exist fill left and right, the rest are reported.
+// Slots never close up: Remove empties only its slot (focus goes to that
+// slot's "Add Player"), the next pick fills the slot the picker was opened
+// for, the same card may sit in both slots (two builds of one card), and Swap
+// exchanges the cards with their builds. The radar is unchanged (its build
+// axes are pending): it draws each slot card's base stats.
 
-// Side colours: slot 1 = accent (lime), slot 2 = cyan — every panel.
+// Side colours: left = accent (lime), right = cyan — every panel.
 const SIDE_A = "var(--color-accent)";
 const SIDE_B = "var(--color-accent-secondary)";
+const SLOT_NUMBER: Record<CompareSide, 1 | 2> = { left: 1, right: 2 };
+/** `player.compare` bound per request (legacy look-up batches). */
+const COMPARE_BATCH = 4;
+/** Card data per side: kept 5 minutes (Swap, Remove and duplicates reuse it). */
+const CARD_STALE_MS = 5 * 60_000;
 
 /** Hexagonal radar chart comparing SHT, PAS, STR, DEF, SPD, DRI. */
 function CompareRadar({ p1, p2 }: { p1?: PlayerCardDTO; p2?: PlayerCardDTO }) {
@@ -83,119 +126,167 @@ function CompareRadar({ p1, p2 }: { p1?: PlayerCardDTO; p2?: PlayerCardDTO }) {
   );
 }
 
-/** Readable booster label, as on the player page (`boosterLabel`: "+3 ·
- *  Jumping, Physical Contact, Balance, Stamina", never the stored
- *  abbreviations "Jump, PhysCont"). A booster with no stat data (Booster 136
- *  "Booster +1", id 0) says so — the same wording as the player page. */
-function readableBooster(b: BoosterDTO): string {
-  const deltas = (Object.entries(b.stats) as Array<[BaseStat, number]>).filter(([, v]) => typeof v === "number" && v !== 0);
-  return deltas.length > 0 ? boosterLabel(b.name, deltas) : `${b.name} (no stat data)`;
+/** One slot: its card and its build — decoded once the card has loaded
+ *  (`build`), or still the link's raw parameters (`raw`, with the side they
+ *  were written for), or the default (`raw` null: a card from the palette). */
+interface Slot {
+  cardId: string;
+  build: SlotBuild | null;
+  raw: { qs: string; side: CompareSide } | null;
+}
+type Slots = Record<CompareSide, Slot | null>;
+
+/** What the polite line under the subtitle says about the opened link. */
+interface LinkNotice {
+  /** Ids that are malformed or not found. */
+  notFound: number;
+  /** Cards beyond the two slots (a legacy `ids` link). */
+  extra: number;
+  /** Any other correction (a build over budget, an unknown manager, …). */
+  adjusted: boolean;
+}
+const NO_NOTICE: LinkNotice = { notFound: 0, extra: 0, adjusted: false };
+
+interface ReadLink {
+  slots: Slots;
+  /** A legacy `?ids` link: the well-formed ids to look up (at most
+   *  COMPARE_LEGACY_MAX_IDS), and how many more well-formed ids it held. */
+  legacy: { ids: string[]; overflow: number } | null;
+  notice: LinkNotice;
+  /** The query must be rewritten (a correction, or a legacy link). */
+  rewrite: boolean;
 }
 
-function aptitudeDot(v: number | undefined): string {
-  if (v === 0) return "bg-[var(--color-accent)]";
-  if (v === 1) return "bg-[var(--color-accent-secondary)]";
-  return "bg-[var(--color-line-active)]";
-}
+const isIdKey = (key: string) => key === "left" || key === "right" || key === "ids";
 
-/** Most well-formed ids of one link that are looked up (in batches of
- *  COMPARE_BATCH, the `player.compare` bound); any beyond are ignored as extras. */
-const MAX_LINK_IDS = 20;
-const COMPARE_BATCH = 4;
-
-/** The well-formed, distinct ids of `?ids` in link order (`candidates`, at
- *  most MAX_LINK_IDS; `overflow` = how many more there were) and how many
- *  malformed entries it holds. Empty entries (`1,,2`, a trailing comma) and
- *  duplicates are not counted. Which candidates fill the two slots is decided
- *  only once they have been looked up (the first two that exist). */
-function parseIds(raw: string | null): { candidates: string[]; malformed: number; overflow: number } {
-  if (!raw) return { candidates: [], malformed: 0, overflow: 0 };
-  const candidates: string[] = [];
-  let malformed = 0;
-  let overflow = 0;
-  for (const id of raw.split(",")) {
-    const s = id.trim();
-    if (s === "") continue;
-    if (!isValidId(s)) malformed++;
-    else if (candidates.includes(s)) continue;
-    else if (candidates.length < MAX_LINK_IDS) candidates.push(s);
-    else overflow++;
+/** Step 1 of reading a link: the cards (parseCompareCards). */
+function readLink(qs: string): ReadLink {
+  const parsed = parseCompareCards(qs);
+  const notFound = parsed.corrections.filter((c) => c.kind === "invalid" && isIdKey(c.key)).length;
+  const adjusted = parsed.corrections.some((c) => !(c.kind === "invalid" && isIdKey(c.key)));
+  const slot = (side: CompareSide): Slot | null => {
+    const id = parsed[side];
+    return id ? { cardId: id, build: null, raw: { qs, side } } : null;
+  };
+  let legacy: ReadLink["legacy"] = null;
+  if (parsed.legacyIds) {
+    const sp = new URLSearchParams(qs);
+    const wellFormed = sp
+      .getAll("ids")
+      .flatMap((v) => v.split(","))
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0 && isIdParam(s)).length;
+    // parseCompareCards keeps the first COMPARE_LEGACY_MAX_IDS well-formed ids.
+    legacy = { ids: parsed.legacyIds, overflow: Math.max(0, wellFormed - parsed.legacyIds.length) };
   }
-  return { candidates, malformed, overflow };
+  return {
+    slots: { left: slot("left"), right: slot("right") },
+    legacy,
+    notice: { notFound, extra: 0, adjusted },
+    rewrite: parsed.corrections.length > 0 || legacy !== null,
+  };
 }
 
-const MD_QUERY = "(min-width: 48rem)";
-function subscribeMd(onChange: () => void): () => void {
-  const mql = window.matchMedia(MD_QUERY);
-  mql.addEventListener("change", onChange);
-  return () => mql.removeEventListener("change", onChange);
+/** The compare query of the slots: the cards, then each side's build — the
+ *  decoded build when it differs from its default, else the link's raw
+ *  parameters re-keyed for the side the card now sits in. */
+function composeQuery(slots: Slots, cardOf: (id: string) => PlayerCardDTO | undefined): string {
+  const sp = new URLSearchParams();
+  for (const side of COMPARE_SIDES) {
+    const s = slots[side];
+    if (s) sp.append(side, s.cardId);
+  }
+  for (const side of COMPARE_SIDES) {
+    const s = slots[side];
+    if (!s) continue;
+    if (s.build) {
+      const card = cardOf(s.cardId);
+      if (card) appendCompareSideBuild(sp, side, s.build, card);
+    } else if (s.raw) {
+      appendRawCompareSide(sp, s.raw.qs, s.raw.side, side);
+    }
+  }
+  return sp.toString();
 }
-/** True from md (768 px). The server render and the first paint read false
- *  (the plain face), so a phone never flashes the detail overlays. */
-function useFromMd(): boolean {
-  return useSyncExternalStore(
-    subscribeMd,
-    () => window.matchMedia(MD_QUERY).matches,
-    () => false,
+
+/** A side's build through the engine: its allocation at the card's level cap,
+ *  both usable boosters on, no second booster; the manager's rating as the
+ *  proficiency and its pills — without a manager proficiency 70, i.e. no
+ *  bonus (D11; the S3 replay). Face and tiles at the registered position. */
+function runBuild(card: PlayerCardDTO, build: SlotBuild, manager: PickerManagerDTO | null): BuildResult {
+  return simulateCardBuild(
+    card,
+    { allocation: build.allocation, maxLevel: defaultMaxLevel(card), managerProficiency: COMPARE_NO_MANAGER_PROFICIENCY, booster1: "full", booster2: "full" },
+    registeredPositionOf(card),
+    { manager: manager ? { rating: manager.rating, pills: manager.pills } : null, second: null },
   );
 }
 
 export function CompareClient() {
-  const router = useRouter();
   const searchParams = useSearchParams();
-  // `?ids` is the source of truth for the selection: every change (pick, remove,
-  // swap) is written back with router.replace so the URL stays shareable.
-  const rawIds = searchParams.get("ids");
-  const parsed = useMemo(() => parseIds(rawIds), [rawIds]);
-  const selected = useMemo(() => parsed.candidates.slice(0, MAX_SLOTS), [parsed.candidates]);
-  // A canonical link (at most two well-formed, distinct ids, nothing else) is
-  // shown as it is; any other link is resolved first (below).
-  const canonical = rawIds === null || rawIds === selected.join(",");
-  // Slot faces: the detail overlays (flag, MAX LVL, MAX OVR) only from md —
-  // on the ~170 px phone slots they overlap; the line under the card carries
-  // the same numbers.
-  const fromMd = useFromMd();
-  const setSelected = useCallback(
-    (next: string[]) => {
-      const ids = next.filter((id, i) => id && next.indexOf(id) === i).slice(0, MAX_SLOTS);
-      router.replace((ids.length ? `/compare?ids=${ids.join(",")}` : "/compare") as Route, { scroll: false });
-    },
-    [router],
-  );
-  // Cards of the link that were dropped (efootbase-behaviour-parity "Compare
-  // Guards"): malformed entries (dropped while parsing) and ids the API does
-  // not know (dropped once the comparison answered). Shown in a polite status
-  // line until the user changes the selection.
-  const [droppedMalformed, setDroppedMalformed] = useState(0);
-  const [droppedUnknown, setDroppedUnknown] = useState(0);
-  // Valid ids beyond the two slots, ignored with their own message.
-  const [droppedExtra, setDroppedExtra] = useState(0);
-  const droppedCount = droppedMalformed + droppedUnknown;
-  const clearDropped = () => {
-    setDroppedMalformed(0);
-    setDroppedUnknown(0);
-    setDroppedExtra(0);
-  };
+  const urlQs = searchParams.toString();
 
-  // A pasted link may carry more than MAX_SLOTS ids, duplicates, junk or
-  // unknown ids: look its well-formed ids up first (batches of COMPARE_BATCH),
-  // keep the first two that exist, then rewrite the URL to them and say what
-  // was dropped — malformed and unknown ids as "not found", found ids beyond
-  // the two slots as "extra" (second verify W2: trimming to two before the
-  // look-up let an unknown first id push a real third card out). A link the
-  // look-up cannot finish (network error) keeps its first two ids; the slots'
-  // own check below then drops an unknown one.
+  // ---- State and URL ----
+  const [initialLink] = useState(() => readLink(urlQs));
+  const [slots, setSlotsState] = useState<Slots>(initialLink.slots);
+  const slotsRef = useRef(slots);
+  const [notice, setNotice] = useState<LinkNotice>(initialLink.notice);
+  // A legacy link is being looked up: both slots wait.
+  const [resolving, setResolving] = useState(initialLink.legacy !== null);
+  const lookupToken = useRef(0);
+  // The query last written or adopted, and the queries written but not yet
+  // handed back by the router (their echoes change nothing).
+  const lastQs = useRef(urlQs);
+  const ownWrites = useRef<string[]>([]);
+  // Loaded cards by id (filled from the side queries before any effect runs),
+  // so a write can tell a side's default build from a custom one.
+  const cardCache = useRef(new Map<string, PlayerCardDTO>());
+  const cardOf = useCallback((id: string) => cardCache.current.get(id), []);
+
+  const writeQs = useCallback((qs: string) => {
+    if (qs === lastQs.current) return;
+    lastQs.current = qs;
+    ownWrites.current = [...ownWrites.current.slice(-31), qs];
+    window.history.replaceState(null, "", qs ? `/compare?${qs}` : "/compare");
+  }, []);
+  /** Sets the slots and writes their query. */
+  const commit = useCallback(
+    (next: Slots) => {
+      slotsRef.current = next;
+      setSlotsState(next);
+      writeQs(composeQuery(next, cardOf));
+    },
+    [writeQs, cardOf],
+  );
+  /** A change made on the page: the link's notice is over, a running legacy
+   *  look-up is abandoned. */
+  const userCommit = useCallback(
+    (next: Slots) => {
+      lookupToken.current++;
+      setResolving(false);
+      setNotice(NO_NOTICE);
+      commit(next);
+    },
+    [commit],
+  );
+
+  // A legacy `?ids` link: look the ids up (batches of COMPARE_BATCH), the first
+  // two that exist fill left and right; missing ids count as not found, found
+  // ids beyond the two as extra. A look-up that fails (network) keeps the first
+  // two ids; the side queries then drop an unknown one.
   const utils = trpc.useUtils();
-  useEffect(() => {
-    if (canonical) return;
-    let cancelled = false;
-    void (async () => {
+  const resolveLegacy = useCallback(
+    async (legacy: NonNullable<ReadLink["legacy"]>, base: LinkNotice) => {
+      const token = ++lookupToken.current;
+      setResolving(true);
       const found: string[] = [];
       let missing = 0;
+      let failed = false;
       try {
-        for (let i = 0; i < parsed.candidates.length; i += COMPARE_BATCH) {
-          const batch = parsed.candidates.slice(i, i + COMPARE_BATCH);
+        for (let i = 0; i < legacy.ids.length; i += COMPARE_BATCH) {
+          const batch = legacy.ids.slice(i, i + COMPARE_BATCH);
           const rows = await utils.player.compare.fetch({ cardIds: batch });
+          for (const r of rows) cardCache.current.set(r.id, r);
           const have = new Set(rows.map((r) => r.id));
           for (const id of batch) {
             if (have.has(id)) found.push(id);
@@ -203,78 +294,227 @@ export function CompareClient() {
           }
         }
       } catch {
-        if (cancelled) return;
-        setDroppedMalformed(parsed.malformed);
-        setDroppedUnknown(0);
-        setDroppedExtra(Math.max(0, parsed.candidates.length - MAX_SLOTS) + parsed.overflow);
-        setSelected(parsed.candidates.slice(0, MAX_SLOTS));
-        return;
+        failed = true;
       }
-      if (cancelled) return;
-      setDroppedMalformed(parsed.malformed);
-      setDroppedUnknown(missing);
-      setDroppedExtra(Math.max(0, found.length - MAX_SLOTS) + parsed.overflow);
-      setSelected(found.slice(0, MAX_SLOTS));
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [canonical, parsed, setSelected, utils]);
+      if (token !== lookupToken.current) return;
+      const ids = failed ? legacy.ids.slice(0, 2) : found.slice(0, 2);
+      const extra = (failed ? Math.max(0, legacy.ids.length - 2) : Math.max(0, found.length - 2)) + legacy.overflow;
+      setResolving(false);
+      setNotice({ notFound: base.notFound + (failed ? 0 : missing), extra, adjusted: base.adjusted });
+      commit({
+        left: ids[0] ? { cardId: ids[0], build: null, raw: null } : null,
+        right: ids[1] ? { cardId: ids[1], build: null, raw: null } : null,
+      });
+    },
+    [commit, utils],
+  );
 
-  const [pickSlot, setPickSlot] = useState<number | null>(null);
-  // Copy share link: "copied" for 2 s, or "failed" — the clipboard refused
-  // (permissions, an insecure context): a visible message with the link,
-  // selected for a manual copy, for 5 s or until the selection changes (QA
-  // 2026-10-23, same handling as the player page's Card ID — the button used
-  // to claim success whatever happened).
+  // The opened link: a legacy link is looked up; a corrected one is rewritten
+  // one tick after mount (Next patches history.replaceState in an effect of
+  // the router, which runs after this page's first effects).
+  useEffect(() => {
+    if (initialLink.legacy) {
+      void resolveLegacy(initialLink.legacy, initialLink.notice);
+      return;
+    }
+    if (!initialLink.rewrite) return;
+    const t = window.setTimeout(() => writeQs(composeQuery(slotsRef.current, cardOf)), 0);
+    return () => window.clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // The router hands back the queries this page wrote (echoes) — forget them;
+  // any other query is a navigation to /compare (Back / Forward, a link, the
+  // address edited): adopt it like a link.
+  useEffect(() => {
+    const at = ownWrites.current.indexOf(urlQs);
+    if (at >= 0) {
+      ownWrites.current = ownWrites.current.slice(at + 1);
+      return;
+    }
+    if (urlQs === lastQs.current) return;
+    lastQs.current = urlQs;
+    ownWrites.current = [];
+    lookupToken.current++;
+    const link = readLink(urlQs);
+    slotsRef.current = link.slots;
+    setSlotsState(link.slots);
+    setNotice(link.notice);
+    setResolving(link.legacy !== null);
+    if (link.legacy) void resolveLegacy(link.legacy, link.notice);
+    else if (link.rewrite) writeQs(composeQuery(link.slots, cardOf));
+  }, [urlQs, resolveLegacy, writeQs, cardOf]);
+
+  // ---- Cards (one query per side, cached by id: Swap, Remove and the same
+  // card twice cost no request) ----
+  const leftId = slots.left?.cardId ?? null;
+  const rightId = slots.right?.cardId ?? null;
+  const leftQ = trpc.player.compare.useQuery({ cardIds: [leftId ?? "0"] }, { enabled: leftId !== null, staleTime: CARD_STALE_MS });
+  const rightQ = trpc.player.compare.useQuery({ cardIds: [rightId ?? "0"] }, { enabled: rightId !== null, staleTime: CARD_STALE_MS });
+  const leftCard = leftId !== null ? leftQ.data?.find((p) => p.id === leftId) : undefined;
+  const rightCard = rightId !== null ? rightQ.data?.find((p) => p.id === rightId) : undefined;
+  useLayoutEffect(() => {
+    if (leftCard) cardCache.current.set(leftCard.id, leftCard);
+    if (rightCard) cardCache.current.set(rightCard.id, rightCard);
+  }, [leftCard, rightCard]);
+  const queryOf = { left: leftQ, right: rightQ } as const;
+  const cardOfSide = { left: leftCard, right: rightCard } as const;
+  // Not found: the card query answered without the card.
+  const leftMissing = leftId !== null && leftQ.isSuccess && !leftCard;
+  const rightMissing = rightId !== null && rightQ.isSuccess && !rightCard;
+  useEffect(() => {
+    if (!leftMissing && !rightMissing) return;
+    const next: Slots = { ...slotsRef.current };
+    let dropped = 0;
+    if (leftMissing && next.left) {
+      next.left = null;
+      dropped++;
+    }
+    if (rightMissing && next.right) {
+      next.right = null;
+      dropped++;
+    }
+    if (dropped === 0) return;
+    setNotice((n) => ({ ...n, notFound: n.notFound + dropped }));
+    commit(next);
+  }, [leftMissing, rightMissing, commit]);
+
+  // ---- Managers (the picker list: requested once a side has a manager; the
+  // drawer requests it on its first opening — one cache) ----
+  const anyManager = slots.left?.build?.managerId != null || slots.right?.build?.managerId != null;
+  const pickerQ = trpc.manager.picker.useQuery(undefined, { enabled: anyManager, staleTime: Infinity, gcTime: Infinity });
+  const pickerIds = useMemo(() => (pickerQ.data ? new Set(pickerQ.data.map((m) => m.id)) : null), [pickerQ.data]);
+  const managerById = useCallback((id: string | null | undefined) => (id && pickerQ.data ? pickerQ.data.find((m) => m.id === id) ?? null : null), [pickerQ.data]);
+
+  // A side's build is read once its card is in: from the link (corrected and
+  // announced) or the default for a card from the palette.
+  useEffect(() => {
+    const cur = slotsRef.current;
+    const next: Slots = { ...cur };
+    let changed = false;
+    let adjusted = false;
+    for (const side of COMPARE_SIDES) {
+      const s = cur[side];
+      if (!s || s.build) continue;
+      const card = cardCache.current.get(s.cardId) ?? cardOfSide[side];
+      if (!card || card.id !== s.cardId) continue;
+      if (s.raw) {
+        const d = decodeCompareSide(s.raw.qs, s.raw.side, card, { managerIds: pickerIds });
+        next[side] = { cardId: s.cardId, build: { allocation: d.allocation, managerId: d.managerId }, raw: null };
+        if (d.corrections.length > 0) adjusted = true;
+      } else {
+        next[side] = { cardId: s.cardId, build: { allocation: compareSideDefault(card), managerId: null }, raw: null };
+      }
+      changed = true;
+    }
+    if (!changed) return;
+    if (adjusted) {
+      setNotice((n) => ({ ...n, adjusted: true }));
+      commit(next);
+    } else {
+      slotsRef.current = next;
+      setSlotsState(next);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [slots, leftCard, rightCard, pickerIds, commit]);
+
+  // A manager id the picker does not list is dropped once the list answered.
+  useEffect(() => {
+    if (!pickerIds) return;
+    const cur = slotsRef.current;
+    const next: Slots = { ...cur };
+    let changed = false;
+    for (const side of COMPARE_SIDES) {
+      const s = cur[side];
+      if (s?.build?.managerId != null && !pickerIds.has(s.build.managerId)) {
+        next[side] = { ...s, build: { ...s.build, managerId: null } };
+        changed = true;
+      }
+    }
+    if (!changed) return;
+    setNotice((n) => ({ ...n, adjusted: true }));
+    commit(next);
+  }, [pickerIds, commit]);
+
+  // ---- Builds through the engine ----
+  const leftManager = managerById(slots.left?.build?.managerId);
+  const rightManager = managerById(slots.right?.build?.managerId);
+  const leftBuild = slots.left?.build ?? null;
+  const rightBuild = slots.right?.build ?? null;
+  const leftResult = useMemo(() => (leftCard && leftBuild ? runBuild(leftCard, leftBuild, leftManager) : null), [leftCard, leftBuild, leftManager]);
+  const rightResult = useMemo(() => (rightCard && rightBuild ? runBuild(rightCard, rightBuild, rightManager) : null), [rightCard, rightBuild, rightManager]);
+  const resultOf = { left: leftResult, right: rightResult } as const;
+  const managerOf = { left: leftManager, right: rightManager } as const;
+
+  const setSideBuild = (side: CompareSide, build: SlotBuild) => {
+    const s = slotsRef.current[side];
+    if (!s) return;
+    userCommit({ ...slotsRef.current, [side]: { ...s, build } });
+  };
+
+  // ---- Picker, Remove, Swap, focus ----
+  const [pickSide, setPickSide] = useState<CompareSide | null>(null);
+  const lastPickSide = useRef<CompareSide>("left");
+  const slotRefs = useRef<Record<CompareSide, HTMLDivElement | null>>({ left: null, right: null });
+  // Slot just filled from the picker: focus waits on its wrapper and moves to
+  // the card link once the card is on screen (the opener button is gone).
+  const [focusSide, setFocusSide] = useState<CompareSide | null>(null);
+  const pendingFocusRef = useRef<CompareSide | null>(null);
+  // Slot just emptied by Remove: focus moves to its "Add Player".
+  const [focusAddSide, setFocusAddSide] = useState<CompareSide | null>(null);
+
+  const openPicker = (side: CompareSide) => {
+    lastPickSide.current = side;
+    setPickSide(side);
+  };
+  const pickCard = (id: string) => {
+    if (pickSide === null) return;
+    // Every card can be picked, the one in the other slot too (two builds of
+    // one card); it fills the slot the picker was opened for.
+    userCommit({ ...slotsRef.current, [pickSide]: { cardId: id, build: null, raw: null } });
+    pendingFocusRef.current = pickSide;
+    setFocusSide(pickSide);
+  };
+  const removeSide = (side: CompareSide) => {
+    // The button unmounts with the card: park focus on the slot's wrapper at
+    // once, then hand it to the slot's "Add Player" once it renders. The other
+    // card stays where it is.
+    slotRefs.current[side]?.focus();
+    setFocusAddSide(side);
+    userCommit({ ...slotsRef.current, [side]: null });
+  };
+  useEffect(() => {
+    if (focusAddSide === null || slots[focusAddSide] !== null) return;
+    const add = slotRefs.current[focusAddSide]?.querySelector<HTMLElement>("[data-slot-add]");
+    if (!add) return;
+    const active = document.activeElement;
+    if (active === null || active === document.body || Object.values(slotRefs.current).includes(active as HTMLDivElement)) add.focus();
+    setFocusAddSide(null);
+  }, [focusAddSide, slots]);
+  const focusFilled = focusSide !== null && slots[focusSide]?.build != null && cardOfSide[focusSide] !== undefined;
+  useEffect(() => {
+    if (focusSide === null || !focusFilled) return;
+    const wrap = slotRefs.current[focusSide];
+    const active = document.activeElement;
+    if (wrap && (active === wrap || active === document.body || active === null)) wrap.querySelector<HTMLElement>("a.pcb-tile")?.focus();
+    setFocusSide(null);
+  }, [focusSide, focusFilled]);
+
+  const canSwap = slots.left !== null && slots.right !== null;
+  const swap = () => {
+    if (!canSwap) return;
+    userCommit({ left: slotsRef.current.right, right: slotsRef.current.left });
+  };
+
+  // ---- Copy link ----
+  // "Link copied" (announced, shown for 2 s), or the clipboard refused
+  // (permissions, an insecure context): the link shown and selected for a
+  // manual copy, for 5 s or until the selection changes (QA 2026-10-23).
   const [copy, setCopy] = useState<"idle" | "copied" | "failed">("idle");
-  const copied = copy === "copied";
   const copyTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   useEffect(() => () => clearTimeout(copyTimer.current), []);
   const linkTextRef = useRef<HTMLSpanElement>(null);
   const [failedLink, setFailedLink] = useState("");
-  // Persistent slot wrappers: the picker returns focus here when the button
-  // that opened it was replaced by the chosen card.
-  const slotRefs = useRef<Array<HTMLDivElement | null>>([]);
-  const lastSlotRef = useRef<number>(0);
-  // Slot just filled from the picker: focus waits on its wrapper and moves to
-  // the card link once the card has loaded (the opener button is gone).
-  const [focusSlot, setFocusSlot] = useState<number | null>(null);
-  // The same slot for the palette's close handler (read synchronously, so it
-  // does not depend on the render that state update triggers).
-  const pendingFocusRef = useRef<number | null>(null);
-
-  // Compare fires as soon as ANY card is picked so the chosen card renders at
-  // once; the matrix below is gated on two loaded slots.
-  // Not while a non-canonical link is being resolved (its slots wait for it).
-  const compareQ = trpc.player.compare.useQuery({ cardIds: selected }, { enabled: selected.length >= 1 && canonical, placeholderData: (prev) => prev });
-  const compareData = useMemo(() => (selected.length >= 1 ? compareQ.data ?? [] : []), [compareQ.data, selected.length]);
-
-  // Every panel reads its card by slot id — never by API row order — so the
-  // left slot is always the left column and Swap reorders every panel together.
-  const slots = useMemo(() => selected.map((id) => compareData.find((p) => p.id === id)), [selected, compareData]);
-  // Ids the API skipped (unknown cards): once the comparison has answered for
-  // exactly this selection (not the previous selection's placeholder), drop
-  // them from the URL.
-  const settled = canonical && selected.length >= 1 && compareQ.isSuccess && !compareQ.isPlaceholderData;
-  const missingCount = settled ? slots.filter((p) => p === undefined).length : 0;
-  useEffect(() => {
-    if (missingCount === 0) return;
-    setDroppedUnknown(missingCount);
-    setSelected(selected.filter((_, i) => slots[i] !== undefined));
-  }, [missingCount, selected, slots, setSelected]);
-  const left = slots[0];
-  const right = slots[1];
-  const loadedSlots = slots.filter((p): p is PlayerCardDTO => p !== undefined);
-  // Position tiles of each loaded card (exact formula on its level-1 stats).
-  const tilesBySlot = loadedSlots.map((p) => positionTiles(p.stats, { height: p.height, weakFootAccuracy: p.weakFootAccuracy }, p.positionAptitudes));
-
-  const canSwap = selected.length === 2;
-  const swapPlayers = () => {
-    if (!canSwap) return;
-    clearDropped();
-    setSelected([selected[1]!, selected[0]!]);
-  };
   const copyLink = async () => {
     clearTimeout(copyTimer.current);
     const href = window.location.href;
@@ -290,11 +530,10 @@ export function CompareClient() {
     }
   };
   // The shown link belongs to the selection it was copied from: a new
-  // selection (swap, remove, add) clears the failure line at once (W3).
+  // selection clears the failure line at once.
   useEffect(() => {
     setCopy((c) => (c === "failed" ? "idle" : c));
-  }, [rawIds]);
-  // Select the shown link once it is rendered after a refused copy.
+  }, [leftId, rightId]);
   useLayoutEffect(() => {
     if (copy !== "failed") return;
     const el = linkTextRef.current;
@@ -305,121 +544,51 @@ export function CompareClient() {
     selection.removeAllRanges();
     selection.addRange(range);
   }, [copy, failedLink]);
-  // Remove (B6): the button unmounts with its slot's card, so focus parks on
-  // the slot's persistent wrapper at once and moves to the "Add Player"
-  // button of the slot that became empty once it renders. `?ids` is a compact
-  // list, so removing slot 1 of two moves the other card into slot 1 and the
-  // empty slot is slot 2 — its "Add Player" gets focus.
-  const [focusAddSlot, setFocusAddSlot] = useState<number | null>(null);
-  const removeSlot = (slotIdx: number) => {
-    const next = selected.filter((_, i) => i !== slotIdx);
-    slotRefs.current[slotIdx]?.focus();
-    setFocusAddSlot(next.length);
-    clearDropped();
-    setSelected(next);
-  };
-  useEffect(() => {
-    if (focusAddSlot === null || selected.length !== focusAddSlot) return;
-    const add = slotRefs.current[focusAddSlot]?.querySelector<HTMLElement>("[data-slot-add]");
-    if (!add) return;
-    const active = document.activeElement;
-    // Only while focus is still parked on a slot wrapper or lost to the body.
-    if (active === null || active === document.body || slotRefs.current.includes(active as HTMLDivElement)) add.focus();
-    setFocusAddSlot(null);
-  }, [focusAddSlot, selected.length]);
-  // Picker rows that cannot be chosen: every card already in a slot (the
-  // picker only opens on an empty slot), with its slot number.
-  const pickerExclude = useMemo(() => Object.fromEntries(selected.map((id, i) => [id, `In slot ${i + 1}`])), [selected]);
-  const openPicker = (slot: number) => {
-    lastSlotRef.current = slot;
-    setPickSlot(slot);
-  };
-  const selectCardForSlot = (id: string) => {
-    // The palette never offers a card already in a slot (excludeIds); the
-    // check stays as a guard for any other caller.
-    if (pickSlot === null || selected.includes(id)) return;
-    const next = [...selected];
-    next[pickSlot] = id;
-    const filtered = next.filter(Boolean);
-    clearDropped();
-    setSelected(filtered);
-    // An empty slot 2 picked while slot 1 is empty becomes slot 1.
-    pendingFocusRef.current = filtered.indexOf(id);
-    setFocusSlot(filtered.indexOf(id));
-  };
-  // Once the picked card is on screen, hand focus from the wrapper to its link
-  // (only if focus is still parked on the wrapper or lost to the body).
-  const focusTarget = focusSlot !== null ? slots[focusSlot] : undefined;
-  useEffect(() => {
-    if (focusSlot === null || !focusTarget) return;
-    const wrap = slotRefs.current[focusSlot];
-    const active = document.activeElement;
-    if (wrap && (active === wrap || active === document.body || active === null)) {
-      wrap.querySelector<HTMLElement>("a.pcb-tile")?.focus();
-    }
-    setFocusSlot(null);
-  }, [focusSlot, focusTarget]);
 
-  const renderSlot = (slotIdx: number) => {
-    const cardId = selected[slotIdx];
-    const player = slots[slotIdx];
-    if (cardId && player) {
+  // ---- Render ----
+  const renderSlot = (side: CompareSide) => {
+    const n = SLOT_NUMBER[side];
+    const s = slots[side];
+    const card = cardOfSide[side];
+    const result = resultOf[side];
+    const q = queryOf[side];
+    if (s && card && s.build && result) {
+      const build = s.build;
+      const managerPending = build.managerId !== null && managerOf[side] === null;
       return (
-        <div className="flex w-full md:max-w-40 flex-col items-center gap-3">
-          <div className="relative w-full">
-            {/* caption "none": the slot prints the name (a link) below the card. */}
-            <PlayerCard player={player} size="full" caption="none" showDetails={fromMd} />
-            {/* z-20: above the card tile, which rises to z 10 on hover / focus. */}
-            <button
-              type="button"
-              onClick={() => removeSlot(slotIdx)}
-              aria-label={`Remove ${player.name} from slot ${slotIdx + 1}`}
-              className="button button--sm button--icon-only button--secondary absolute -right-2 -top-2 z-20 shadow-md"
-            >
-              <X className="size-3.5" aria-hidden />
-            </button>
-          </div>
-          <div className="min-w-0 text-center">
-            <h2 className="text-sm font-semibold text-[var(--color-text-primary)]">
-              {/* hit-44: the 17 px tall name gets a 44 px tall tap area on touch screens. inline-block (the
-                  only, centred content of the h2, so it looks the same) keeps one box when a long name
-                  wraps, so the area is not split across the two line fragments. */}
-              <Link href={`/players/${player.baseId}/${player.id}`} className="hit-44 inline-block transition-colors hover:text-[var(--color-accent)]">
-                {player.name}
-              </Link>
-            </h2>
-            <p className="mt-0.5 text-xs text-[var(--color-text-secondary)] tabular-nums">
-              {CARD_TYPE_LABELS[player.cardType]} · {player.ovr} OVR · Max {player.maxOvr}
-              {/* Below md the face has no MAX LVL badge: the level is here. */}
-              {!fromMd && player.levelCap != null && player.levelCap > 0 ? ` · Max Lv ${player.levelCap}` : ""}
-            </p>
-          </div>
-        </div>
+        <CompareSlot
+          side={side}
+          slotNumber={n}
+          card={card}
+          build={build}
+          result={result}
+          manager={managerOf[side]}
+          managerPending={managerPending}
+          onMaxOvr={() => setSideBuild(side, { ...build, allocation: compareSideDefault(card) })}
+          onReset={() => setSideBuild(side, { ...build, allocation: emptyAllocation() })}
+          onChooseManager={(m) => setSideBuild(side, { ...build, managerId: build.managerId === m.id ? null : m.id })}
+          onClearManager={() => setSideBuild(side, { ...build, managerId: null })}
+          onRemove={() => removeSide(side)}
+        />
       );
     }
-    if (cardId && compareQ.isError) {
-      // Retry re-runs the batch; Remove drops this id so the other slot can load.
+    if (s && q.isError) {
+      // Retry re-runs the query; Remove empties this slot.
       return (
-        <div className="flex w-full md:max-w-40 flex-col items-center gap-2">
-          <QueryErrorState error={compareQ.error} onRetry={() => void compareQ.refetch()} title="Could not load this card" className="w-full !p-4" />
-          <button
-            type="button"
-            onClick={() => removeSlot(slotIdx)}
-            aria-label={`Remove card #${cardId} from slot ${slotIdx + 1}`}
-            className="button button--sm button--ghost text-[var(--color-accent)]"
-          >
+        <div className="flex w-full flex-col items-center gap-2 md:max-w-40">
+          <QueryErrorState error={q.error} onRetry={() => void q.refetch()} title="Could not load this card" className="w-full !p-4" />
+          <button type="button" onClick={() => removeSide(side)} aria-label={`Remove card #${s.cardId} from slot ${n}`} className="button button--sm button--ghost text-[var(--color-accent)]">
             Remove
           </button>
         </div>
       );
     }
-    // A card the API skipped is dropped from the URL by the effect above (with
-    // the status message); until then the slot reads as loading.
-    if (cardId) {
-      return <div className="efb-compare-slot animate-pulse" aria-busy="true" aria-label="Loading card" />;
+    if (s || resolving) {
+      // Loading (a card not found is dropped by the effect above, with the message).
+      return <div className="efb-compare-slot animate-pulse" aria-busy="true" aria-label={`Loading the card of slot ${n}`} />;
     }
     return (
-      <button type="button" onClick={() => openPicker(slotIdx)} aria-haspopup="dialog" data-slot-add="" aria-label={`Add Player to slot ${slotIdx + 1}: search and select a player`} className="efb-compare-slot">
+      <button type="button" onClick={() => openPicker(side)} aria-haspopup="dialog" data-slot-add="" aria-label={`Add Player to slot ${n}: search and select a player`} className="efb-compare-slot">
         <span className="efb-compare-slot__plus" aria-hidden>
           <Plus className="size-5" />
         </span>
@@ -429,10 +598,14 @@ export function CompareClient() {
     );
   };
 
-  const attackingCols = ATTACKING_STATS as BaseStat[];
-  const strengthCols = STRENGTH_STATS as BaseStat[];
-  const defendingCols = DEFENDING_STATS as BaseStat[];
-  const matrixReady = left !== undefined && right !== undefined;
+  const noticeText = [
+    notice.notFound === 0 ? "" : `${notice.notFound} ${notice.notFound === 1 ? "card in the link was" : "cards in the link were"} not found.`,
+    notice.extra === 0 ? "" : "Compare shows two cards — extra cards in the link were ignored.",
+    notice.adjusted ? "The link was adjusted to fit the cards." : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const tableReady = leftCard && rightCard && leftResult && rightResult;
 
   return (
     <div>
@@ -457,11 +630,12 @@ export function CompareClient() {
         <div className="flex shrink-0 items-center gap-0.5">
           <button
             type="button"
-            onClick={swapPlayers}
+            onClick={swap}
             aria-disabled={!canSwap}
             className="button button--md button--icon-only button--ghost"
             title={canSwap ? "Swap players" : "Pick two players to swap them"}
             aria-label="Swap the two players"
+            data-testid="compare-swap"
           >
             <ArrowLeftRight className="size-5" aria-hidden />
           </button>
@@ -470,29 +644,27 @@ export function CompareClient() {
             onClick={() => void copyLink()}
             className="button button--md button--icon-only button--ghost"
             title="Copy share link"
-            aria-label={copied ? "Link copied" : "Copy share link"}
+            aria-label={copy === "copied" ? "Link copied" : "Copy share link"}
+            data-testid="compare-copy-link"
           >
-            {copied ? <Check className="size-5 text-[var(--color-accent)]" aria-hidden /> : <LinkIcon className="size-5" aria-hidden />}
+            {copy === "copied" ? <Check className="size-5 text-[var(--color-accent)]" aria-hidden /> : <LinkIcon className="size-5" aria-hidden />}
           </button>
         </div>
       </div>
       <p className="efb-subtitle mt-3">
-        Compare two eFootball player cards side by side — stats, skills, position proficiency and boosters.
+        Compare two eFootball player cards side by side — set a build for each (Max OVR, Reset or a manager), then read stats, skills and the overall at every position.
       </p>
-      {/* Always mounted (polite live region); empty and room-less unless a
-          card of the opened link was dropped — not found, or beyond the two
-          slots. */}
-      <p role="status" className={droppedCount > 0 || droppedExtra > 0 ? "mt-2 text-xs text-[var(--color-accent-warn)]" : "sr-only"} data-testid="compare-dropped">
-        {[
-          droppedCount === 0 ? "" : `${droppedCount} ${droppedCount === 1 ? "card in the link was" : "cards in the link were"} not found.`,
-          droppedExtra === 0 ? "" : "Compare shows two cards — extra cards in the link were ignored.",
-        ]
-          .filter(Boolean)
-          .join(" ")}
+      {/* Always mounted (polite live region); empty and room-less unless the
+          opened link was corrected — a card not found, cards beyond the two
+          slots, a build adjusted. */}
+      <p role="status" className={noticeText ? "mt-2 text-xs text-[var(--color-accent-warn)]" : "sr-only"} data-testid="compare-dropped">
+        {noticeText}
       </p>
-      {/* Refused copy: the link, selected for a manual copy (polite). */}
-      <p role="status" className={copy === "failed" ? "mt-2 text-xs text-[var(--color-accent-warn)] break-all" : "sr-only"}>
-        {copy === "failed" ? (
+      {/* Copy link: "Link copied", or the refused copy with the link selected for a manual copy (polite). */}
+      <p role="status" className={copy === "idle" ? "sr-only" : copy === "failed" ? "mt-2 break-all text-xs text-[var(--color-accent-warn)]" : "mt-2 text-xs text-[var(--color-accent)]"} data-testid="compare-copy-status">
+        {copy === "copied" ? (
+          "Link copied"
+        ) : copy === "failed" ? (
           <>
             Copy failed — select the link: <span ref={linkTextRef} className="text-[var(--color-text-primary)]">{failedLink}</span>
           </>
@@ -501,166 +673,38 @@ export function CompareClient() {
         )}
       </p>
 
-      {/* Console: slot 1 · radar · slot 2 — 260 / flexible / 260 from 768 px;
-          below, the two slots side by side and the radar under them. */}
+      {/* Console: left slot · radar · right slot — 260 / flexible / 260 from
+          768 px; below, the two slots side by side and the radar under them. */}
       <div className="efb-compare-console mt-6">
-        <div ref={(el) => void (slotRefs.current[0] = el)} tabIndex={-1} className="efb-compare-console__slot outline-none">
-          {renderSlot(0)}
+        <div ref={(el) => void (slotRefs.current.left = el)} tabIndex={-1} className="efb-compare-console__slot outline-none" data-slot-side="left">
+          {renderSlot("left")}
         </div>
         <div className="efb-compare-console__radar">
-          <CompareRadar p1={left} p2={right} />
+          <CompareRadar p1={leftCard} p2={rightCard} />
         </div>
-        <div ref={(el) => void (slotRefs.current[1] = el)} tabIndex={-1} className="efb-compare-console__slot outline-none">
-          {renderSlot(1)}
+        <div ref={(el) => void (slotRefs.current.right = el)} tabIndex={-1} className="efb-compare-console__slot outline-none" data-slot-side="right">
+          {renderSlot("right")}
         </div>
       </div>
 
       {/* Picker = the shared search palette (named modal dialog, focus trap,
-          Escape, focus return). Enter picks the first result. */}
+          Escape, focus return). Enter picks the active row — the first
+          result while typing. Every card is listed and selectable. */}
       <SearchPalette
-        open={pickSlot !== null}
-        onClose={() => setPickSlot(null)}
-        title={`Select player for slot ${(pickSlot ?? lastSlotRef.current) + 1}`}
-        onSelect={(p) => selectCardForSlot(p.id)}
-        // The cards already in a slot cannot be picked again ("In slot N").
-        excludeIds={pickerExclude}
+        open={pickSide !== null}
+        onClose={() => setPickSide(null)}
+        title={`Select player for slot ${SLOT_NUMBER[pickSide ?? lastPickSide.current]}`}
+        onSelect={(p) => pickCard(p.id)}
         // After a pick: the slot's wrapper (the effect above then moves focus
         // to the card link); after Escape / backdrop: the opener (null).
         returnFocusTo={() => {
-          const slot = pendingFocusRef.current;
+          const side = pendingFocusRef.current;
           pendingFocusRef.current = null;
-          return slot !== null ? slotRefs.current[slot] ?? null : null;
+          return side !== null ? slotRefs.current[side] ?? null : null;
         }}
       />
 
-      {selected.length >= 1 && compareQ.isError && loadedSlots.length === 0 && (
-        <QueryErrorState error={compareQ.error} onRetry={() => void compareQ.refetch()} title="Could not load the comparison" className="mt-6" />
-      )}
-
-      {/* Stat matrix — left column = slot 1, right column = slot 2 */}
-      {matrixReady && (
-        <div className="mt-8 space-y-6">
-          <section className="efb-card space-y-5 overflow-hidden" aria-labelledby="compare-attributes">
-            <div className="flex items-center justify-between gap-2 border-b border-[var(--color-line-separator)] pb-3">
-              <span className="truncate text-sm font-semibold text-[var(--color-accent)]">{left.name}</span>
-              <h2 id="compare-attributes" className="efb-card__title shrink-0 text-[var(--color-text-secondary)]">
-                Attributes
-              </h2>
-              <span className="truncate text-right text-sm font-semibold text-[var(--color-accent-secondary)]">{right.name}</span>
-            </div>
-
-            {[
-              { title: "Attacking", stats: attackingCols },
-              { title: "Strength & athleticism", stats: strengthCols },
-              { title: "Defending & goalkeeping", stats: defendingCols },
-            ].map((cat) => (
-              <div key={cat.title} className="space-y-2">
-                <h3 className="text-xs font-medium text-[var(--color-text-secondary)]">{cat.title}</h3>
-                <div className="space-y-1 text-sm tabular-nums">
-                  {cat.stats.map((st) => {
-                    const valA = left.stats[st] ?? 0;
-                    const valB = right.stats[st] ?? 0;
-                    const isAWinner = valA > valB;
-                    const isBWinner = valB > valA;
-                    return (
-                      <div
-                        key={st}
-                        className="grid grid-cols-[32px_1fr_minmax(72px,160px)_1fr_32px] items-center gap-2 rounded-lg px-1 py-1 transition-colors hover:bg-[var(--color-default)] sm:gap-3 sm:px-2"
-                      >
-                        <span className={`text-right font-bold ${isAWinner ? "text-[var(--color-accent)]" : "text-[var(--color-text-secondary)]"}`}>{valA}</span>
-                        <div className="flex h-1.5 w-full justify-end overflow-hidden rounded-full bg-[var(--color-default)]">
-                          <div className={`h-full ${isAWinner ? "bg-[var(--color-accent)]" : "bg-[var(--color-line-active)]"}`} style={{ width: `${Math.min(100, valA)}%` }} />
-                        </div>
-                        <span className="truncate text-center text-xs text-[var(--color-text-secondary)]">{statLabel(st)}</span>
-                        <div className="flex h-1.5 w-full justify-start overflow-hidden rounded-full bg-[var(--color-default)]">
-                          <div className={`h-full ${isBWinner ? "bg-[var(--color-accent-secondary)]" : "bg-[var(--color-line-active)]"}`} style={{ width: `${Math.min(100, valB)}%` }} />
-                        </div>
-                        <span className={`text-left font-bold ${isBWinner ? "text-[var(--color-accent-secondary)]" : "text-[var(--color-text-secondary)]"}`}>{valB}</span>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            ))}
-          </section>
-
-          {/* Position proficiency — one column per slot, in slot order */}
-          <section className="efb-card space-y-4" aria-labelledby="compare-proficiency">
-            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--color-line-separator)] pb-3">
-              <h2 id="compare-proficiency" className="efb-card__title">
-                Position proficiency
-              </h2>
-              <span className="flex items-center gap-3 text-xs text-[var(--color-text-secondary)]">
-                <span className="inline-flex items-center gap-1">
-                  <span className="size-2.5 rounded-full bg-[var(--color-accent)]" aria-hidden /> registered
-                </span>
-                <span className="inline-flex items-center gap-1">
-                  <span className="size-2.5 rounded-full bg-[var(--color-accent-secondary)]" aria-hidden /> partial
-                </span>
-                <span className="inline-flex items-center gap-1">
-                  <span className="size-2.5 rounded-full bg-[var(--color-line-active)]" aria-hidden /> none
-                </span>
-              </span>
-            </div>
-            <div className="grid grid-cols-2 gap-4 sm:gap-6">
-              {loadedSlots.map((p, i) => (
-                <div key={`${i}-${p.id}`} className="min-w-0 space-y-2">
-                  <div className="flex items-center justify-between gap-2 text-xs">
-                    <span className="truncate font-semibold text-[var(--color-text-primary)]">{p.name}</span>
-                    <span className="text-[var(--color-text-secondary)]">{POSITION_BY_INDEX[p.registeredPosition] ?? "—"}</span>
-                  </div>
-                  <div className="rounded-2xl bg-[var(--color-panel)] px-3 py-3">
-                    <div className="grid grid-cols-3 gap-x-2 gap-y-3">
-                      {PITCH_SLOTS.map((pos) => {
-                        const v = p.positionAptitudes[pos];
-                        // Same exact formula as the detail page's Pitch Map, on the
-                        // level-1 stats this page compares.
-                        const r = tilesBySlot[i]![pos];
-                        return (
-                          <div key={pos} className="flex flex-col items-center gap-1" title={`${pos}: ${r} OVR at level 1`} data-testid={`compare-tile-${pos}`}>
-                            <span className={`inline-block size-3 rounded-full ${aptitudeDot(v)} ring-1 ring-black/30`} />
-                            <span className="text-[11px] text-[var(--color-text-secondary)]">{pos}</span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </section>
-
-          {/* Boosters — one column per slot, in slot order */}
-          <section className="efb-card space-y-4" aria-labelledby="compare-boosters">
-            <div className="flex items-center gap-2 border-b border-[var(--color-line-separator)] pb-3">
-              <Sparkles className="size-4 text-[var(--color-skill-boost)]" aria-hidden />
-              <h2 id="compare-boosters" className="efb-card__title">
-                Boosters
-              </h2>
-            </div>
-            <div className="grid grid-cols-2 gap-4 sm:gap-6">
-              {loadedSlots.map((p, i) => {
-                const boosters = [p.booster1, p.booster2].filter((b): b is NonNullable<typeof b> => b !== null);
-                return (
-                  <div key={`${i}-${p.id}`} className="min-w-0 space-y-2">
-                    <span className="block truncate text-sm font-semibold text-[var(--color-text-primary)]">{p.name}</span>
-                    <div className="flex flex-wrap gap-2">
-                      {boosters.length === 0 && <span className="text-xs text-[var(--color-text-secondary)]">No boosters assigned</span>}
-                      {boosters.map((b, j) => (
-                        <div key={`b-${p.id}-${j}-${b.id}`} className="inline-flex max-w-full flex-col gap-1 rounded-xl bg-[var(--color-default)] px-2.5 py-1.5">
-                          <span className="inline-flex items-start gap-1 text-xs font-semibold text-[var(--color-skill-boost)]">
-                            <Sparkles className="mt-0.5 size-3 shrink-0" aria-hidden /> <span className="min-w-0 break-words">{readableBooster(b)}</span>
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </section>
-        </div>
-      )}
+      {tableReady && <CompareTable left={{ card: leftCard, result: leftResult }} right={{ card: rightCard, result: rightResult }} />}
     </div>
   );
 }

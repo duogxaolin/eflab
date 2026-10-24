@@ -3,18 +3,20 @@ import { useCallback, useEffect, useId, useRef, useState, type FocusEvent, type 
 import { placeFloating, pushEscapeLayer, useFloatingPlacement, type FloatingSide } from "./floating";
 import { PopoverPanel } from "./Popover";
 
-// Hover / focus tooltip primitive (efootbase-behaviour-parity; reference token
-// `--tooltip-delay: 1.5s`, `--tooltip-close-delay: .5s`, React Aria defaults).
+// Hover / focus tooltip primitive (efootbase-behaviour-parity; timing of change
+// efootbase-function-parity, design D7: the reference's measured behaviour —
+// open 514–547 ms after the pointer rests, close 104–113 ms after it leaves,
+// the next trigger in 25 ms, keyboard focus in about 27 ms).
 //
-// - Mouse: opens after the pointer rests on the trigger for TOOLTIP_DELAY_MS,
+// - Mouse: opens after the pointer rests on the trigger for TOOLTIP_OPEN_MS,
 //   at once while another tooltip is open or closed less than
 //   TOOLTIP_WARMUP_MS ago (warm-up, so moving along a row of triggers is
 //   immediate after the first one). Only a real mouse on a hover-capable
 //   device opens it (`pointerType === "mouse"` and `(hover: hover)`); touch
 //   and pen never do.
 // - It is hoverable (WCAG 1.4.13, a deliberate deviation from the reference's
-//   `pointer-events: none`): it closes TOOLTIP_CLOSE_DELAY_MS after the pointer
-//   has left both the trigger and the tooltip, which bridges the 6 px gap, and
+//   `pointer-events: none`): it closes TOOLTIP_CLOSE_MS after the pointer has
+//   left both the trigger and the tooltip, which bridges the 6 px gap, and
 //   stays open while the pointer is over it.
 // - Keyboard: opens at once when the trigger gets keyboard focus
 //   (`:focus-visible`, so a mouse click that focuses a link does not), closes
@@ -34,10 +36,11 @@ import { PopoverPanel } from "./Popover";
 //   button whose only action is to show the text: the trigger then carries
 //   `aria-haspopup="dialog"` and `aria-expanded`).
 
+// The delay values are defined here once (design D7); change them here.
 /** Mouse rest before a tooltip opens. */
-export const TOOLTIP_DELAY_MS = 1500;
+export const TOOLTIP_OPEN_MS = 500;
 /** Delay before a tooltip closes once the pointer left the trigger and the tooltip. */
-export const TOOLTIP_CLOSE_DELAY_MS = 500;
+export const TOOLTIP_CLOSE_MS = 100;
 /** A tooltip opens at once when another one closed less than this long ago. */
 export const TOOLTIP_WARMUP_MS = 500;
 
@@ -149,7 +152,7 @@ export function Tooltip({
   const scheduleHide = () => {
     if (!isShown()) return;
     clearTimeout(closeTimer.current);
-    closeTimer.current = setTimeout(hideNow, TOOLTIP_CLOSE_DELAY_MS);
+    closeTimer.current = setTimeout(hideNow, TOOLTIP_CLOSE_MS);
   };
 
   // Escape closes it (focus stays where it is).
@@ -184,7 +187,7 @@ export function Tooltip({
       if (warm()) showNow();
       else {
         clearTimeout(openTimer.current);
-        openTimer.current = setTimeout(showNow, TOOLTIP_DELAY_MS);
+        openTimer.current = setTimeout(showNow, TOOLTIP_OPEN_MS);
       }
     },
     onPointerLeave: (e) => {

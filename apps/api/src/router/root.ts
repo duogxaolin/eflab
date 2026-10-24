@@ -4,6 +4,7 @@ import { skillRouter } from "./routers/skill.js";
 import { authRouter } from "./routers/auth.js";
 import { featuredRouter } from "./routers/featured.js";
 import { managerRouter } from "./routers/manager.js";
+import { boosterRouter } from "./routers/booster.js";
 import { adminRouter } from "./routers/admin.js";
 
 // The public tRPC surface. Only the routers the web app, the auth plumbing and
@@ -13,13 +14,16 @@ import { adminRouter } from "./routers/admin.js";
 // new `manager` router (efootbase-exact-model-managers) serves only the picker
 // of the Progression panel (`manager.picker`). `admin` (openspec
 // admin-sync-worker) is the private admin area: its own accounts, cookie and
-// guard (adminProcedure), separate from the visitor `auth` router.
+// guard (adminProcedure), separate from the visitor `auth` router. `booster`
+// (efootbase-function-parity) serves the 29 second-booster choices of the
+// player page (`booster.secondChoices`, from the committed fixture).
 export const appRouter = router({
   player: playerRouter,
   skill: skillRouter,
   auth: authRouter,
   featured: featuredRouter,
   manager: managerRouter,
+  booster: boosterRouter,
   admin: adminRouter,
 });
 

@@ -26,8 +26,9 @@ enum Role {
 }
 
 // One value per efootbase `card_type` code (dump/efootbase/players_meta.json
-// `card_type.values`, cross-checked against pack names — see CARD_TYPE_LABELS in
-// @eflab/shared and the seeder's card-type validation):
+// `card_type.values`, cross-checked against pack names — see CARD_TYPE_DUMP_LABELS
+// in @eflab/shared and the seeder's card-type validation; the UI's labels are
+// CARD_TYPE_LABELS, e.g. "Icons" for LEGENDARY):
 //   0 STANDARD · 1 LEGENDARY · 3 TRENDING (POTW/POTD/POTS) · 4 SELECTION (2022
 //   club/league selection packs) · 5 EPIC (incl. Big Time campaigns) ·
 //   6 HIGHLIGHT (incl. Show Time + selection packs) · 7 STRIKE_ARENA.

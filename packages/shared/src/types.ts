@@ -27,6 +27,19 @@ export interface CardPreview {
    *  producers that do not select them. */
   playingStyleAttack?: number;
   playingStyleDefense?: number;
+  /** Name of the pack / campaign the card belongs to (Player.featuredPackId →
+   *  Pack.name), or null when it has none. Filled by `player.search` (the
+   *  result rows' pack chip); other producers leave it undefined. */
+  packName?: string | null;
+}
+
+/** player.search — one page of SEARCH_PAGE_SIZE (12) rows in the server order
+ *  (max overall DESC, card id DESC); `hasMore` says whether a next page
+ *  exists. The word-start lift inside a page is the result lists' job
+ *  (`liftWordStartRows`). */
+export interface PlayerSearchResult {
+  rows: CardPreview[];
+  hasMore: boolean;
 }
 
 /** Full card for the detail page and the compare view. Fields the web app never
@@ -134,7 +147,18 @@ export interface SkillEffect {
  *  and null / []. Unreleased skills are never returned. */
 export interface SkillDTO {
   id: number;
+  /** Stored slug — the join key (player DTOs list these). Never changes. */
   slug: string;
+  /** Slug of the public skill page (`/wiki/skills/<publicSlug>`): the stored
+   *  skill key without `s_`, `_` → `-` (`skillPublicSlug`); the stored slug
+   *  for an entry without a key. */
+  publicSlug: string;
+  /** Stored skill key (`Skill.efbKey`, e.g. `s_fortress` — the `/players`
+   *  `skill=` value), or null for the entries efootbase does not list. */
+  key: string | null;
+  /** The holder with the highest max overall (ties: the higher card id), or
+   *  null when no card carries the skill. */
+  leader: CardPreview | null;
   name: string;
   description: string;
   category: string;
@@ -156,15 +180,14 @@ export interface SkillDTO {
   playerCount: number;
 }
 
-/** Paginated holders of one skill (skill.players). `items` is the slim card
- *  shape; `total` is the full holder count so the index can show "N cards" and
- *  a top-N call (small `limit`) still knows the real total. */
+/** Top cards of one skill (skill.players, change efootbase-function-parity):
+ *  the leader (the holder with the highest max overall, ties by the higher
+ *  card id) and the best card of each of up to 12 other base players (max
+ *  overall DESC, card id DESC; one card per base player, the leader's base
+ *  player excluded). No paging; the holder count is `SkillDTO.playerCount`. */
 export interface SkillPlayersResult {
-  items: CardPreview[];
-  total: number;
-  page: number;
-  limit: number;
-  totalPages: number;
+  leader: CardPreview | null;
+  rows: CardPreview[];
 }
 
 /** Resolved booster (joined by boosterId1/boosterId2 from the Booster table).
@@ -176,6 +199,14 @@ export interface BoosterDTO {
   magnitude: number;
   tier: string;
   stats: Partial<Record<BaseStat, number>>;
+}
+
+/** One of the 29 basic "+1" boosters a card without its own Booster 2 can
+ *  take as its second booster (booster.secondChoices, from the committed
+ *  booster fixture's basic list, ids 1–29). `slug` is the `b2=` URL value
+ *  (`secondBoosterSlug`: "Striker's Instinct +1" → `strikers-instinct1`). */
+export interface SecondBoosterDTO extends BoosterDTO {
+  slug: string;
 }
 
 /** player.list result — slim card previews (design decision 14). */
@@ -280,8 +311,19 @@ export interface FeaturedBundleDTO {
   name: string;
   slug: string;
   releaseDate: string;
+  /** Stored display order (FeaturedBundle.position): the current packs newest
+   *  first, then the manager / player spotlights — the reference's /packs
+   *  order, which a client sorts by. */
   position: number;
   cards: CardPreview[];
+}
+
+/** featured.list — every bundle (releaseDate DESC, position ASC) and the
+ *  newest card release date in the catalogue (MAX(Player.releaseDate), ISO),
+ *  the source of the /packs "Last updated" chip; null in an empty catalogue. */
+export interface FeaturedListDTO {
+  bundles: FeaturedBundleDTO[];
+  newestCardRelease: string | null;
 }
 
 // ---- Admin area + sync worker (the `admin` router; openspec admin-sync-worker) ----

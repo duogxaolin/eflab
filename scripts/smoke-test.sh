@@ -230,13 +230,17 @@ fi
 #    first bundle resolves through featured.bySlug with the same ordered cards;
 #    an unknown slug resolves to null (the web answers 404). Data-independent:
 #    the bundle list changes with every dump, so no bundle name is hard-coded.
+#    Since change efootbase-function-parity the answer is { bundles,
+#    newestCardRelease } (check 2b).
 trpc_get "featured.list" '{}'
 FB_CODE="$CODE"
-FB_COUNT="$(result 'len(d)')"
-FB_BAD="$(result 'sum(1 for b in d if not b.get("slug") or len(b.get("cards") or []) == 0) + (len(d) - len({b.get("slug") for b in d}))')"
-FB_SLUG="$(result 'd[0]["slug"] if d else ""')"
-FB_NAME="$(result 'd[0]["name"] if d else ""')"
-FB_IDS="$(result '",".join(c["id"] for c in d[0]["cards"]) if d else ""')"
+FB_COUNT="$(result 'len(d["bundles"])')"
+FB_BAD="$(result 'sum(1 for b in d["bundles"] if not b.get("slug") or len(b.get("cards") or []) == 0) + (len(d["bundles"]) - len({b.get("slug") for b in d["bundles"]}))')"
+FB_SLUG="$(result 'd["bundles"][0]["slug"] if d["bundles"] else ""')"
+FB_NAME="$(result 'd["bundles"][0]["name"] if d["bundles"] else ""')"
+FB_IDS="$(result '",".join(c["id"] for c in d["bundles"][0]["cards"]) if d["bundles"] else ""')"
+FB_NEWEST="$(result 'd["newestCardRelease"]')"
+FB_POSITIONS="$(result 'sorted(b["position"] for b in d["bundles"]) == list(range(len(d["bundles"])))')"
 if [ "$FB_CODE" = "200" ] && [ -n "$FB_COUNT" ] && [ "$FB_COUNT" -gt 0 ] && [ "$FB_BAD" = "0" ] && [ -n "$FB_SLUG" ]; then
   pass "featured.list → $FB_COUNT bundles, unique non-empty slugs, ≥ 1 card each (first: '$FB_NAME' → $FB_SLUG)"
   trpc_get "featured.bySlug" "{\"slug\":\"$FB_SLUG\"}"
@@ -257,6 +261,21 @@ if [ "$CODE" = "200" ] && [ "$UNKNOWN_BUNDLE" = "True" ]; then
   pass "featured.bySlug unknown slug → null"
 else
   fail "featured.bySlug unknown slug → null" "code=$CODE body=${BODY:0:200}"
+fi
+
+# 2b. featured.list carries the newest card release (the /packs "Last updated"
+#     chip, change efootbase-function-parity) = the release date of the first
+#     card of the New cards order; each bundle keeps its stored position
+#     (0..n-1, the /packs order).
+trpc_get "player.list" '{"page":1,"limit":1,"sort":"new"}'
+NEWEST_BASE="$(result 'd["items"][0]["baseId"]')"
+NEWEST_ID="$(result 'd["items"][0]["id"]')"
+trpc_get "player.byId" "{\"baseId\":\"$NEWEST_BASE\",\"cardId\":\"$NEWEST_ID\"}"
+NEWEST_RELEASE="$(result 'd["releaseDate"]')"
+if [ "$FB_CODE" = "200" ] && [ -n "$FB_NEWEST" ] && [ "$FB_NEWEST" != "None" ] && [ "$FB_NEWEST" = "$NEWEST_RELEASE" ] && [ "$FB_POSITIONS" = "True" ]; then
+  pass "featured.list newestCardRelease = $FB_NEWEST (the newest card's release); bundle positions 0..n-1"
+else
+  fail "featured.list newestCardRelease / positions" "newest=$FB_NEWEST expected=$NEWEST_RELEASE positions=$FB_POSITIONS code=$FB_CODE"
 fi
 
 # 3. removed procedures answer 404 (community / feed / tierList / user / pages /
@@ -348,6 +367,71 @@ else
   fail "skill.byId sharp-cut → null" "code=$CODE body=${BODY:0:160}"
 fi
 
+# 4d. Skills wiki data (change efootbase-function-parity, design decision
+#     D12): every one of the 67 grouped skills has its stored key, a public
+#     slug = the key without s_ with - for _ (unique, never another skill's
+#     stored slug; only four differ from the stored slug — the reference's
+#     phenomenal-pass, heading, rising-shot, acrobatic-clearance), and a leader
+#     (the holder with the highest max overall, ties by the higher card id);
+#     skill.byId answers both slugs; skill.players gives the leader and the
+#     best card of 12 other base players (Fortress / Long Reach Tackle on the
+#     2026-10-18 data, survey 2026-10-23 S3 §6), the old page / limit ignored.
+trpc_get "skill.list" '{}'
+SK_WIKI="$(result '(lambda g: "%d|%s|%s|%s|%s|%d" % (
+  len(g),
+  all(s["key"] and s["publicSlug"] == s["key"][2:].replace("_", "-") and s["key"].startswith("s_") for s in g),
+  len({s["publicSlug"] for s in d}) == len(d) and all(s["publicSlug"] == s["slug"] or s["publicSlug"] not in {t["slug"] for t in d} for s in d),
+  ",".join(sorted(s["publicSlug"] for s in d if s["publicSlug"] != s["slug"])),
+  all(s["leader"] and s["leader"]["maxOvr"] >= 40 for s in g if s["playerCount"] > 0),
+  sum(1 for s in d if s["group"] is None and (s["key"] is not None or s["publicSlug"] != s["slug"]))))([s for s in d if s["group"]])')"
+FORTRESS_LEADER="$(result 'next(s["leader"]["id"] for s in d if s["slug"] == "fortress")')"
+if [ "$CODE" = "200" ] && [ "$SK_WIKI" = "67|True|True|acrobatic-clearance,heading,phenomenal-pass,rising-shot|True|0" ] && [ "$FORTRESS_LEADER" = "88045755960808" ]; then
+  pass "skill.list → 67 grouped skills with key, public slug (unique, no clash; 4 differ: acrobatic-clearance, heading, phenomenal-pass, rising-shot) and leader; Fortress leader Rijkaard 88045755960808"
+else
+  fail "skill.list public slugs / keys / leaders (expected '67|True|True|acrobatic-clearance,heading,phenomenal-pass,rising-shot|True|0')" "code=$CODE got='$SK_WIKI' fortress=$FORTRESS_LEADER"
+fi
+trpc_get "skill.byId" '{"slug":"phenomenal-pass"}'
+PP_PUBLIC="$(result '"%s|%s|%s" % (d["slug"], d["publicSlug"], d["key"])')"
+trpc_get "skill.byId" '{"slug":"phenomenal-passing"}'
+PP_STORED="$(result '"%s|%s|%s" % (d["slug"], d["publicSlug"], d["key"])')"
+if [ "$CODE" = "200" ] && [ "$PP_PUBLIC" = "phenomenal-passing|phenomenal-pass|s_phenomenal_pass" ] && [ "$PP_STORED" = "$PP_PUBLIC" ]; then
+  pass "skill.byId answers the public slug phenomenal-pass and the stored slug phenomenal-passing with the same skill"
+else
+  fail "skill.byId by public / stored slug" "public=$PP_PUBLIC stored=$PP_STORED code=$CODE"
+fi
+trpc_get "skill.players" '{"slug":"fortress","page":3,"limit":24}'
+FORTRESS="$(result '"%s|%d|%s|%s|%s|%s" % (d["leader"]["id"], len(d["rows"]), d["rows"][-1]["id"], d["rows"][-2]["name"], "88039581948640" in [r["id"] for r in d["rows"]], len({r["baseId"] for r in d["rows"]} | {d["leader"]["baseId"]}) == 13 and [ (-r["maxOvr"], -int(r["id"])) for r in d["rows"] ] == sorted((-r["maxOvr"], -int(r["id"])) for r in d["rows"]))')"
+if [ "$CODE" = "200" ] && [ "$FORTRESS" = "88045755960808|12|88036360723173|Marcel Desailly|False|True" ]; then
+  pass "skill.players fortress → leader Rijkaard, 12 rows (one per base player, max overall order) ending with Cannavaro 88036360723173 after Desailly, without the second Thuram 88039581948640 (old page / limit ignored)"
+else
+  fail "skill.players fortress (expected '88045755960808|12|88036360723173|Marcel Desailly|False|True')" "code=$CODE got='$FORTRESS' body=${BODY:0:200}"
+fi
+trpc_get "skill.players" '{"slug":"long-reach-tackle"}'
+LRT="$(result '"%s|%s" % (d["leader"]["name"], ",".join(r["name"] for r in d["rows"][:3]))')"
+if [ "$CODE" = "200" ] && [ "$LRT" = "Frank Rijkaard|Paolo Maldini,Jaap Stam,Alessandro Nesta" ]; then
+  pass "skill.players long-reach-tackle → leader Rijkaard, then Maldini, Stam, Nesta"
+else
+  fail "skill.players long-reach-tackle (expected 'Frank Rijkaard|Paolo Maldini,Jaap Stam,Alessandro Nesta')" "code=$CODE got='$LRT'"
+fi
+trpc_get "skill.players" '{"slug":"sharp-cut"}'
+if [ "$CODE" = "200" ] && [ "$(result 'd["leader"] is None and d["rows"] == []')" = "True" ]; then
+  pass "skill.players of an unreleased skill → no leader, no rows"
+else
+  fail "skill.players sharp-cut → empty" "code=$CODE body=${BODY:0:160}"
+fi
+
+# 4e. booster.secondChoices (change efootbase-function-parity, design decision
+#     D4): the 29 basic "+1" boosters of the committed fixture (ids 1–29),
+#     alphabetical, four +1 stats each, slugs by the rule (Striker's Instinct
+#     +1 → strikers-instinct1).
+trpc_get "booster.secondChoices" '{}'
+B2="$(result '"%d|%s|%s|%s|%s" % (len(d), [b["name"].lower() for b in d] == sorted(b["name"].lower() for b in d), sorted(b["id"] for b in d) == list(range(1, 30)), all(len(b["stats"]) == 4 and set(b["stats"].values()) == {1} and all(k in '"$BASE_STATS_PY"' for k in b["stats"]) for b in d), next((b["slug"] + ":" + ",".join(sorted(b["stats"])) for b in d if b["name"] == "Striker" + chr(39) + "s Instinct +1"), ""))')"
+if [ "$CODE" = "200" ] && [ "$B2" = "29|True|True|True|strikers-instinct1:acceleration,ballControl,finishing,offensiveAwareness" ]; then
+  pass "booster.secondChoices → 29 basic boosters (ids 1–29), alphabetical, four +1 stats each; Striker's Instinct +1 → strikers-instinct1"
+else
+  fail "booster.secondChoices (expected '29|True|True|True|strikers-instinct1:…')" "code=$CODE got='$B2' body=${BODY:0:200}"
+fi
+
 # 5. card-type enum: every CardType has rows; STRIKE_ARENA non-empty
 for CT in STANDARD LEGENDARY TRENDING SELECTION EPIC HIGHLIGHT STRIKE_ARENA; do
   trpc_get "player.list" "{\"cardType\":\"$CT\",\"limit\":1}"
@@ -374,9 +458,10 @@ else
   fail "player.list unfiltered equals the sum of the card types" "all=$ALL_TOTAL sum=$CT_SUM code=$CODE"
 fi
 
-# 5c. sort presets (Trending · New cards · Top rated · High to low · Low to high):
+# 5c. sort presets (New cards · High to low · Low to high, change
+#     efootbase-function-parity; the former trending / top are still accepted):
 #     each answers 200 and pages 1–5 carry no duplicate id
-for PRESET in trending new top highest lowest; do
+for PRESET in new highest lowest trending top; do
   P_IDS="$(mktemp -t eflab-smoke-preset.XXXXXX)"
   P_FAIL=""
   for P in 1 2 3 4 5; do
@@ -393,15 +478,49 @@ for PRESET in trending new top highest lowest; do
   fi
   rm -f "$P_IDS"
 done
-# "High to low" and "Low to high" sort by base overall: first ovr of each must bracket the catalogue
-trpc_get "player.list" '{"page":1,"limit":1,"sort":"highest"}'
-HI_OVR="$(result 'd["items"][0]["ovr"]')"
-trpc_get "player.list" '{"page":1,"limit":1,"sort":"lowest"}'
-LO_OVR="$(result 'd["items"][0]["ovr"]')"
-if [ -n "$HI_OVR" ] && [ -n "$LO_OVR" ] && [ "$HI_OVR" -gt "$LO_OVR" ]; then
-  pass "sort=highest starts at OVR $HI_OVR, sort=lowest at OVR $LO_OVR"
+# "High to low" / "Low to high" sort by MAX overall with the id tiebreak (the
+# reference's rule, survey 2026-10-23 S2 §2): max overall DESC, id DESC /
+# max overall ASC, id ASC — page 1 is in that exact order, starts at the
+# catalogue's highest / lowest max overall (the maxOvr field sort agrees), and
+# the legacy presets read as the new ones (top = highest, trending = new).
+# sort_ids <preset> [extra JSON members]: the page's ids, comma-separated, or
+# nothing when the call failed. The second argument is optional (`${2:-}`:
+# under `set -u` a bare `$2` aborted the command substitution, both sides of
+# the legacy comparison came back empty and the check passed without
+# comparing anything) — and the comparison below also requires 48 ids.
+sort_ids() { trpc_get "player.list" "{\"page\":1,\"limit\":48,\"sort\":\"$1\"${2:-}}"; result "\",\".join(i[\"id\"] for i in d[\"items\"])"; }
+trpc_get "player.list" '{"page":1,"limit":48,"sort":"highest"}'
+HI_ORDER="$(result '[(-i["maxOvr"], -int(i["id"])) for i in d["items"]] == sorted((-i["maxOvr"], -int(i["id"])) for i in d["items"])')"
+HI_MAX="$(result 'd["items"][0]["maxOvr"]')"
+trpc_get "player.list" '{"page":1,"limit":48,"sort":"lowest"}'
+LO_ORDER="$(result '[(i["maxOvr"], int(i["id"])) for i in d["items"]] == sorted((i["maxOvr"], int(i["id"])) for i in d["items"])')"
+LO_MIN="$(result 'd["items"][0]["maxOvr"]')"
+trpc_get "player.list" '{"page":1,"limit":1,"sort":"maxOvr","order":"desc"}'
+FIELD_MAX="$(result 'd["items"][0]["maxOvr"]')"
+trpc_get "player.list" '{"page":1,"limit":1,"sort":"maxOvr","order":"asc"}'
+FIELD_MIN="$(result 'd["items"][0]["maxOvr"]')"
+SORT_TOP="$(sort_ids top)"
+SORT_HIGHEST="$(sort_ids highest)"
+SORT_TRENDING="$(sort_ids trending)"
+SORT_NEW="$(sort_ids new)"
+# 48 ids = 47 commas; two empty answers must never compare equal.
+ids48() { [ "$(printf '%s' "$1" | tr -cd ',' | wc -c | tr -d ' ')" = "47" ]; }
+LEGACY_SAME="$(ids48 "$SORT_TOP" && ids48 "$SORT_TRENDING" && [ "$SORT_TOP" = "$SORT_HIGHEST" ] && [ "$SORT_TRENDING" = "$SORT_NEW" ] && echo yes || echo no)"
+if [ "$HI_ORDER" = "True" ] && [ "$LO_ORDER" = "True" ] && [ -n "$HI_MAX" ] && [ "$HI_MAX" = "$FIELD_MAX" ] && [ "$LO_MIN" = "$FIELD_MIN" ] && [ "$LEGACY_SAME" = "yes" ]; then
+  pass "sort=highest → max overall DESC, id DESC from $HI_MAX; sort=lowest → max overall ASC, id ASC from $LO_MIN; legacy top = highest, trending = new"
 else
-  fail "sort=highest / sort=lowest bracket the catalogue" "hi=$HI_OVR lo=$LO_OVR"
+  fail "sort=highest / lowest by max overall with the id tiebreak; legacy presets" "hi_order=$HI_ORDER lo_order=$LO_ORDER hi=$HI_MAX/$FIELD_MAX lo=$LO_MIN/$FIELD_MIN legacy=$LEGACY_SAME"
+fi
+# Legendary High to low = the same cards in the same order as the max
+# overall field sort with the id tiebreak (the reference's Icons order).
+trpc_get "player.list" '{"page":1,"limit":48,"sort":"highest","cardTypeIn":["LEGENDARY"]}'
+LEG_HI="$(result '",".join(i["id"] for i in d["items"])')"
+trpc_get "player.list" '{"page":1,"limit":48,"sort":"maxOvr","order":"desc","cardTypeIn":["LEGENDARY"]}'
+LEG_FIELD="$(result '",".join(i["id"] for i in d["items"])')"
+if [ -n "$LEG_HI" ] && [ "$LEG_HI" = "$LEG_FIELD" ]; then
+  pass "Legendary High to low = the max overall order (48 ids, id tiebreak)"
+else
+  fail "Legendary High to low = the max overall order" "hi=${LEG_HI:0:80} field=${LEG_FIELD:0:80}"
 fi
 
 # 5d. the new filters narrow the list and never widen it; an AND of two skills
@@ -440,9 +559,10 @@ fi
 # 5f. multi-valued filters (change multi-select-filters): OR inside a list,
 #     AND between lists, the single-value fields merged into the lists, and a
 #     400 (never a 500) for an over-long list or an out-of-range member.
-#     A card has one nationality, one team and one league, so two leagues /
-#     two teams are exactly additive; two positions overlap (a card may play
-#     both), so CF|SS is bracketed by max(CF, SS) and CF + SS.
+#     A card has one nationality, one team, one league and — since change
+#     efootbase-function-parity, which filters Position by the registered
+#     position (the reference's rule) — one position, so two leagues / two
+#     teams / two positions are exactly additive.
 trpc_get "player.list" '{"limit":1,"positions":["CF"]}'
 POS_CF="$(result 'd["total"]')"
 trpc_get "player.list" '{"limit":1,"positions":["SS"]}'
@@ -451,11 +571,21 @@ trpc_get "player.list" '{"limit":1,"positions":["CF","SS"]}'
 POS_CFSS="$(result 'd["total"]')"
 trpc_get "player.list" '{"limit":1,"position":"CF","positions":["SS"]}'
 POS_MERGED="$(result 'd["total"]')"
-POS_MAX=$(( POS_CF > POS_SS ? POS_CF : POS_SS ))
-if [ -n "$POS_CF" ] && [ -n "$POS_SS" ] && [ -n "$POS_CFSS" ] && [ "$POS_CFSS" -ge "$POS_MAX" ] && [ "$POS_CFSS" -lt $((POS_CF + POS_SS)) ] && [ "$POS_MERGED" = "$POS_CFSS" ]; then
-  pass "player.list positions [CF,SS] → $POS_CFSS cards (CF $POS_CF · SS $POS_SS · OR, single-value position merged)"
+if [ -n "$POS_CF" ] && [ -n "$POS_SS" ] && [ -n "$POS_CFSS" ] && [ "$POS_CFSS" = $((POS_CF + POS_SS)) ] && [ "$POS_CFSS" -gt 0 ] && [ "$POS_MERGED" = "$POS_CFSS" ]; then
+  pass "player.list positions [CF,SS] → $POS_CFSS cards = CF $POS_CF + SS $POS_SS (registered position, OR; single-value position merged)"
 else
-  fail "player.list positions [CF,SS] is an OR of CF and SS" "cf=$POS_CF ss=$POS_SS cfss=$POS_CFSS merged=$POS_MERGED code=$CODE"
+  fail "player.list positions [CF,SS] is an OR of the registered positions CF and SS" "cf=$POS_CF ss=$POS_SS cfss=$POS_CFSS merged=$POS_MERGED code=$CODE"
+fi
+# The survey's sets (2026-10-18 data): Legendary + CB = 23, + LB = 32 —
+# registered positions; the aptitude rule gave 45 / 56.
+trpc_get "player.list" '{"limit":48,"cardTypeIn":["LEGENDARY"],"positions":["CB"]}'
+LEG_CB="$(result '"%d|%s" % (d["total"], all(i["registeredPosition"] == 1 for i in d["items"]))')"
+trpc_get "player.list" '{"limit":48,"cardTypeIn":["LEGENDARY"],"positions":["CB","LB"]}'
+LEG_CBLB="$(result '"%d|%s" % (d["total"], all(i["registeredPosition"] in (1, 2) for i in d["items"]))')"
+if [ "$LEG_CB" = "23|True" ] && [ "$LEG_CBLB" = "32|True" ]; then
+  pass "player.list Legendary + CB → 23, + LB → 32 (every card registered there)"
+else
+  fail "player.list Legendary + CB = 23, + LB = 32" "cb=$LEG_CB cblb=$LEG_CBLB"
 fi
 trpc_get "player.leagues" '{}'
 LG_A="$(result 'd[0]["id"]')"
@@ -519,6 +649,88 @@ else
   fail "player.list invalid lists → 400" "pos14=$C_POS14 ids51=$C_IDS51 merged51=$C_MERGED51 range=$C_RANGE neg=$C_NEG unknown=$C_UNKNOWN null=$C_NULL"
 fi
 
+# 5g. the list filters of change efootbase-function-parity:
+#     playingStyles — several main styles OR-ed (each in either slot), the
+#     single playingStyle merged in, AI styles AND-ed with the group;
+#     teamNames — Team.name, OR-ed with clubIds, AND with leagues (J1 +
+#     Arsenal FC is empty), an unknown name matches nothing;
+#     skillKeys — Skill.efbKey, AND-ed with skillIds, an unknown key matches
+#     nothing; every bound a 400.
+trpc_get "player.list" '{"limit":1,"playingStyles":[1]}'
+ST_GP="$(result 'd["total"]')"
+trpc_get "player.list" '{"limit":1,"playingStyles":[22]}'
+ST_TM="$(result 'd["total"]')"
+trpc_get "player.list" '{"limit":1,"playingStyles":[1,22]}'
+ST_OR="$(result 'd["total"]')"
+trpc_get "player.list" '{"limit":1,"playingStyle":1,"playingStyles":[22]}'
+ST_MERGED="$(result 'd["total"]')"
+trpc_get "player.list" '{"limit":1,"playingStyles":[1,22,24],"aiStyles":["trickster","mazingRun"]}'
+ST_AI="$(result 'd["total"]')"
+trpc_get "player.list" '{"limit":1,"playingStyles":[1,22,24],"aiStyles":["trickster"]}'
+ST_AI1="$(result 'd["total"]')"
+ST_MAX=$(( ST_GP > ST_TM ? ST_GP : ST_TM ))
+if [ -n "$ST_OR" ] && [ "$ST_OR" -ge "$ST_MAX" ] && [ "$ST_OR" -le $((ST_GP + ST_TM)) ] && [ "$ST_MERGED" = "$ST_OR" ] && [ -n "$ST_AI" ] && [ "$ST_AI" -le "$ST_AI1" ] && [ "$ST_AI" -gt 0 ]; then
+  pass "player.list playingStyles [Goal Poacher, Target Man] → $ST_OR (OR, single playingStyle merged); + Front Line Pressure with Trickster ∧ Mazing Run → $ST_AI (≤ Trickster alone $ST_AI1)"
+else
+  fail "player.list playingStyles OR / AI AND" "gp=$ST_GP tm=$ST_TM or=$ST_OR merged=$ST_MERGED ai=$ST_AI ai1=$ST_AI1"
+fi
+trpc_get "player.teams" '{}'
+ARSENAL_ID="$(result 'next(t["id"] for t in d if t["name"] == "Arsenal FC")')"
+trpc_get "player.list" "{\"limit\":1,\"clubIds\":[$ARSENAL_ID]}"
+TN_ID="$(result 'd["total"]')"
+trpc_get "player.list" '{"limit":1,"teamNames":["Arsenal FC"]}'
+TN_NAME="$(result 'd["total"]')"
+trpc_get "player.list" '{"limit":1,"teamNames":["Arsenal FC"],"leagueIds":[26]}'
+TN_J1="$(result 'd["total"]')"
+trpc_get "player.list" '{"limit":1,"teamNames":["No Such Team FC 1999"]}'
+TN_NONE="$(result 'd["total"]')"
+trpc_get "player.list" "{\"limit\":1,\"teamNames\":[\"Arsenal FC\"],\"clubIds\":[$ARSENAL_ID]}"
+TN_BOTH="$(result 'd["total"]')"
+if [ -n "$TN_ID" ] && [ "$TN_ID" -gt 0 ] && [ "$TN_NAME" = "$TN_ID" ] && [ "$TN_BOTH" = "$TN_ID" ] && [ "$TN_J1" = "0" ] && [ "$TN_NONE" = "0" ]; then
+  pass "player.list teamNames [Arsenal FC] → $TN_NAME = clubIds [$ARSENAL_ID]; with League J1 → 0 (AND, not narrowed); an unknown name → 0"
+else
+  fail "player.list teamNames" "id=$TN_ID name=$TN_NAME both=$TN_BOTH j1=$TN_J1 none=$TN_NONE"
+fi
+trpc_get "skill.list" '{}'
+RABONA_ID="$(result 'next(s["id"] for s in d if s["key"] == "s_rabona")')"
+SOMBRERO_ID="$(result 'next(s["id"] for s in d if s["key"] == "s_sombrero")')"
+trpc_get "player.list" "{\"limit\":1,\"skillIds\":[$RABONA_ID,$SOMBRERO_ID]}"
+SK_IDS="$(result 'd["total"]')"
+trpc_get "player.list" '{"limit":1,"skillKeys":["s_rabona","s_sombrero"]}'
+SK_KEYS="$(result 'd["total"]')"
+trpc_get "player.list" "{\"limit\":1,\"skillIds\":[$RABONA_ID],\"skillKeys\":[\"s_sombrero\"]}"
+SK_MIX="$(result 'd["total"]')"
+trpc_get "player.list" '{"limit":1,"skillKeys":["s_no_such_skill_1999"]}'
+SK_NONE="$(result 'd["total"]')"
+if [ -n "$SK_IDS" ] && [ "$SK_IDS" -gt 0 ] && [ "$SK_KEYS" = "$SK_IDS" ] && [ "$SK_MIX" = "$SK_IDS" ] && [ "$SK_NONE" = "0" ]; then
+  pass "player.list skillKeys [s_rabona, s_sombrero] → $SK_KEYS = skillIds [$RABONA_ID, $SOMBRERO_ID] (AND, mixed forms merged); an unknown key → 0"
+else
+  fail "player.list skillKeys" "ids=$SK_IDS keys=$SK_KEYS mix=$SK_MIX none=$SK_NONE"
+fi
+NAMES_51="$(py 'import json; print(json.dumps(["Team %d" % i for i in range(51)]))')"
+NAMES_21="$(py 'import json; print(json.dumps(["Team %d" % i for i in range(21)]))')"
+KEYS_21="$(py 'import json; print(json.dumps(["s_k%d" % i for i in range(21)]))')"
+IDS_30="$(py 'print(",".join(str(i) for i in range(1, 31)))')"
+trpc_get "player.list" "{\"limit\":1,\"teamNames\":$NAMES_51}"
+C_TN51="$CODE"
+trpc_get "player.list" "{\"limit\":1,\"clubIds\":[$IDS_30],\"teamNames\":$NAMES_21}"
+C_TNMIX="$CODE"
+trpc_get "player.list" "{\"limit\":1,\"skillKeys\":$KEYS_21}"
+C_SK21="$CODE"
+trpc_get "player.list" '{"limit":1,"skillIds":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20],"skillKeys":["s_rabona"]}'
+C_SKMIX="$CODE"
+trpc_get "player.list" '{"limit":1,"skillKeys":["rabona"]}'
+C_SKBAD="$CODE"
+trpc_get "player.list" '{"limit":1,"teamNames":[""]}'
+C_TNEMPTY="$CODE"
+trpc_get "player.list" "{\"limit\":1,\"playingStyles\":[$IDS_51]}"
+C_ST51="$CODE"
+if [ "$C_TN51" = "400" ] && [ "$C_TNMIX" = "400" ] && [ "$C_SK21" = "400" ] && [ "$C_SKMIX" = "400" ] && [ "$C_SKBAD" = "400" ] && [ "$C_TNEMPTY" = "400" ] && [ "$C_ST51" = "400" ]; then
+  pass "player.list 51 team names / 30 ids + 21 names / 21 skill keys / 20 ids + 1 key / a malformed key / an empty name / 51 styles → 400"
+else
+  fail "player.list new list bounds → 400" "tn51=$C_TN51 tnmix=$C_TNMIX sk21=$C_SK21 skmix=$C_SKMIX skbad=$C_SKBAD tnempty=$C_TNEMPTY st51=$C_ST51"
+fi
+
 # 6. pagination: 10 pages sorted by Speed carry no duplicate id (deterministic tiebreaker)
 IDS_FILE="$(mktemp -t eflab-smoke-ids.XXXXXX)"
 PAGE_FAIL=""
@@ -564,44 +776,131 @@ else
   fail "player.list q=Mbappe → >0 cards" "code=$CODE total=$MB_TOTAL body=${BODY:0:160}"
 fi
 
-# 9. player.search ranks the exact name first
-trpc_get "player.search" '{"q":"Lionel Messi","limit":3}'
-TOP_NAME="$(result 'd[0]["name"] if d else ""')"
+# 9. player.search (change efootbase-function-parity, design decision D8;
+#    survey 2026-10-23 S2 §4, S3 §1.5 / §2): the folded query is a substring
+#    of the card name OR of its pack / campaign name, from 3 characters, in
+#    the order max overall DESC, card id DESC (no tiers, no fuzzy matching),
+#    12 rows per page with hasMore, each row with its pack name.
+search_order_ok() { result '[(-r["maxOvr"], -int(r["id"])) for r in d["rows"]] == sorted((-r["maxOvr"], -int(r["id"])) for r in d["rows"])'; }
+trpc_get "player.search" '{"q":"Lionel Messi"}'
+TOP_NAME="$(result 'd["rows"][0]["name"] if d["rows"] else ""')"
 if [ "$CODE" = "200" ] && [ "$TOP_NAME" = "Lionel Messi" ]; then
   pass "player.search 'Lionel Messi' → first result Lionel Messi"
 else
   fail "player.search 'Lionel Messi' → first result Lionel Messi" "code=$CODE first=$TOP_NAME"
 fi
-
-# 9b. player.search ranks whole-word matches, then word-start matches, then
-#     other partial ones and, inside a rank, the higher max overall first
-#     (efootbase-behaviour-parity "Player Search Ranking"): "ronaldo" lists
-#     Cristiano Ronaldo in the first three, not only the lower-rated cards
-#     named exactly "Ronaldo".
-trpc_get "player.search" '{"q":"ronaldo","limit":10}'
-RON_TOP="$(result '"|".join(p["name"] for p in d[:3])')"
-RON_RANKED="$(result 'all(d[i]["maxOvr"] >= d[i + 1]["maxOvr"] for i in range(len(d) - 1) if "ronaldo" in d[i]["name"].lower().split() and "ronaldo" in d[i + 1]["name"].lower().split())')"
-RON_CODE="$CODE"
-# Tiers compete on "ira": the best mid-word match ("…ira…", max overall 101 in
-# the 2026-10 data) outranks every name with a word starting "ira" (72), so
-# only the word-start tier puts the latter first. Every row whose accent-free
-# name has "ira" at a word start must come before every row that has not.
-trpc_get "player.search" '{"q":"ira","limit":30}'
-IRA_TIERS="$(result '(lambda ws: "%d|%s" % (sum(ws), ws == sorted(ws, reverse=True) and 0 < sum(ws) < len(ws)))([1 if __import__("re").search(r"\bira", __import__("unicodedata").normalize("NFD", p["name"]).encode("ascii", "ignore").decode().lower()) else 0 for p in d])')"
-IRA_CODE="$CODE"
-# Whole word before word start: "ronald" is a whole word of "Ronald Koeman"
-# but only the start of a word of "Ronaldinho" / "Cristiano Ronaldo", whose
-# best cards have a higher max overall — so only the whole-word tier puts the
-# former first. Classified per row of one response (limit 50, the schema
-# maximum): every whole-word row must come before every word-start-only row,
-# there must be at least one of each, and when both names are present the
-# first "Ronald Koeman" must come before the first "Ronaldinho".
-trpc_get "player.search" '{"q":"ronald","limit":50}'
-RONALD_TIERS="$(result '(lambda ns: (lambda ww, ws: "%d|%d|%s" % (len(ww), len(ws), bool(ww) and bool(ws) and max(ww) < min(ws) and (not any("ronald koeman" == n for n in ns) or not any(n.startswith("ronaldinho") for n in ns) or ns.index("ronald koeman") < next(i for i, n in enumerate(ns) if n.startswith("ronaldinho")))))([i for i, n in enumerate(ns) if __import__("re").search(r"\bronald\b", n)], [i for i, n in enumerate(ns) if __import__("re").search(r"\bronald", n) and not __import__("re").search(r"\bronald\b", n)]))([__import__("unicodedata").normalize("NFD", p["name"]).encode("ascii", "ignore").decode().lower() for p in d])')"
-if [ "$RON_CODE" = "200" ] && [ "$IRA_CODE" = "200" ] && [ "$CODE" = "200" ] && printf '%s' "$RON_TOP" | grep -q 'Cristiano Ronaldo' && [ "$RON_RANKED" = "True" ] && [ "${IRA_TIERS#*|}" = "True" ] && [ "${RONALD_TIERS##*|}" = "True" ]; then
-  pass "player.search 'ronaldo' → Cristiano Ronaldo in the top 3 (top 3: $RON_TOP), whole-word matches by max overall; 'ronald' → ${RONALD_TIERS%%|*} whole-word matches (Ronald Koeman) before the word-start-only ones (Ronaldinho); 'ira' → ${IRA_TIERS%%|*} word-start matches before the partial ones"
+# A pack-name term: no card name contains "wonderkids" — the 8 cards of the
+# pack "Wonderkids 8 Oct '26", Pau Cubarsí first.
+trpc_get "player.search" '{"q":"wonderkids"}'
+WK="$(result '"%d|%s|%s|%s" % (len(d["rows"]), d["rows"][0]["name"] if d["rows"] else "", d["hasMore"], len({r["packName"] for r in d["rows"]}) == 1 and "wonderkids" in (d["rows"][0]["packName"] or "").lower())')"
+WK_ORDER="$(search_order_ok)"
+if [ "$CODE" = "200" ] && [ "$WK" = "8|Pau Cubarsí|False|True" ] && [ "$WK_ORDER" = "True" ]; then
+  pass "player.search 'wonderkids' → the 8 cards of the Wonderkids pack, Pau Cubarsí first, each with the pack name"
 else
-  fail "player.search 'ronaldo' → Cristiano Ronaldo in the top 3; 'ronald' → whole word before word start; 'ira' → word start before partial" "code=$RON_CODE/$IRA_CODE/$CODE top3=$RON_TOP ranked=$RON_RANKED ronald(ww|ws|ok)=$RONALD_TIERS ira=$IRA_TIERS"
+  fail "player.search 'wonderkids' (expected '8|Pau Cubarsí|False|True')" "code=$CODE got='$WK' order=$WK_ORDER body=${BODY:0:200}"
+fi
+# Name or pack: "cote" → 7 cards, Didier Drogba (pack "Côte d'Ivoire 2006", no
+# "cote" in his name) among them.
+trpc_get "player.search" '{"q":"cote"}'
+COTE="$(result '"%d|%s" % (len(d["rows"]), next((r["packName"] for r in d["rows"] if r["id"] == "88040387251713"), "missing"))')"
+if [ "$CODE" = "200" ] && [ "$COTE" = "7|Côte d'Ivoire 2006" ]; then
+  pass "player.search 'cote' → 7 cards incl. Didier Drogba 88040387251713 (pack Côte d'Ivoire 2006)"
+else
+  fail "player.search 'cote' (expected \"7|Côte d'Ivoire 2006\")" "code=$CODE got='$COTE'"
+fi
+# Contiguous substring only: reversed words find nothing.
+trpc_get "player.search" '{"q":"messi lionel"}'
+if [ "$CODE" = "200" ] && [ "$(result 'len(d["rows"]) == 0 and d["hasMore"] is False')" = "True" ]; then
+  pass "player.search 'messi lionel' → no result"
+else
+  fail "player.search 'messi lionel' → no result" "code=$CODE body=${BODY:0:200}"
+fi
+# Max overall order, whole word or not: "ronald" → Cristiano Ronaldo 103,
+# Ronaldinho 102, Ronald Koeman 102 (id DESC breaks the tie); "ronaldo" →
+# Cristiano Ronaldo first.
+trpc_get "player.search" '{"q":"ronald"}'
+RONALD="$(result '"|".join("%s %d" % (r["name"], r["maxOvr"]) for r in d["rows"][:3])')"
+RONALD_ORDER="$(search_order_ok)"
+trpc_get "player.search" '{"q":"ronaldo"}'
+RONALDO_TOP="$(result 'd["rows"][0]["name"]')"
+if [ "$CODE" = "200" ] && [ "$RONALD" = "Cristiano Ronaldo 103|Ronaldinho Gaúcho 102|Ronald Koeman 102" ] && [ "$RONALD_ORDER" = "True" ] && [ "$RONALDO_TOP" = "Cristiano Ronaldo" ]; then
+  pass "player.search 'ronald' → $RONALD (max overall, then id); 'ronaldo' → Cristiano Ronaldo first"
+else
+  fail "player.search 'ronald' / 'ronaldo' order" "code=$CODE ronald='$RONALD' order=$RONALD_ORDER ronaldo=$RONALDO_TOP"
+fi
+# Paging: "messi" (113 cards: 63 names + the "Leo Messi Edition …" packs) →
+# pages of 12 with hasMore, the last page (10) holds 5 and has no more; the
+# ten pages hold 113 distinct cards in one max-overall order; page 51 and a
+# 2- or 101-character term are a 400.
+MESSI_IDS="$(mktemp -t eflab-smoke-messi.XXXXXX)"
+MESSI_FAIL=""
+for P in 1 2 3 4 5 6 7 8 9 10; do
+  trpc_get "player.search" "{\"q\":\"messi\",\"page\":$P}"
+  if [ "$CODE" != "200" ]; then MESSI_FAIL="page $P code=$CODE"; break; fi
+  SHAPE="$(result '"%d|%s" % (len(d["rows"]), d["hasMore"])')"
+  if [ "$P" -lt 10 ] && [ "$SHAPE" != "12|True" ]; then MESSI_FAIL="page $P → $SHAPE"; break; fi
+  if [ "$P" = "10" ] && [ "$SHAPE" != "5|False" ]; then MESSI_FAIL="page 10 → $SHAPE"; break; fi
+  result '"\n".join("%d %s" % (r["maxOvr"], r["id"]) for r in d["rows"])' >>"$MESSI_IDS"
+done
+MESSI_N="$(cut -d' ' -f2 "$MESSI_IDS" | sort -u | grep -c .)"
+MESSI_SORTED="$(py 'import sys; rows=[l.split() for l in open(sys.argv[1]) if l.strip()]; keys=[(-int(a), -int(b)) for a, b in rows]; print(keys == sorted(keys))' "$MESSI_IDS")"
+rm -f "$MESSI_IDS"
+trpc_get "player.search" '{"q":"me"}'
+C_Q2="$CODE"
+trpc_get "player.search" "{\"q\":\"$(py 'print("x" * 101)')\"}"
+C_Q101="$CODE"
+trpc_get "player.search" '{"q":"messi","page":51}'
+C_P51="$CODE"
+trpc_get "player.search" '{"q":"messi","limit":8}'
+C_LIMIT="$CODE"
+if [ -z "$MESSI_FAIL" ] && [ "$MESSI_N" = "113" ] && [ "$MESSI_SORTED" = "True" ] && [ "$C_Q2" = "400" ] && [ "$C_Q101" = "400" ] && [ "$C_P51" = "400" ] && [ "$C_LIMIT" = "200" ]; then
+  pass "player.search 'messi' → 9 pages of 12 (hasMore) + 5 = 113 distinct cards in max-overall order; q of 2 / 101 characters and page 51 → 400; an old limit is ignored"
+else
+  fail "player.search paging and bounds" "fail=$MESSI_FAIL n=$MESSI_N sorted=$MESSI_SORTED q2=$C_Q2 q101=$C_Q101 p51=$C_P51 limit=$C_LIMIT"
+fi
+# player.trending (the palette's "Latest Players" empty state) carries the
+# same pack chip as the search rows: `packName` on every row (the card's pack
+# / campaign name or null), one card per base player; a row's pack name equals
+# the one player.search gives that card.
+trpc_get "player.trending" '{}'
+TR_CODE="$CODE"
+TR="$(result '"%d|%s|%s|%s" % (len(d), all("packName" in r for r in d), len({r["baseId"] for r in d}) == len(d), any(r["packName"] for r in d))')"
+TR_PROBE="$(result 'next(("%s\t%s\t%s" % (r["id"], r["name"], r["packName"]) for r in d if r["packName"] and len(r["name"]) >= 3), "")')"
+TR_SAME="no"
+if [ -n "$TR_PROBE" ]; then
+  TR_ID="$(printf '%s' "$TR_PROBE" | cut -f1)"
+  TR_NAME="$(printf '%s' "$TR_PROBE" | cut -f2)"
+  TR_PACK="$(printf '%s' "$TR_PROBE" | cut -f3)"
+  for P in 1 2 3 4 5; do
+    trpc_get "player.search" "$(py 'import json,sys; print(json.dumps({"q": sys.argv[1], "page": int(sys.argv[2])}))' "$TR_NAME" "$P")"
+    FOUND="$(result "next((r[\"packName\"] or \"\") for r in d[\"rows\"] if r[\"id\"] == \"$TR_ID\") if any(r[\"id\"] == \"$TR_ID\" for r in d[\"rows\"]) else \"\"")"
+    if [ -n "$FOUND" ]; then [ "$FOUND" = "$TR_PACK" ] && TR_SAME="yes"; break; fi
+    [ "$(result 'd["hasMore"]')" = "True" ] || break
+  done
+fi
+if [ "$TR_CODE" = "200" ] && [ "$TR" = "18|True|True|True" ] && [ "$TR_SAME" = "yes" ]; then
+  pass "player.trending → 18 distinct players, each row with packName; '$TR_NAME' reads '$TR_PACK' as in player.search"
+else
+  fail "player.trending packName (expected '18|True|True|True' and the same pack as player.search)" "code=$TR_CODE got='$TR' probe='$TR_PROBE' same=$TR_SAME"
+fi
+
+# 9b. player.list `q` uses the same rule: "messi" → 113 cards (name or pack);
+#     a term shorter than 3 characters is ignored (the whole catalogue), as on
+#     the reference; the reference's deep link (Epic, search messi, RWF, left
+#     foot, weak-foot accuracy 3★ = 2, base overall ≥ 87, High to low) lists
+#     exactly Messi 89136409091415 and 89133456301399.
+trpc_get "player.list" '{"q":"messi","limit":1}'
+LQ_MESSI="$(result 'd["total"]')"
+trpc_get "player.list" '{"q":"me","limit":1}'
+LQ_SHORT="$(result 'd["total"]')"
+trpc_get "player.list" '{"limit":1}'
+LQ_ALL="$(result 'd["total"]')"
+trpc_get "player.list" '{"limit":10,"sort":"highest","q":"messi","cardTypeIn":["EPIC"],"positions":["RWF"],"strongerFoot":1,"weakFootAccuracyIn":[2],"ovrMin":87}'
+REF_LINK="$(result '"%d|%s" % (d["total"], ",".join(i["id"] for i in d["items"]))')"
+if [ "$LQ_MESSI" = "113" ] && [ -n "$LQ_ALL" ] && [ "$LQ_SHORT" = "$LQ_ALL" ] && [ "$REF_LINK" = "2|89136409091415,89133456301399" ]; then
+  pass "player.list q=messi → 113 (name or pack); q=me ignored ($LQ_SHORT = all); the reference link → exactly 89136409091415, 89133456301399"
+else
+  fail "player.list q rule / reference link" "messi=$LQ_MESSI short=$LQ_SHORT all=$LQ_ALL ref=$REF_LINK"
 fi
 
 # 9c. Name sort orders by the accent-free, lower-case name (nameNormalized,
@@ -632,17 +931,18 @@ else
   fail "player.list sort=name → ordered by the normalised name" "asc=$NAME_ASC desc=$NAME_DESC"
 fi
 
-# 9d. player.countries carries each nation's card count (the Nation dialog's
-#     "Popular" group): non-negative integers summing to the catalogue total.
-trpc_get "player.list" '{"page":1,"limit":1}'
-ALL_TOTAL="$(result 'd["total"]')"
+# 9d. player.countries = the Nation dialog's list: every row exactly id / name /
+#     flagUrl (the per-nation card count was removed with the "Popular" group,
+#     owner decision 2026-10-24), unique ids, and the ten nations the dialog
+#     lists first (FIXED_FIRST_NATIONS in @eflab/shared, matched by exact name)
+#     all present.
 trpc_get "player.countries" '{}'
-NAT_SUM="$(result 'sum(c["playerCount"] for c in d) if all(isinstance(c.get("playerCount"), int) and c["playerCount"] >= 0 for c in d) else -1')"
-NAT_TOP="$(result '", ".join(c["name"] for c in sorted(d, key=lambda c: (-c["playerCount"], c["name"]))[:3])')"
-if [ "$CODE" = "200" ] && [ -n "$ALL_TOTAL" ] && [ "$NAT_SUM" = "$ALL_TOTAL" ]; then
-  pass "player.countries playerCount sums to $ALL_TOTAL cards (most: $NAT_TOP)"
+NAT_ROWS="$(result 'len(d) if all(set(c) == {"id", "name", "flagUrl"} for c in d) and len({c["id"] for c in d}) == len(d) else -1')"
+NAT_FIXED="$(result 'sum(1 for n in ["England", "France", "Spain", "Brazil", "Argentina", "Germany", "Italy", "Netherlands", "Portugal", "Belgium"] if n in {c["name"] for c in d})')"
+if [ "$CODE" = "200" ] && [ -n "$NAT_ROWS" ] && [ "$NAT_ROWS" -gt 0 ] && [ "$NAT_FIXED" = "10" ]; then
+  pass "player.countries → $NAT_ROWS nations, each id / name / flagUrl only (no card count); the ten fixed first nations present"
 else
-  fail "player.countries playerCount sums to the card total" "code=$CODE sum=$NAT_SUM total=$ALL_TOTAL"
+  fail "player.countries rows are id / name / flagUrl and hold the ten fixed nations" "code=$CODE rows=$NAT_ROWS fixed=$NAT_FIXED"
 fi
 
 # 10. player.byId resolves a real card (baseId must match the card)

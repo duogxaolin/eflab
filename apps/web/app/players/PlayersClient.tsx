@@ -10,28 +10,33 @@ import { Pagination } from "@/components/players/Pagination";
 import { QueryErrorState, CardGridSkeleton } from "@/lib/query-state";
 import { useDebouncedValue } from "@/lib/use-debounced-value";
 import {
-  DEFAULT_PLAYERS_STATE,
-  MAX_LIST_PAGE,
   countActiveFilters,
   defaultSortOrder,
-  hasAnyState,
+  hasActiveFilters,
+  playersListQuery,
   readPlayersState,
+  resetFilters,
+  resolveLegacyIds,
+  searchApplies,
   withoutDefaultPage,
+  withoutFilter,
   writePlayersState,
+  type ActiveFilter,
+  type LegacyIdLookups,
   type PlayersSort,
   type PlayersState,
 } from "@/lib/filter-url";
 import { FiltersPanel, type FilterDialogKind } from "@/components/filters/FiltersPanel";
+import { ActiveFilterChips } from "@/components/filters/ActiveFilterChips";
 import { PLAYERS_GRID, PLAYERS_PAGE_SIZE } from "./players-grid";
 import { Modal } from "@/components/filters/Modal";
 import {
+  LIST_SEARCH_MAX_LENGTH,
   SEARCH_MIN_LENGTH,
   SORT_FIELDS,
   SORT_PRESETS,
   SORT_PRESET_LABELS,
   isSortPreset,
-  type BaseStat,
-  type PhysiqueField,
   type SortField,
 } from "@eflab/shared";
 import { Search, X, RotateCcw, SlidersHorizontal } from "lucide-react";
@@ -72,9 +77,35 @@ const directionOptions = (sort: PlayersSort): ReadonlyArray<readonly ["asc" | "d
         ["asc", "Low to high"],
       ];
 
-/** A name query is sent only from SEARCH_MIN_LENGTH characters; shorter ones
- *  (one letter) would list most of the catalogue. Empty = no name filter. */
-const searchable = (q: string) => q.length === 0 || q.length >= SEARCH_MIN_LENGTH;
+/** The search (card name or pack name) is sent only from SEARCH_MIN_LENGTH
+ *  characters (3, the reference's rule); a shorter text stays in the field
+ *  with a hint and the list is unchanged. Empty = no search. */
+const searchable = (q: string) => q.length === 0 || searchApplies(q);
+
+/** Search debounce of /players (the reference requests ≈ 500 ms after the
+ *  last keystroke, survey 2026-10-23 S2 §4). */
+const SEARCH_DEBOUNCE_MS = 500;
+const LIST_STALE_MS = 60 * 60_000;
+
+/** The rail's and the phone sheet's Reset (shown while a filter is active).
+ *  It disappears with the filters, so focus first moves to the first filter
+ *  row of the same rail / sheet (in view, unlike the search field above). */
+function ResetFiltersButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.currentTarget.closest("aside, dialog")?.querySelector<HTMLElement>(".filter-row")?.focus();
+        onClick();
+      }}
+      className="filter-reset hit-44"
+      data-testid="filters-reset"
+    >
+      <RotateCcw className="size-3.5" aria-hidden />
+      Reset
+    </button>
+  );
+}
 
 // ---------------------------------------------------------------------------
 export function PlayersClient() {
@@ -154,6 +185,31 @@ export function PlayersClient() {
     [commit],
   );
 
+  // An older link's all-digit `team` values and skill ids become team names
+  // and skill keys once those lists are known (resolveLegacyIds), in the
+  // state only: the URL keeps the link's form until the next change, which
+  // writes the canonical one (`team=12` → `team=Portugal`). Until then the
+  // ids are sent as ids, so the list is right either way; an id the lists do
+  // not know stays an id. Runs again after a navigation brings ids back.
+  const teamList = trpc.player.teams.useQuery(undefined, { staleTime: LIST_STALE_MS, enabled: state.legacyTeamIds.length > 0 });
+  const skillList = trpc.skill.list.useQuery({}, { staleTime: LIST_STALE_MS, enabled: state.legacySkillIds.length > 0 });
+  useEffect(() => {
+    const lookups: LegacyIdLookups = {};
+    if (teamList.data) {
+      const names = new Map(teamList.data.map((t) => [t.id, t.name]));
+      lookups.teamName = (id) => names.get(id);
+    }
+    if (skillList.data) {
+      const keys = new Map(skillList.data.map((s) => [s.id, s.key]));
+      lookups.skillKey = (id) => keys.get(id);
+    }
+    const next = resolveLegacyIds(latest.current, lookups);
+    if (next !== latest.current) {
+      latest.current = next;
+      setState(next);
+    }
+  }, [state, teamList.data, skillList.data]);
+
   // A `page` that is not a page number past 1 (`?page=0`, `?page=abc`,
   // `?page=1`) reads as page 1: drop it so the address is the clean one.
   // Only that parameter goes; legacy names elsewhere are rewritten on the
@@ -164,14 +220,16 @@ export function PlayersClient() {
     if (cleaned !== null) router.replace((cleaned ? `/players?${cleaned}` : "/players") as Route, { scroll: false });
   }, [router, urlQs]);
 
-  // Search box: local text mirrors the URL and is debounced into it. A
-  // one-character query is never written or sent: the field shows a hint and
-  // the grid keeps the previous result (SEARCH_MIN_LENGTH, shared with the
-  // palette and the home search).
+  // Search box: local text mirrors the URL and is debounced into it (500 ms).
+  // A 1- or 2-character text is never written or sent: the field shows a hint
+  // and the grid keeps the previous result (SEARCH_MIN_LENGTH, shared with the
+  // palette and the home search); a 1- or 2-character `search` from a link
+  // fills the field the same way without filtering.
   const searchHintId = useId();
+  const searchRef = useRef<HTMLInputElement>(null);
   const [qInput, setQInput] = useState(state.q);
   const qTrimmed = qInput.trim();
-  const debouncedQ = useDebouncedValue(qTrimmed, 250);
+  const debouncedQ = useDebouncedValue(qTrimmed, SEARCH_DEBOUNCE_MS);
   const qTooShort = !searchable(qTrimmed);
   // Follow the state's query (Back, Reset, a link) unless the field already
   // says it: the debounced write of "messi" must not strip the space just
@@ -187,56 +245,11 @@ export function PlayersClient() {
   const [dialog, setDialog] = useState<FilterDialogKind | null>(null);
   const [mobileFilters, setMobileFilters] = useState(false);
 
-  const statRanges = useMemo(
-    () => Object.entries(state.stats).map(([stat, r]) => ({ stat: stat as BaseStat, min: r.min, max: r.max })),
-    [state.stats],
-  );
-  const bodyRanges = useMemo(
-    () => Object.entries(state.body).map(([field, r]) => ({ field: field as PhysiqueField, min: r.min, max: r.max })),
-    [state.body],
-  );
-
-  const listQuery = trpc.player.list.useQuery(
-    {
-      // The URL may carry a page past MAX_LIST_PAGE (the API bound); it is
-      // asked for as the bound and then replaced by the last page below.
-      page: Math.min(state.page, MAX_LIST_PAGE),
-      limit: PLAYERS_PAGE_SIZE,
-      sort: state.sort,
-      order: state.order,
-      // A one-character `search=` link is not sent either.
-      q: state.q.length >= SEARCH_MIN_LENGTH ? state.q : undefined,
-      cardTypeIn: state.types ?? undefined,
-      // Multi-valued lists (OR within, AND between — multi-select-filters).
-      positions: state.pos.length ? state.pos : undefined,
-      playingStyle: state.style,
-      aiStyles: state.ai.length ? state.ai : undefined,
-      nationalityIds: state.nat.length ? state.nat : undefined,
-      leagueIds: state.league.length ? state.league : undefined,
-      clubIds: state.team.length ? state.team : undefined,
-      strongerFoot: state.foot,
-      ovrMin: state.base?.min,
-      ovrMax: state.base?.max,
-      maxOvrMin: state.max?.min,
-      maxOvrMax: state.max?.max,
-      conditionIn: state.condition.length ? state.condition : undefined,
-      // Stars (1-based, as shown) → stored levels (0-based).
-      formIn: state.form.length ? state.form.map((n) => n - 1) : undefined,
-      weakFootAccuracyIn: state.wfa.length ? state.wfa.map((n) => n - 1) : undefined,
-      weakFootUsageIn: state.wfu.length ? state.wfu.map((n) => n - 1) : undefined,
-      heightMin: state.height?.min,
-      heightMax: state.height?.max,
-      weightMin: state.weight?.min,
-      weightMax: state.weight?.max,
-      ageMin: state.age?.min,
-      ageMax: state.age?.max,
-      skillIds: state.skills.length ? state.skills : undefined,
-      statRanges: statRanges.length ? statRanges : undefined,
-      statsAtMax: statRanges.length && state.statsAtMax ? true : undefined,
-      bodyRanges: bodyRanges.length ? bodyRanges : undefined,
-    },
-    { placeholderData: (prev) => prev },
-  );
+  // The list request for the state (playersListQuery: the page past
+  // MAX_LIST_PAGE asked for as the bound, a short search left out, the
+  // lists OR within and AND between — positions by registered position).
+  const listInput = useMemo(() => playersListQuery(state, PLAYERS_PAGE_SIZE), [state]);
+  const listQuery = trpc.player.list.useQuery(listInput, { placeholderData: (prev) => prev });
 
   const listData = listQuery.data;
   const players = listData?.items ?? [];
@@ -270,21 +283,34 @@ export function PlayersClient() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settledLast, state.page]);
 
-  const activeFilters = countActiveFilters(state);
-  const resetAll = () => {
-    setQInput("");
-    setDialog(null);
-    setMobileFilters(false);
+  // Phone Filters badge: each OR list once, the AND lists per value (rule
+  // unchanged — the reference's total badge is a pending measurement).
+  const activeFilterCount = countActiveFilters(state);
+  const filtersActive = hasActiveFilters(state);
+  // Reset (rail, sheet, chip row): every filter cleared, the search text and
+  // the sort kept (survey 2026-10-23 S2 §7), page 1.
+  const resetAll = useCallback(() => {
     setPageNotice(null);
-    commit(DEFAULT_PLAYERS_STATE);
-  };
+    commit(resetFilters(latest.current));
+  }, [commit]);
+  // A removed chip removes only its value (back on page 1).
+  const removeFilter = useCallback(
+    (f: ActiveFilter) => {
+      setPageNotice(null);
+      commit(withoutFilter(latest.current, f));
+    },
+    [commit],
+  );
 
   // A newly chosen sort starts in its natural direction (Name A → Z, numbers
   // high → low); the direction buttons change it afterwards.
   const chooseSort = (sort: PlayersSort) => update({ sort, order: defaultSortOrder(sort) });
   const fieldSortActive = !isSortPreset(state.sort);
 
-  // Sort row: the five presets as a 32 px segmented radiogroup next to the
+  // Sort row: the three presets — New cards (the default, no `sort` in the
+  // URL), High to low and Low to high by max overall (change
+  // efootbase-function-parity; the reference's Trending and Top rated need
+  // data eFootLab does not hold) — as a 32 px segmented radiogroup next to the
   // field-sort select (our addition: "More sorts…") and, while a field sort
   // is active, its direction. From 768 px the row sits right of the title and
   // wraps right-aligned when it does not fit (one line from 1280 px); below
@@ -377,9 +403,11 @@ export function PlayersClient() {
             <div className="field field--lg">
               <Search className="size-4 shrink-0 text-[var(--color-text-secondary)]" aria-hidden />
               <input
+                ref={searchRef}
                 type="search"
                 value={qInput}
                 onChange={(e) => setQInput(e.target.value)}
+                maxLength={LIST_SEARCH_MAX_LENGTH}
                 placeholder="Search players by name…"
                 aria-label="Search players by name…"
                 aria-describedby={qTooShort ? searchHintId : undefined}
@@ -416,23 +444,27 @@ export function PlayersClient() {
           >
             <SlidersHorizontal className="size-4" aria-hidden />
             Filters
-            {activeFilters > 0 && (
+            {activeFilterCount > 0 && (
               <span
                 className="rounded-full bg-[var(--color-accent)] px-1.5 text-[10px] font-bold leading-4 text-[var(--color-accent-foreground)]"
-                aria-label={`${activeFilters} active`}
+                aria-label={`${activeFilterCount} active`}
               >
-                {activeFilters}
+                {activeFilterCount}
               </span>
             )}
           </button>
         </div>
 
-        {/* Counter (12 px muted) + reset. One unit ("cards") throughout; while
-            a new query is in flight the grid still shows the previous result
+        {/* Active-filter chips under the search at every width (a Reset chip
+            ends the row below 1024 px). */}
+        <ActiveFilterChips state={state} onRemove={removeFilter} onReset={resetAll} searchRef={searchRef} />
+
+        {/* Counter (12 px muted). One unit ("cards") throughout; while a new
+            query is in flight the grid still shows the previous result
             (placeholderData), so the counter says "Updating…" instead of a
             stale total. */}
         <div ref={gridTopRef} className="mt-3 flex min-h-8 flex-wrap items-center gap-x-3 gap-y-2 text-xs tabular-nums text-[var(--color-text-secondary)]">
-          <span className="mr-auto" aria-live="polite" aria-busy={listQuery.isPlaceholderData || undefined}>
+          <span className="mr-auto" aria-live="polite" aria-busy={listQuery.isPlaceholderData || undefined} data-testid="players-count">
             {listQuery.isError
               ? "—"
               : listQuery.isPending || pastEnd
@@ -441,17 +473,6 @@ export function PlayersClient() {
                   ? "Updating…"
                   : `${total.toLocaleString("en-US")} ${total === 1 ? "card" : "cards"} · page ${state.page.toLocaleString("en-US")} of ${totalPages.toLocaleString("en-US")}`}
           </span>
-          {hasAnyState(state) && (
-            <button
-              type="button"
-              onClick={resetAll}
-              className="hit-44 inline-flex h-8 cursor-pointer items-center gap-1 rounded-full px-2.5 text-xs font-medium text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-default)] hover:text-[var(--color-text-primary)]"
-              title="Reset search, filters and sort"
-            >
-              <RotateCcw className="size-3" aria-hidden />
-              <span>Reset</span>
-            </button>
-          )}
         </div>
         {/* Always mounted (polite live region); empty and room-less unless a
             page past the end was just replaced by the last page. */}
@@ -469,13 +490,11 @@ export function PlayersClient() {
         ) : listQuery.isPending || pastEnd ? (
           <CardGridSkeleton count={PLAYERS_PAGE_SIZE} className={`mt-1 ${PLAYERS_GRID}`} />
         ) : players.length === 0 ? (
-          <div className="mt-2 space-y-2 rounded-[var(--radius-panel)] bg-[var(--color-panel)] p-12 text-center text-sm text-[var(--color-text-secondary)]">
-            <p>No players match your search and filter criteria.</p>
-            {activeFilters > 0 && (
-              <button type="button" onClick={resetAll} className="hit-44 cursor-pointer font-medium text-[var(--color-accent)] hover:underline">
-                Reset all filters
-              </button>
-            )}
+          // The reference's empty state (survey S2 §7): the grid gives way to
+          // two lines; the rail and the chips stay, Reset is in both.
+          <div className="mt-2 space-y-1 rounded-[var(--radius-panel)] bg-[var(--color-panel)] px-6 py-12 text-center" data-testid="players-empty">
+            <p className="text-base font-semibold text-[var(--color-text-primary)]">No results found.</p>
+            <p className="text-sm text-[var(--color-text-secondary)]">Try resetting or changing your filter options!</p>
           </div>
         ) : (
           <div className={`mt-1 ${PLAYERS_GRID} ${listQuery.isPlaceholderData ? "opacity-60" : ""}`} aria-busy={listQuery.isPlaceholderData}>
@@ -490,12 +509,24 @@ export function PlayersClient() {
 
       {/* Desktop rail (≥ 1024): sticky, 280 px, #181818, radius 24, padding 16 */}
       <aside aria-label="Filters" className="filter-rail sticky top-24 hidden max-h-[calc(100dvh-6rem)] overflow-y-auto lg:block">
-        <h2 className="filter-rail__title">Filters</h2>
+        {/* Title row with Reset while a filter is active (the reference's
+            rail header). */}
+        <div className="filter-rail__head">
+          <h2 className="filter-rail__title">Filters</h2>
+          {filtersActive && <ResetFiltersButton onClick={resetAll} />}
+        </div>
         {panel}
       </aside>
 
-      {/* Below 1024: the same panel in a bottom sheet */}
-      <Modal variant="sheet" open={mobileFilters} onClose={() => setMobileFilters(false)} title="Filters">
+      {/* Below 1024: the same panel in a bottom sheet, with its own Reset
+          (the sheet stays open). */}
+      <Modal
+        variant="sheet"
+        open={mobileFilters}
+        onClose={() => setMobileFilters(false)}
+        title="Filters"
+        headerAction={filtersActive ? <ResetFiltersButton onClick={resetAll} /> : undefined}
+      >
         {panel}
       </Modal>
 

@@ -1,14 +1,15 @@
 "use client";
 import type { Route } from "next";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, useRef, useEffect, useId } from "react";
-import { SEARCH_MIN_LENGTH, type CardPreview } from "@eflab/shared";
+import { SEARCH_MAX_LENGTH, SEARCH_MIN_LENGTH, type CardPreview } from "@eflab/shared";
 import { trpc } from "@/lib/trpc";
 import { PlayerCard } from "@/components/cards/PlayerCard";
 import { PackCarousel } from "@/components/packs/PackCarousel";
 import { PlayerSearchRow } from "@/components/search/PlayerSearchRow";
+import { useLoadMoreOnScroll, usePlayerSearchPages } from "@/components/search/usePlayerSearchPages";
 import { QueryErrorState } from "@/lib/query-state";
-import { useDebouncedValue } from "@/lib/use-debounced-value";
 import { Search, Sparkles, Package, X } from "lucide-react";
 import { SectionHeader } from "@/components/layout/SectionHeader";
 
@@ -19,12 +20,30 @@ import { SectionHeader } from "@/components/layout/SectionHeader";
 //
 // The search is an APG combobox (efootbase-behaviour-parity "Home Search
 // Combobox", B7): DOM focus stays in the input, ArrowDown / ArrowUp move the
-// active option (`aria-activedescendant` over `role="option"` rows, wrapping),
-// Enter opens the active card or, with none, the full list on /players; the
-// first Escape closes the list and keeps the text, a second one clears it.
+// active option (`aria-activedescendant` over `role="option"` rows, wrapping
+// once every page is loaded; ArrowDown on the last loaded row asks for the
+// next page), Enter opens the active card or, with none, the full list on
+// /players; the first Escape closes the list and keeps the text, a second one
+// clears it (the reference's "first Escape clears" was seen once — not
+// copied, design D1). No row is active until an arrow key (the reference
+// home list does not activate its first row).
+//
+// Results (change efootbase-function-parity "Search Result Lists", survey
+// 2026-10-23 S3 §1.5): the result lists' rule (`usePlayerSearchPages`: 200 ms
+// after the last keystroke, from 3 characters, name or pack / campaign name,
+// max-overall order, word-start rows lifted inside each page of 12); the home
+// list loads its first two pages at once and the next ones when its
+// "Loading more…" row scrolls into view, under a "Players" header whose
+// "Show all" opens `/players?search=<text>`; 1–2 characters show a hint.
 
 /** Cards in the "Latest Players" grid (2 rows of 6, 4 rows of 3 below 768 px). */
 const LATEST_COUNT = 12;
+/** Bundles in "Latest Packs": the first three of the /packs order. */
+const HOME_PACKS = 3;
+/** Pages the home list loads at once (the reference: 1 + 2 right after it). */
+const HOME_EAGER_PAGES = 2;
+
+const playersSearchHref = (text: string) => `/players?search=${encodeURIComponent(text)}` as Route;
 
 /** True when the keyboard event comes from a place where typing is expected. */
 function isTypingTarget(target: EventTarget | null): boolean {
@@ -44,8 +63,11 @@ export default function HomePage() {
   const [activeId, setActiveId] = useState<string | null>(null);
   const searchRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const listScrollRef = useRef<HTMLDivElement>(null);
+  const sentinelRef = useRef<HTMLParagraphElement>(null);
   const listboxId = useId();
-  const optionId = (i: number) => `${listboxId}-opt-${i}`;
+  const headingId = useId();
+  const optionId = (p: CardPreview) => `${listboxId}-opt-${p.id}`;
 
   // `/` focuses the search box when the user is not already typing in a field
   // (and no modal, e.g. the ⌘K palette, is open).
@@ -73,24 +95,29 @@ export default function HomePage() {
 
   // Newest distinct base players by releaseDate DESC (newest card of each).
   const latest = trpc.player.trending.useQuery();
-  // The featured bundles, newest first.
+  // The featured bundles (each with its stored /packs position).
   const featuredBundles = trpc.featured.list.useQuery();
 
-  const debouncedQ = useDebouncedValue(q.trim(), 250);
-  const canSearch = debouncedQ.length >= SEARCH_MIN_LENGTH;
-  const search = trpc.player.search.useQuery({ q: debouncedQ, limit: 8 }, { enabled: canSearch });
+  const text = q.trim();
+  const search = usePlayerSearchPages(q, { enabled: true, eagerPages: HOME_EAGER_PAGES });
+  const searchResults = search.rows;
 
   const latestCards = (latest.data ?? []).slice(0, LATEST_COUNT);
-  const searchResults = canSearch && !search.isError ? (search.data ?? []).slice(0, 6) : [];
-  const showDropdown = listOpen && q.trim().length > 0;
+  const showDropdown = listOpen && text.length > 0;
   const activeIndex = showDropdown && activeId !== null ? searchResults.findIndex((p) => p.id === activeId) : -1;
+  const activeDomId = activeIndex >= 0 ? optionId(searchResults[activeIndex]!) : undefined;
+  const listed = showDropdown && searchResults.length > 0;
 
   // Keep the active option visible inside the scrolling list.
   useEffect(() => {
-    if (activeIndex < 0) return;
-    document.getElementById(optionId(activeIndex))?.scrollIntoView({ block: "nearest" });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeIndex]);
+    if (activeDomId) document.getElementById(activeDomId)?.scrollIntoView({ block: "nearest" });
+  }, [activeDomId]);
+  // A new text starts at the top of its list.
+  useEffect(() => {
+    if (listScrollRef.current) listScrollRef.current.scrollTop = 0;
+  }, [search.query]);
+
+  useLoadMoreOnScroll(listScrollRef, sentinelRef, listed && search.hasMore && !search.loadMoreFailed, search.pageCount, search.loadMore);
 
   const closeList = () => {
     setListOpen(false);
@@ -110,7 +137,7 @@ export default function HomePage() {
       return;
     }
     closeList();
-    if (q.trim()) router.push(`/players?search=${encodeURIComponent(q.trim())}`);
+    if (text) router.push(playersSearchHref(text));
     else router.push("/players");
   };
 
@@ -120,7 +147,7 @@ export default function HomePage() {
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       if (!showDropdown) {
         // A closed list with text opens again (no option active yet).
-        if (q.trim()) {
+        if (text) {
           e.preventDefault();
           setListOpen(true);
         }
@@ -129,6 +156,11 @@ export default function HomePage() {
       const n = searchResults.length;
       if (n === 0) return;
       e.preventDefault();
+      if (e.key === "ArrowDown" && activeIndex === n - 1 && search.hasMore) {
+        // The end of the loaded rows: ask for the next page, stay here.
+        search.loadMore();
+        return;
+      }
       const next = e.key === "ArrowDown" ? (activeIndex + 1) % n : activeIndex <= 0 ? n - 1 : activeIndex - 1;
       setActiveId(searchResults[next]!.id);
       return;
@@ -147,9 +179,25 @@ export default function HomePage() {
     }
   };
 
-  const bundles = [...(featuredBundles.data ?? [])]
-    .sort((a, b) => new Date(b.releaseDate).getTime() - new Date(a.releaseDate).getTime() || a.position - b.position)
-    .slice(0, 3);
+  // The first three bundles of the /packs order (the stored position: the
+  // current packs newest first, then the spotlights — change
+  // efootbase-function-parity "Packs Order And Last Updated"), not the three
+  // newest dates.
+  const bundles = [...(featuredBundles.data?.bundles ?? [])].sort((a, b) => a.position - b.position).slice(0, HOME_PACKS);
+
+  const status = !showDropdown
+    ? ""
+    : !search.typedEnough
+      ? `Type at least ${SEARCH_MIN_LENGTH} characters to search.`
+      : search.waiting
+        ? "Searching…"
+        : search.failed
+          ? "Search failed."
+          : searchResults.length === 0
+            ? `No players found for "${search.query}".`
+            : search.hasMore
+              ? `${searchResults.length} players listed, more at the end of the list.`
+              : `${searchResults.length} ${searchResults.length === 1 ? "player" : "players"} found.`;
 
   return (
     <div className="space-y-6">
@@ -162,7 +210,7 @@ export default function HomePage() {
         ref={searchRef}
         className="relative"
         onKeyDown={(e) => {
-          // Escape on a control inside the open list (Retry, "View all"):
+          // Escape on a control inside the open list (Retry, "Show all"):
           // close it and return to the input. The input handles its own.
           if (e.key !== "Escape" || e.defaultPrevented || e.target === inputRef.current || !showDropdown) return;
           e.preventDefault();
@@ -192,12 +240,13 @@ export default function HomePage() {
               placeholder="Search players by name…"
               aria-label="Search players"
               role="combobox"
-              aria-expanded={showDropdown}
-              aria-controls={listboxId}
+              aria-expanded={listed}
+              aria-controls={listed ? listboxId : undefined}
               aria-autocomplete="list"
-              aria-activedescendant={activeIndex >= 0 ? optionId(activeIndex) : undefined}
+              aria-activedescendant={listed ? activeDomId : undefined}
               autoComplete="off"
               enterKeyHint="search"
+              maxLength={SEARCH_MAX_LENGTH}
               className="field__input no-native-clear"
             />
             {q && (
@@ -222,61 +271,68 @@ export default function HomePage() {
           {/* Live results */}
           {showDropdown && (
             <div className="efb-home-results">
-              <div className="flex items-center justify-between gap-3 px-3 py-1.5 text-xs text-[var(--color-text-secondary)]" aria-live="polite">
-                <span>
-                  {!canSearch
-                    ? `Type at least ${SEARCH_MIN_LENGTH} characters`
-                    : search.isPending
-                      ? "Searching…"
-                      : `${searchResults.length} players found`}
-                </span>
-                <span className="hidden sm:inline">Press Enter to view all</span>
-              </div>
-
-              {search.isError ? (
-                <div className="px-4 py-3 text-center text-xs text-[var(--color-text-secondary)]">
+              {!search.typedEnough ? (
+                <p className="efb-home-results__note">Type at least {SEARCH_MIN_LENGTH} characters to search.</p>
+              ) : search.waiting ? (
+                <p className="efb-home-results__note animate-pulse">Searching…</p>
+              ) : search.failed ? (
+                <p className="efb-home-results__note">
                   Search failed.{" "}
-                  <button type="button" onClick={() => void search.refetch()} className="cursor-pointer text-[var(--color-accent)] hover:underline">
+                  <button type="button" onClick={search.retry} className="cursor-pointer text-[var(--color-accent)] hover:underline">
                     Retry
                   </button>
-                </div>
-              ) : searchResults.length > 0 ? (
-                <div id={listboxId} className="max-h-80 overflow-y-auto" role="listbox" aria-label="Search results">
-                  {searchResults.map((p, i) => (
-                    <PlayerSearchRow
-                      key={p.id}
-                      id={optionId(i)}
-                      player={p}
-                      role="option"
-                      aria-selected={i === activeIndex}
-                      // Options are not tab stops (focus stays in the input,
-                      // aria-activedescendant points at them); a mouse press
-                      // must not blur the input before the click opens the card.
-                      tabIndex={-1}
-                      onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => openCard(p)}
-                    />
-                  ))}
-                </div>
-              ) : canSearch && search.isSuccess ? (
-                <div className="px-4 py-4 text-center text-xs text-[var(--color-text-secondary)]">No players found matching &quot;{q.trim()}&quot;</div>
-              ) : null}
-
-              {searchResults.length > 0 && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    closeList();
-                    router.push(`/players?search=${encodeURIComponent(q.trim())}`);
-                  }}
-                  className="flex w-full cursor-pointer items-center justify-center rounded-xl py-2 text-xs font-semibold text-[var(--color-accent)] transition-colors hover:bg-[var(--color-default)]"
-                >
-                  View all results for &quot;{q.trim()}&quot; →
-                </button>
+                </p>
+              ) : searchResults.length === 0 ? (
+                <p className="efb-home-results__note">No players found matching &quot;{search.query}&quot;</p>
+              ) : (
+                <>
+                  {/* "Players" header with "Show all" (the reference's list
+                      header), outside the listbox: a link is not an option. */}
+                  <div className="efb-home-results__header">
+                    <span id={headingId}>Players</span>
+                    <Link href={playersSearchHref(text)} onClick={closeList} className="efb-home-results__all hit-44">
+                      Show all
+                    </Link>
+                  </div>
+                  <div ref={listScrollRef} className="efb-home-results__scroll">
+                    <div id={listboxId} role="listbox" aria-labelledby={headingId}>
+                      {searchResults.map((p, i) => (
+                        <PlayerSearchRow
+                          key={p.id}
+                          id={optionId(p)}
+                          player={p}
+                          role="option"
+                          aria-selected={i === activeIndex}
+                          // Options are not tab stops (focus stays in the input,
+                          // aria-activedescendant points at them); a mouse press
+                          // must not blur the input before the click opens the card.
+                          tabIndex={-1}
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={() => openCard(p)}
+                        />
+                      ))}
+                    </div>
+                    {search.loadMoreFailed ? (
+                      <p className="efb-palette__more">
+                        Could not load more players.{" "}
+                        <button type="button" onClick={search.loadMore} className="efb-palette__link">
+                          Retry
+                        </button>
+                      </p>
+                    ) : search.hasMore ? (
+                      <p ref={sentinelRef} className="efb-palette__more" aria-hidden>
+                        Loading more…
+                      </p>
+                    ) : null}
+                  </div>
+                </>
               )}
             </div>
           )}
         </form>
+        <p className="sr-only" role="status" aria-live="polite">
+          {status}
+        </p>
       </div>
 
       {/* 1. Latest Players (12 cards, releaseDate DESC, distinct base player).

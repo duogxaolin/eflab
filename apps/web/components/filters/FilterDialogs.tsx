@@ -3,11 +3,13 @@ import { Check } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { PHYSIQUE_LABEL } from "@/lib/card-display";
 import { SKILL_GROUP_LABELS, compareSkills, skillGroup, skillLabel } from "@/lib/skill-labels";
-import type { PlayersState } from "@/lib/filter-url";
+import { groupTeamsForPicker, orderNationsForPicker, type PlayersState } from "@/lib/filter-url";
 import {
   AI_PLAYING_STYLES,
+  AI_PLAYING_STYLE_KEYS,
   FILTER_RANGE_BOUNDS,
   MAX_FILTER_IDS,
+  MAX_FILTER_SKILLS,
   PHYSIQUE_FIELDS,
   PLAYING_STYLES,
   PLAYING_STYLES_UNAVAILABLE,
@@ -146,8 +148,14 @@ export function FilterDialogs({
       { title: "Attack", ids: [...PLAYING_STYLE_GROUPS.attack].sort(byLabel), unavailable: PLAYING_STYLES_UNAVAILABLE.attack },
       { title: "Defence", ids: [...PLAYING_STYLE_GROUPS.defence].sort(byLabel), unavailable: PLAYING_STYLES_UNAVAILABLE.defence },
     ];
+    // Several styles at once (survey 2026-10-23 S2 §6): the main styles of
+    // both groups widen the list (any of them, in either slot — Box-to-Box and
+    // Anchor Man sit in both groups with one id, so they toggle together);
+    // the AI styles narrow it (all of them).
+    const toggleStyle = (id: number) =>
+      update({ styles: state.styles.includes(id) ? state.styles.filter((s) => s !== id) : sortIds([...state.styles, id]) });
     const toggleAi = (key: AiPlayingStyleKey) =>
-      update({ ai: state.ai.includes(key) ? state.ai.filter((k) => k !== key) : [...state.ai, key] });
+      update({ ai: state.ai.includes(key) ? state.ai.filter((k) => k !== key) : AI_PLAYING_STYLE_KEYS.filter((k) => k === key || state.ai.includes(k)) });
     return (
       <Modal open onClose={onClose} title="Playing Style">
         <div className="space-y-5">
@@ -156,9 +164,9 @@ export function FilterDialogs({
               <h3 className="filter-label">{g.title}</h3>
               <div className="filter-options">
                 {g.ids.map((id) => {
-                  const on = state.style === id;
+                  const on = state.styles.includes(id);
                   return (
-                    <button key={id} type="button" aria-pressed={on} onClick={() => update({ style: on ? undefined : id })} title={PLAYING_STYLES[id]} className="filter-option">
+                    <button key={id} type="button" aria-pressed={on} onClick={() => toggleStyle(id)} title={PLAYING_STYLES[id]} className="filter-option">
                       <span className="filter-option__label">{PLAYING_STYLES[id]}</span>
                       {on && <Check className="size-4 shrink-0" aria-hidden />}
                     </button>
@@ -190,8 +198,10 @@ export function FilterDialogs({
                 );
               })}
             </div>
-            <p className="text-xs text-[var(--color-text-secondary)]">Several AI styles narrow the list to cards that have all of them.</p>
           </section>
+          <p className="text-xs text-[var(--color-text-secondary)]">
+            Several Attack or Defence styles widen the list to cards with any of them; several AI styles narrow it to cards that have all of them.
+          </p>
         </div>
       </Modal>
     );
@@ -210,15 +220,23 @@ const NOTE_CLASS = "mt-4 text-xs text-[var(--color-text-secondary)]";
 
 function SkillsDialog({ state, update, onClose }: DialogProps) {
   const q = trpc.skill.list.useQuery({}, { staleTime: 60 * 60_000 });
-  // Only skills that cards actually carry are offered (the 17 zero-holder
-  // fixture entries would always return no rows).
+  // Only skills that cards actually carry are offered (the zero-holder
+  // catalogue entries would always return no rows); the value is the stored
+  // skill key, the URL's `skill=s_*` (every skill with holders has one).
   const items = [...(q.data ?? [])]
-    .filter((s) => s.playerCount > 0)
+    .filter((s): s is typeof s & { key: string } => s.playerCount > 0 && s.key !== null)
     .sort(compareSkills)
-    .map((s) => ({ value: s.id, label: skillLabel(s), group: SKILL_GROUP_LABELS[skillGroup(s)], hint: `${s.playerCount.toLocaleString("en-US")} cards` }));
+    .map((s) => ({ value: s.key, label: skillLabel(s), group: SKILL_GROUP_LABELS[skillGroup(s)], hint: `${s.playerCount.toLocaleString("en-US")} cards` }));
   return (
     <Modal open onClose={onClose} title="Skills">
-      <PickerList items={items} selected={state.skills} onChange={(skills) => update({ skills })} load={loadOf(q, "skills")} />
+      <PickerList
+        items={items}
+        selected={state.skills}
+        onChange={(skills) => update({ skills })}
+        // The list bound is shared with skills still named by an old link's ids.
+        max={MAX_FILTER_SKILLS - state.legacySkillIds.length}
+        load={loadOf(q, "skills")}
+      />
       <p className={NOTE_CLASS}>Several skills narrow the list to cards that have all of them.</p>
     </Modal>
   );
@@ -231,30 +249,15 @@ function SkillsDialog({ state, update, onClose }: DialogProps) {
 // provides the Done button, the focus trap, Escape and the focus return.
 const OR_NOTE = "Several selections widen the list to cards matching any of them.";
 
-// Size of the Nation dialog's "Popular" group (efootbase lists ten nations
-// first; ours are the ten with the most cards, from player.countries).
-const POPULAR_NATIONS = 10;
-
 function NationDialog({ state, update, onClose }: DialogProps) {
   const q = trpc.player.countries.useQuery(undefined, { staleTime: 60 * 60_000 });
-  const countries = q.data ?? [];
-  // The list arrives A–Z; "All nations" keeps that order.
-  const items = countries.map((c) => ({ value: c.id, label: c.name }));
-  const popular = [...countries]
-    .filter((c) => c.playerCount > 0)
-    .sort((a, b) => b.playerCount - a.playerCount || a.name.localeCompare(b.name, "en") || a.id - b.id)
-    .slice(0, POPULAR_NATIONS)
-    .map((c) => c.id);
+  // The reference's fixed ten first (England, France, Spain, Brazil, …), then
+  // every other nation once, A–Z, without group headings (survey 2026-10-23
+  // S2 §6; FIXED_FIRST_NATIONS in @eflab/shared).
+  const items = orderNationsForPicker(q.data ?? []).map((c) => ({ value: c.id, label: c.name }));
   return (
     <Modal open onClose={onClose} title="Nation">
-      <PickerList
-        items={items}
-        selected={state.nat}
-        onChange={(nat) => update({ nat: sortIds(nat) })}
-        max={MAX_FILTER_IDS}
-        load={loadOf(q, "nations")}
-        featured={{ label: "Popular", values: popular, restLabel: "All nations" }}
-      />
+      <PickerList items={items} selected={state.nat} onChange={(nat) => update({ nat: sortIds(nat) })} max={MAX_FILTER_IDS} load={loadOf(q, "nations")} />
       <p className={NOTE_CLASS}>{OR_NOTE}</p>
     </Modal>
   );
@@ -274,26 +277,30 @@ function LeagueDialog({ state, update, onClose }: DialogProps) {
 function TeamDialog({ state, update, onClose }: DialogProps) {
   const teams = trpc.player.teams.useQuery(undefined, { staleTime: 60 * 60_000 });
   const leagues = trpc.player.leagues.useQuery(undefined, { staleTime: 60 * 60_000 });
-  const leagueName = new Map((leagues.data ?? []).map((l) => [l.id, l.name]));
-  const teamName = new Map((teams.data ?? []).map((t) => [t.id, t.name]));
-  // Chosen leagues narrow the team list to their clubs; a team selected before
-  // the narrowing keeps its chip (labelOf) so it can still be removed.
-  const rows = (teams.data ?? []).filter((t) => state.league.length === 0 || (t.leagueId !== null && state.league.includes(t.leagueId)));
-  const items = rows.map((t) => ({
-    value: t.id,
-    label: t.name,
-    hint: t.national ? "National team" : t.leagueId !== null ? leagueName.get(t.leagueId) : undefined,
+  // Every team under its league heading (leagues A–Z, teams A–Z, teams
+  // without a league last), whatever leagues are selected — a Team selection
+  // combines with a League selection by AND (survey 2026-10-23 S2 §6). The
+  // value is the team name, the URL's `team=<name>` (names are unique).
+  const items = groupTeamsForPicker(teams.data ?? [], leagues.data ?? []).map(({ team, league }) => ({
+    value: team.name,
+    label: team.name,
+    group: league ?? "No league",
   }));
+  const load: PickerLoad = {
+    isPending: teams.isPending || leagues.isPending,
+    isError: teams.isError || leagues.isError,
+    refetch: () => Promise.all([teams.refetch(), leagues.refetch()]),
+    what: "teams",
+  };
   return (
     <Modal open onClose={onClose} title="Team">
       <PickerList
         items={items}
-        selected={state.team}
-        onChange={(team) => update({ team: sortIds(team) })}
-        labelOf={(id) => teamName.get(id) ?? `#${id}`}
-        max={MAX_FILTER_IDS}
-        load={loadOf(teams, "teams")}
-        emptyText={state.league.length > 0 ? `No team of the selected league${state.league.length > 1 ? "s" : ""} matches.` : "No team matches."}
+        selected={state.teams}
+        onChange={(names) => update({ teams: names })}
+        // The list bound is shared with teams still named by an old link's ids.
+        max={MAX_FILTER_IDS - state.legacyTeamIds.length}
+        load={load}
       />
       <p className={NOTE_CLASS}>{OR_NOTE}</p>
     </Modal>
