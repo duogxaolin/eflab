@@ -105,8 +105,17 @@ export interface PlayerCardDTO extends CardPreview {
   // Display-name overlays (joined Team/Country/League in the API procedure).
   countryName: string | null;
   teamName: string | null;
+  /** The card's TEAM's league (Team → League). Kept for callers; the pages
+   *  show `cardLeague` and fall back to this only when it is null. */
   leagueName: string | null;
   leagueEmblemUrl: string | null;
+  /** The card's OWN league (`Player.leagueId`, the dump's `league` — the
+   *  league the `/players` League filter matches; change
+   *  a11y-names-and-card-league): the League row of that id, emblem rebased
+   *  onto R2_PUBLIC_BASE, or null when the card stores none (the eFHUB-only
+   *  cards). It differs from the team's league on 17,608 cards of the
+   *  2026-10-24 data (17,163 of the team "FREE": "Free Agent" vs "Other"). */
+  cardLeague: CardLeagueDTO | null;
   // ---- Detail-only extras (efootbase-parity-round2). The columns exist in
   // the database (Player.form / injuryResistance / 11 physique Ints / 5 derived
   // Floats) and are optional here so the detail page can render the sections
@@ -128,6 +137,14 @@ export interface PlayerCardDTO extends CardPreview {
     torsoCollisionWidth: number;
     dribbleHeight: number;
   };
+}
+
+/** A card's own league (`PlayerCardDTO.cardLeague`). */
+export interface CardLeagueDTO {
+  id: number;
+  name: string;
+  /** League emblem on R2 (rebased onto R2_PUBLIC_BASE), or null. */
+  emblemUrl: string | null;
 }
 
 /** efootbase's two skill groups. Catalogue entries efootbase does not treat as

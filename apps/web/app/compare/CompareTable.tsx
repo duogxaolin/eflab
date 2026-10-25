@@ -12,6 +12,7 @@ import {
   PHYSIQUE_LABEL,
   PHYSIQUE_ORDER,
   STRENGTH_STATS,
+  cardLeagueOf,
   physiqueTier,
   statLabel,
   statTierBg,
@@ -25,7 +26,8 @@ import {
 //   Stats      one row per stat with each side's value from its own build as
 //              a tier-coloured pill;
 //   Overview   height, weight and age (unfilled pills), strong foot (text),
-//              weak-foot usage and accuracy (stars);
+//              weak-foot usage and accuracy (stars), the card's own league
+//              (text — `cardLeagueOf`, change a11y-names-and-card-league);
 //   Skills     each side's skills, linked to their skill pages through
 //              SkillChip (so the links follow the skill route);
 //   Body Model the 11 body values as tier-coloured pills (the five derived
@@ -179,6 +181,8 @@ export function CompareTable({ left, right }: { left: CompareColumn; right: Comp
   const R = right.card;
   const lStats = left.result.projectedStats;
   const rStats = right.result.projectedStats;
+  const lLeague = cardLeagueOf(L);
+  const rLeague = cardLeagueOf(R);
 
   return (
     <div className="mt-8 space-y-6">
@@ -248,6 +252,10 @@ export function CompareTable({ left, right }: { left: CompareColumn; right: Comp
             rv={R.weakFootAccuracy}
           />
           <CompareRow label="Age" left={plainValue(L.age)} right={plainValue(R.age)} lv={L.age} rv={R.age} />
+          {/* Each card's own league — the one the /players League filter
+              matches — or its team's when it stores none (`cardLeagueOf`,
+              change a11y-names-and-card-league); text, no difference. */}
+          {(lLeague || rLeague) && <CompareRow label="League" left={plainValue(lLeague?.name ?? "—")} right={plainValue(rLeague?.name ?? "—")} />}
         </tbody>
       </CompareSectionTable>
 

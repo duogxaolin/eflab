@@ -269,7 +269,8 @@ export function SearchPalette({
             </button>
           )}
           {/* The Esc chip closes like the key (phones have no Escape key). */}
-          <button type="button" onClick={close} className="efb-kbd efb-palette__esc hit-44" aria-label="Close search (Escape)">
+          {/* Named "Esc, close search": the visible "Esc" first (Label in Name), the key in aria-keyshortcuts. */}
+          <button type="button" onClick={close} className="efb-kbd efb-palette__esc hit-44" aria-label="Esc, close search" aria-keyshortcuts="Escape">
             Esc
           </button>
         </form>

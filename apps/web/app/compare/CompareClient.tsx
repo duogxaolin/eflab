@@ -594,12 +594,15 @@ export function CompareClient() {
       // Loading (a card not found is dropped by the effect above, with the message).
       return <div className="efb-compare-slot animate-pulse" aria-busy="true" aria-label={`Loading the card of slot ${n}`} />;
     }
+    // The name holds the visible text in order, then the slot (WCAG 2.5.3
+    // Label in Name); the space between the two lines is not rendered in the
+    // flex column but keeps their words apart in the visible text.
     return (
-      <button type="button" onClick={() => openPicker(side)} aria-haspopup="dialog" data-slot-add="" aria-label={`Add Player to slot ${n}: search and select a player`} className="efb-compare-slot">
+      <button type="button" onClick={() => openPicker(side)} aria-haspopup="dialog" data-slot-add="" aria-label={`Add Player, Search and select a player (slot ${n})`} className="efb-compare-slot">
         <span className="efb-compare-slot__plus" aria-hidden>
           <Plus className="size-5" />
         </span>
-        <span className="text-sm font-semibold text-[var(--color-text-primary)]">Add Player</span>
+        <span className="text-sm font-semibold text-[var(--color-text-primary)]">Add Player</span>{" "}
         <span className="text-xs text-[var(--color-text-secondary)]">Search and select a player</span>
       </button>
     );

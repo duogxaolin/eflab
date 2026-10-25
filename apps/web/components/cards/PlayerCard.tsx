@@ -16,8 +16,16 @@ import { useNearViewport } from "./useNearViewport";
 // markup + class names — no inline position/size classes on `.pcb__*`.
 //
 // Accessibility / performance contract (site-quality-baseline):
-//   · the whole tile (card + optional caption) is ONE real <Link> with an
-//     explicit accessible name, keyboard-focusable with a visible focus ring;
+//   · the whole tile (card + optional caption) is ONE real <Link>,
+//     keyboard-focusable with a visible focus ring, NAMED BY ITS CONTENT
+//     (WCAG 2.5.3 Label in Name, change a11y-names-and-card-league): the
+//     visible overall and position first ("85 CMF"), then visually hidden
+//     text with the player name and the card type (`cardTileIdentity`), the
+//     condition badge's alt text, then the caption — "85 CMF Felix Nmecha,
+//     Highlight. Condition A Attack: Box-to-Box Defence: Box-to-Box". No
+//     aria-label: an override cannot hold the visible text of a "styles" tile
+//     in order (overall, position, then the styles under the card), and a
+//     name built from the content always does;
 //   · images are lazy + async-decoded with explicit dimensions, and the face
 //     only receives its `src` once the card is within FACE_LOAD_MARGIN of the
 //     viewport (native lazy loading alone fetches ~1250 px ahead, far too much
@@ -50,6 +58,14 @@ const FACE_LOAD_MARGIN = "200px";
 /** Card input: the slim preview, optionally carrying the full DTO's `levelCap`
  *  (PlayerCardDTO extends CardPreview, so the detail page can pass it as is). */
 export type PlayerCardData = CardPreview & { levelCap?: number | null };
+
+/** The visually hidden part of a card tile's name, read right after the
+ *  visible overall and position: "Felix Nmecha, Highlight." (the condition
+ *  badge's alt text follows it). */
+export function cardTileIdentity(player: Pick<CardPreview, "name" | "cardType">): string {
+  const typeLabel = CARD_TYPE_LABEL[player.cardType] ?? player.cardType;
+  return `${player.name}, ${typeLabel}.`;
+}
 
 export function PlayerCard({
   player,
@@ -85,7 +101,6 @@ export function PlayerCard({
   const [faceError, setFaceError] = useState(false);
   const nearViewport = useNearViewport(cardRef, FACE_LOAD_MARGIN, priority);
   const cardColor = CARD_TYPE_COLOR_VAR[player.cardType];
-  const typeLabel = CARD_TYPE_LABEL[player.cardType] ?? player.cardType;
 
   const pos = positionOf(player.registeredPosition);
   const faceUrl = playerCardDynamicUrl(player.id);
@@ -97,7 +112,7 @@ export function PlayerCard({
   const maxLevel = levelCap ?? player.levelCap ?? null;
   const showMaxOvr = player.maxOvr != null && player.maxOvr > 0;
   const href = `/players/${player.baseId}/${player.id}` as const;
-  const accessibleName = `${player.name}, ${typeLabel} ${player.ovr} OVR, ${pos}`;
+  const identity = cardTileIdentity(player);
 
   const cardEl = (
     // `.pcb-tile__card` is the element that scales on hover / focus.
@@ -114,7 +129,7 @@ export function PlayerCard({
           >
             <span className="font-black tabular-nums text-[var(--color-text-primary)]" style={{ fontSize: "12cqw" }}>
               {player.ovr}
-            </span>
+            </span>{" "}
             <span className="font-mono uppercase text-[var(--color-text-secondary)]" style={{ fontSize: "5cqw" }}>
               {pos}
             </span>
@@ -137,17 +152,21 @@ export function PlayerCard({
           />
         )}
 
-        {/* OVR + position block (proportional .pcb__ovr-block geometry). */}
+        {/* OVR + position block (proportional .pcb__ovr-block geometry): the
+            start of the tile's name ("85 CMF" — the space between the two is
+            not rendered in the flex column, but keeps the words apart). */}
         {!faceError && (
-          <div className="pcb__ovr-block" aria-hidden>
-            <span className="pcb__ovr">{player.ovr}</span>
+          <div className="pcb__ovr-block">
+            <span className="pcb__ovr">{player.ovr}</span>{" "}
             <span className="pcb__position">{pos}</span>
           </div>
         )}
+        {/* The rest of the name: player and card type. */}
+        <span className="sr-only">{identity}</span>
 
         {/* Condition badge (A–E, bottom-right) — also on the detail face. With
             showDetails (compare) the MAX OVR badge takes this slot, so it is
-            hidden there. */}
+            hidden there. Its alt text is the next part of the tile's name. */}
         {condLetter && !faceError && !showDetails && (
           <div className="pcb__condition">
             {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -208,14 +227,17 @@ export function PlayerCard({
   const hasPlaystyle = player.playingStyleAttack != null || player.playingStyleDefense != null;
 
   return (
-    <Link href={href} className="card-link pcb-tile" aria-label={accessibleName}>
+    <Link href={href} className="card-link pcb-tile">
       {cardEl}
-      {caption === "name" && <span className="pcb-caption pcb-caption--name">{player.name}</span>}
+      {/* The name is already read in `identity` (right after the overall and
+          position), so the visible caption is not read a second time. */}
+      {caption === "name" && (
+        <span className="pcb-caption pcb-caption--name" aria-hidden>
+          {player.name}
+        </span>
+      )}
       {caption === "styles" && (
         <span className="pcb-caption pcb-caption--styles">
-          {/* The name stays in the tile's text for assistive technology; the
-              link's accessible name (aria-label) carries it too. */}
-          <span className="sr-only">{player.name}.</span>
           {hasPlaystyle && (
             <>
               <span className="pcb-caption__line">

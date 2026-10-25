@@ -1391,10 +1391,15 @@ export function ProgressionDock({
                         data-testid={`dock-strip-${c}`}
                       >
                         <Icon className="size-3.5 shrink-0" aria-hidden />
+                        {/* The space (not rendered in the flex row) keeps a
+                            goalkeeper number and the value apart in the
+                            visible text — "1 4", never "14" (Label in Name). */}
                         {suffix && (
-                          <span className="efb-category-strip__sub" aria-hidden>
-                            {suffix}
-                          </span>
+                          <>
+                            <span className="efb-category-strip__sub" aria-hidden>
+                              {suffix}
+                            </span>{" "}
+                          </>
                         )}
                         <span aria-hidden>{state.allocation[c]}</span>
                       </button>
@@ -1439,7 +1444,8 @@ export function ProgressionDock({
               type="button"
               {...opensSheet}
               className="efb-dock__points-value hit-44"
-              aria-label={`${pts(result.remainingPoints)} of ${pts(budget)} pts left — open Progression`}
+              // Starts with the visible "0/60" (Label in Name).
+              aria-label={`${pts(result.remainingPoints)}/${pts(budget)} pts left — open Progression`}
               data-testid="dock-points"
             >
               {pts(result.remainingPoints)}/{pts(budget)}

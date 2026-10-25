@@ -203,6 +203,7 @@ function toCardDTO(p: PlayerRowForDto): PlayerCardDTO {
     teamName: p.teamName ?? null,
     leagueName: p.leagueName ?? null,
     leagueEmblemUrl: rebaseR2Url(p.leagueEmblemUrl),
+    cardLeague: p.cardLeague ? { id: p.cardLeague.id, name: p.cardLeague.name, emblemUrl: rebaseR2Url(p.cardLeague.emblemUrl) } : null,
     // Detail-only extras (efootbase-parity-round2): the Player row carries
     // form, injury resistance, the 11 physique Ints and the 5 derived Floats;
     // byId and compare load the full row, so they are always present here.
@@ -276,6 +277,24 @@ type TeamJoin = {
     league: { id: number; name: string; emblemUrl: string | null } | null;
   } | null;
 };
+
+type LeagueRow = { id: number; name: string; emblemUrl: string | null };
+
+// The card's OWN league (Player.leagueId — the dump's `league`, the column the
+// League filter of player.list matches; change a11y-names-and-card-league,
+// design D1). The column has no Prisma relation (no foreign key by design:
+// the seed replaces League rows inside its transaction), so byId / compare
+// resolve it with one primary-key lookup of the distinct ids (34-row table).
+// An id that is no League row resolves to null, like a NULL column.
+async function cardLeaguesFor(leagueIds: Iterable<number | null>): Promise<Map<number, LeagueRow>> {
+  const ids = Array.from(new Set(Array.from(leagueIds).filter((id): id is number => id !== null)));
+  if (ids.length === 0) return new Map();
+  const rows = await prisma.league.findMany({
+    where: { id: { in: ids } },
+    select: { id: true, name: true, emblemUrl: true },
+  });
+  return new Map(rows.map((l) => [l.id, l]));
+}
 
 type Dir = "asc" | "desc";
 type OrderBy = Prisma.PlayerOrderByWithRelationInput;
@@ -710,6 +729,8 @@ export const playerRouter = router({
       flagUrl = c?.flagUrl ?? null;
       countryName = c?.name ?? null;
     }
+    // The card's own league (cardLeague); the team's stays in leagueName.
+    const cardLeague = p.leagueId === null ? null : (await cardLeaguesFor([p.leagueId])).get(p.leagueId) ?? null;
     const team = (p as TeamJoin).team ?? null;
     const row: PlayerRowForDto = {
       ...(p as unknown as PlayerRowForDto),
@@ -722,6 +743,7 @@ export const playerRouter = router({
       teamName: team?.name ?? null,
       leagueName: team?.league?.name ?? null,
       leagueEmblemUrl: team?.league?.emblemUrl ?? null,
+      cardLeague,
     };
     await attachBoosters([row]);
     return toCardDTO(row);
@@ -769,7 +791,10 @@ export const playerRouter = router({
         ...teamInclude,
       },
     });
-    const flags = await flagUrlsFor(rows.map((r) => r.nationalityId));
+    const [flags, leagues] = await Promise.all([
+      flagUrlsFor(rows.map((r) => r.nationalityId)),
+      cardLeaguesFor(rows.map((r) => r.leagueId)),
+    ]);
     const byId = new Map<string, PlayerRowForDto>();
     for (const r of rows) {
       const team = (r as TeamJoin).team ?? null;
@@ -782,6 +807,7 @@ export const playerRouter = router({
         teamName: team?.name ?? null,
         leagueName: team?.league?.name ?? null,
         leagueEmblemUrl: team?.league?.emblemUrl ?? null,
+        cardLeague: r.leagueId === null ? null : leagues.get(r.leagueId) ?? null,
       });
     }
     const ordered = ids.map((id) => byId.get(id.toString())).filter((r): r is PlayerRowForDto => r !== undefined);
@@ -859,6 +885,8 @@ type PlayerRowForDto = Record<string, unknown> & {
   teamName?: string | null;
   leagueName?: string | null;
   leagueEmblemUrl?: string | null;
+  /** The card's own league (cardLeaguesFor), before the emblem is rebased. */
+  cardLeague?: LeagueRow | null;
   booster1?: BoosterDTO | null;
   booster2?: BoosterDTO | null;
 };

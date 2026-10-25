@@ -1018,6 +1018,117 @@ if needs_card_leagues "player.list card league (leagues 4 ∨ 26 × Arsenal FC �
   fi
 fi
 
+# 5h2. Card league in the card DTO (change a11y-names-and-card-league, spec
+#      a11y-and-card-league "Card League In The Card DTO"): player.byId's
+#      `cardLeague` is the League row of the card's stored Player.leagueId
+#      (null where SQL is NULL), and `leagueIds=[cardLeague.id]` lists the card
+#      — so the card page never names a league the filter would not match.
+#      Sample: 200 cards chosen by SQL at random, plus — chosen by SQL, never
+#      fixed ids — a card without a stored league, a "FREE" card whose own
+#      league differs from its team's ("Free Agent" vs "Other" on the
+#      2026-10-24 data) and another card of that kind (a Vissel Kobe card of
+#      league 30 there). Each card's list query is narrowed by its team,
+#      nation and overall so it lands on page 1; calls go in tRPC batches of
+#      ten (the API's maxBatchSize). The number of cards whose own league
+#      differs from their team's league is then computed through the API alone
+#      — per league L: the L-filter's total minus the total of L ∧ the teams
+#      whose league is L (player.teams) — and compared with the independent
+#      count (17,608 on the 2026-10-24 data).
+if needs_card_leagues "player.byId cardLeague = the stored card league (sample) and the League filter lists the card"; then
+  CDL_SAMPLE_SQL='SELECT p.id, p."baseId", coalesce(p."leagueId"::text, $$$$), coalesce(l.name, $$$$), coalesce(p."teamId"::text, $$$$),
+      coalesce(t."leagueId"::text, $$$$), p."nationalityId", p.ovr, coalesce(tl.name, $$$$), s.tag
+    FROM (
+      (SELECT id, $$random$$ AS tag FROM "Player" ORDER BY random() LIMIT 200)
+      UNION ALL (SELECT id, $$no-league$$ FROM "Player" WHERE "leagueId" IS NULL ORDER BY random() LIMIT 1)
+      UNION ALL (SELECT p.id, $$free$$ FROM "Player" p JOIN "Team" t ON t.id = p."teamId"
+                 WHERE t.name = $$FREE$$ AND p."leagueId" IS NOT NULL AND p."leagueId" IS DISTINCT FROM t."leagueId" ORDER BY random() LIMIT 1)
+      UNION ALL (SELECT p.id, $$other-team$$ FROM "Player" p JOIN "Team" t ON t.id = p."teamId"
+                 WHERE t.name <> $$FREE$$ AND p."leagueId" IS NOT NULL AND p."leagueId" IS DISTINCT FROM t."leagueId" ORDER BY random() LIMIT 1)
+    ) s
+    JOIN "Player" p ON p.id = s.id
+    LEFT JOIN "League" l ON l.id = p."leagueId"
+    LEFT JOIN "Team" t ON t.id = p."teamId"
+    LEFT JOIN "League" tl ON tl.id = t."leagueId"'
+  CDL_TSV="$(sql "$CDL_SAMPLE_SQL")"
+  CDL_DIFF_SQL="$(sql 'SELECT count(*) FROM "Player" p JOIN "Team" t ON t.id = p."teamId" WHERE p."leagueId" IS NOT NULL AND p."leagueId" IS DISTINCT FROM t."leagueId"')"
+  CDL_PY='
+import json, sys, urllib.parse, urllib.request
+api = sys.argv[1]
+def batch(proc, inputs):
+    out = []
+    for i in range(0, len(inputs), 10):
+        part = inputs[i:i + 10]
+        q = urllib.parse.quote(json.dumps({str(k): {"json": v} for k, v in enumerate(part)}))
+        url = "%s/trpc/%s?batch=1&input=%s" % (api, ",".join([proc] * len(part)), q)
+        with urllib.request.urlopen(url, timeout=30) as r:
+            for item in json.load(r):
+                if "error" in item:
+                    raise SystemExit("ERR %s: %s" % (proc, json.dumps(item["error"])[:200]))
+                out.append(item["result"]["data"]["json"])
+    return out
+rows = [l.split("\t") for l in sys.stdin.read().splitlines() if l.strip()]
+cards = [dict(id=r[0], base=r[1], league=r[2], lname=r[3], team=r[4], tleague=r[5], nat=int(r[6]), ovr=int(r[7]), tlname=r[8], tag=r[9]) for r in rows]
+if len(cards) < 200:
+    raise SystemExit("ERR sample has %d cards" % len(cards))
+dtos = batch("player.byId", [{"baseId": c["base"], "cardId": c["id"]} for c in cards])
+bad, notes, listed, unlisted, diff_api, diff_sql = [], [], 0, [], 0, 0
+for c, d in zip(cards, dtos):
+    cl = (d or {}).get("cardLeague")
+    want = None if c["league"] == "" else (int(c["league"]), c["lname"])
+    got = None if cl is None else (cl["id"], cl["name"])
+    if d is None or got != want:
+        bad.append("%s want=%s got=%s" % (c["id"], want, got))
+        continue
+    if cl is not None and c["tleague"] != "" and cl["id"] != int(c["tleague"]): diff_api += 1
+    if c["league"] != "" and c["league"] != c["tleague"] and c["team"] != "": diff_sql += 1
+    if c["tag"] != "random":
+        notes.append("%s %s: own league %s, team league %s" % (c["tag"], c["id"], "null" if cl is None else "%d %s" % (cl["id"], cl["name"]), d.get("leagueName")))
+    if c["tag"] == "free" and (cl is None or cl["name"] == d.get("leagueName")):
+        bad.append("%s FREE card: own league %s equals the team league %s" % (c["id"], cl, d.get("leagueName")))
+def narrowed(c, d):
+    q = dict(leagueIds=[d["cardLeague"]["id"]], ovrMin=c["ovr"], ovrMax=c["ovr"], limit=100)
+    if c["team"] != "": q["clubIds"] = [int(c["team"])]
+    if c["nat"] > 0: q["nationalityIds"] = [c["nat"]]
+    return q
+pairs = [(c, d) for c, d in zip(cards, dtos) if d and d.get("cardLeague")]
+need = [c for c, _ in pairs]
+lists = batch("player.list", [narrowed(c, d) for c, d in pairs])
+for c, res in zip(need, lists):
+    if any(i["id"] == c["id"] for i in res["items"]): listed += 1
+    else: unlisted.append("%s (total %d)" % (c["id"], res["total"]))
+# Global: per league, the filter total minus the cards of the teams of that league.
+leagues = batch("player.leagues", [None])[0]
+teams = batch("player.teams", [None])[0]
+specs = []
+for lg in leagues:
+    specs.append((lg["id"], "all", dict(leagueIds=[lg["id"]], limit=1)))
+    own = [t["id"] for t in teams if t["leagueId"] == lg["id"]]
+    for k in range(0, len(own), 50):
+        specs.append((lg["id"], "same", dict(leagueIds=[lg["id"]], clubIds=own[k:k + 50], limit=1)))
+totals = batch("player.list", [s[2] for s in specs])
+global_diff = sum(t["total"] if s[1] == "all" else -t["total"] for s, t in zip(specs, totals))
+print("|".join(map(str, [len(cards), len(bad), listed, len(need), len(unlisted), diff_api, diff_sql, global_diff])))
+print("; ".join(notes))
+print("; ".join(bad[:5] + unlisted[:5]))
+'
+  CDL_OUT="$(printf '%s\n' "$CDL_TSV" | py "$CDL_PY" "$API" 2>&1)"
+  CDL_LINE="$(printf '%s\n' "$CDL_OUT" | sed -n 1p)"
+  CDL_NOTES="$(printf '%s\n' "$CDL_OUT" | sed -n 2p)"
+  CDL_BAD="$(printf '%s\n' "$CDL_OUT" | sed -n 3p)"
+  IFS='|' read -r CDL_N CDL_BADN CDL_LISTED CDL_NEED CDL_UNLISTED CDL_DAPI CDL_DSQL CDL_GLOBAL <<<"$CDL_LINE"
+  if [ -n "$CDL_TSV" ] && [[ "${CDL_N:-}" =~ ^[0-9]+$ ]] && [ "$CDL_BADN" = "0" ] && [ "$CDL_UNLISTED" = "0" ] && [ "$CDL_LISTED" = "$CDL_NEED" ] \
+    && [ "$CDL_DAPI" = "$CDL_DSQL" ]; then
+    pass "player.byId cardLeague = Player.leagueId → League (SQL) on $CDL_N cards (null where NULL), each listed by leagueIds=[cardLeague.id] ($CDL_LISTED/$CDL_NEED), own ≠ team league on $CDL_DAPI of them; $CDL_NOTES"
+  else
+    fail "player.byId cardLeague = the stored card league (sample) and the League filter lists the card" "out=${CDL_LINE:0:200} bad=${CDL_BAD:0:400}"
+  fi
+  if [ -n "$CDL_DIFF_SQL" ] && [[ "${CDL_GLOBAL:-}" =~ ^[0-9]+$ ]] && [ "$CDL_GLOBAL" = "$CDL_DIFF_SQL" ] && [ "$CDL_GLOBAL" -gt 0 ]; then
+    pass "cards whose own league differs from their team's league: $CDL_GLOBAL through the API (per league: League filter − the league's own teams) = $CDL_DIFF_SQL (SQL)"
+  else
+    fail "cards whose own league differs from their team's league (API = SQL)" "api=${CDL_GLOBAL:-} sql=${CDL_DIFF_SQL:-}"
+  fi
+fi
+
 # 5i. Community Rating (efootbase-data-refresh-1024, catalogue-data-refresh
 #     "Community Rating Filter"): ratingMin N keeps the cards whose stored
 #     average is at least N — no vote minimum, a card without ratings never

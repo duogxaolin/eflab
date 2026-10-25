@@ -3,12 +3,13 @@ import { useEffect, useRef, useState } from "react";
 import { Check, Copy } from "lucide-react";
 import { CARD_TYPE_LABELS, formatFeetInches, type PlayerCardDTO } from "@eflab/shared";
 import { formatUtcDate } from "@/lib/format-date";
-import { conditionLabel, positionOf, strongerFootLabel } from "@/lib/card-display";
+import { cardLeagueOf, conditionLabel, positionOf, strongerFootLabel } from "@/lib/card-display";
 import { conditionUrl } from "@/lib/r2-images";
 
 // "Card Info" block of the player detail page (efootbase left column): the
 // card's identity facts in efootbase's order, with a copy control on the id.
-// Every value comes from the DTO; a missing relation prints "—".
+// Every value comes from the DTO; a missing relation prints "—" (the League
+// row is left out instead when neither the card nor its team has a league).
 
 export function CardInfo({ player: p }: { player: PlayerCardDTO }) {
   const [copy, setCopy] = useState<"idle" | "copied" | "failed">("idle");
@@ -17,6 +18,7 @@ export function CardInfo({ player: p }: { player: PlayerCardDTO }) {
   const resetTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   useEffect(() => () => clearTimeout(resetTimer.current), []);
   const condLetter = p.condition && /^[a-eA-E]$/.test(p.condition) ? p.condition.toUpperCase() : null;
+  const league = cardLeagueOf(p);
   const copyCardId = async () => {
     clearTimeout(resetTimer.current);
     try {
@@ -68,6 +70,23 @@ export function CardInfo({ player: p }: { player: PlayerCardDTO }) {
         {p.teamName ?? "—"}
       </span>,
     ],
+    // The card's own league — the one the /players League filter matches —
+    // or, when the card stores none, its team's; no row without either
+    // (change a11y-names-and-card-league, `cardLeagueOf`).
+    ...(league
+      ? ([
+          [
+            "League",
+            <span key="league" className="inline-flex items-center gap-1.5" data-testid="card-info-league" data-league-id={league.id ?? undefined}>
+              {league.emblemUrl && (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={league.emblemUrl} alt="" width={16} height={16} loading="lazy" decoding="async" className="size-4 object-contain" />
+              )}
+              {league.name}
+            </span>,
+          ],
+        ] satisfies Array<[string, React.ReactNode]>)
+      : []),
     ["Position", positionOf(p.registeredPosition)],
     ["Age", String(p.age)],
     ["Strong Foot", strongerFootLabel(p.strongerFoot)],

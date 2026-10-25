@@ -72,7 +72,7 @@ import { isShowtimeSkill, orderSkills, skillDisplayName } from "@/components/det
 import { SkillChip } from "@/components/detail/SkillChip";
 import { PlaystyleTrigger } from "@/components/detail/PlaystyleTrigger";
 import { Tooltip } from "@/components/ui/Tooltip";
-import { POSITION_LABEL, boosterLabel, conditionLabel, positionOf, playingStyleLabel, statTierClass } from "@/lib/card-display";
+import { POSITION_LABEL, boosterLabel, cardLeagueOf, conditionLabel, positionOf, playingStyleLabel, statTierClass } from "@/lib/card-display";
 
 // Player detail page body (layout of change efootbase-ui-redesign, measured
 // on the reference capture of 2026-10-20):
@@ -186,16 +186,26 @@ const boosterStatNames = (b: { stats: Partial<Record<BaseStat, number>> }): stri
 /** "Off" in words on a switched-off booster toggle (browser QA 2026-10-25
  *  (f)): the state was only an empty circle icon and `aria-pressed`; a
  *  Trending card's level pill already says "Off". Outside the truncating
- *  label, so it never gets cut; part of the button's name. */
+ *  label, so it never gets cut. Hidden from assistive technology: the
+ *  button's explicit name ends ", Off" (`boosterToggleName`) — a name built
+ *  from the content got a layout space before the comma ("Balance , Off").
+ *  The space before the badge (not rendered in the flex row) keeps "Off" a
+ *  word of its own in the visible text. */
 function BoosterOffBadge() {
   return (
-    <span className="efb-booster-button__off" data-testid="booster-off">
-      {/* Keeps the name "…, Balance, Off" (not "BalanceOff"). */}
-      <span className="sr-only">, </span>
-      Off
-    </span>
+    <>
+      {" "}
+      <span className="efb-booster-button__off" data-testid="booster-off" aria-hidden>
+        Off
+      </span>
+    </>
   );
 }
+
+/** The name of an on / off booster toggle (change a11y-names-and-card-league
+ *  D3): the slot, the visible label, then ", Off" when it is switched off —
+ *  "Booster 1: +4 · Dribbling, Tight Possession, Speed, Balance, Off". */
+const boosterToggleName = (slot: string, label: string, on: boolean): string => `${slot}: ${label}${on ? "" : ", Off"}`;
 
 /** One booster control of the Overview card: the shared look, the readable
  *  label truncated on a wide mouse layout with the full text in a tooltip
@@ -625,7 +635,9 @@ export function PlayerDetailClient({
             tooltip={`Booster 1: ${levelText} · ${names}`}
             onClick={cycleB1}
             aria-pressed={on}
-            aria-label={`Booster 1: ${names}, level ${n === 0 ? "off" : `+${n} of +${TRENDING_BOOSTER_MAGNITUDE}`} — change level`}
+            // The visible "+3 · Low Pass, …" (or "Off · …") in order, then
+            // the level and the action (WCAG 2.5.3 Label in Name).
+            aria-label={`Booster 1: ${levelText} · ${names}${n === 0 ? "" : `, level +${n} of +${TRENDING_BOOSTER_MAGNITUDE}`} — change level`}
             data-state={String(n)}
             data-kind="levels"
             className="efb-booster-button--levels"
@@ -646,12 +658,16 @@ export function PlayerDetailClient({
       } else {
         const StateIcon = on ? CircleCheck : Circle;
         boosterControls.push(
-          <BoosterButton key="b1" slot={1} tooltip={`Booster 1: ${boosterInfo[0].label}`} onClick={cycleB1} aria-pressed={on}>
+          <BoosterButton
+            key="b1"
+            slot={1}
+            tooltip={`Booster 1: ${boosterInfo[0].label}`}
+            onClick={cycleB1}
+            aria-pressed={on}
+            aria-label={boosterToggleName("Booster 1", boosterInfo[0].label, on)}
+          >
             <StateIcon className="size-4 shrink-0" aria-hidden data-testid="booster-state-icon" data-state={on ? "on" : "off"} />
-            <span className="efb-booster-button__label min-w-0">
-              <span className="sr-only">Booster 1: </span>
-              {boosterInfo[0].label}
-            </span>
+            <span className="efb-booster-button__label min-w-0">{boosterInfo[0].label}</span>
             {!on && <BoosterOffBadge />}
           </BoosterButton>,
         );
@@ -675,12 +691,18 @@ export function PlayerDetailClient({
       const on = build.booster2 !== 0;
       const StateIcon = on ? CircleCheck : Circle;
       boosterControls.push(
-        <BoosterButton key="b2" slot={2} tooltip={`Booster 2 (the card's own): ${boosterInfo[1].label}`} onClick={toggleB2} aria-pressed={on} data-kind="own" className="efb-booster-button--own">
+        <BoosterButton
+          key="b2"
+          slot={2}
+          tooltip={`Booster 2 (the card's own): ${boosterInfo[1].label}`}
+          onClick={toggleB2}
+          aria-pressed={on}
+          aria-label={boosterToggleName("Booster 2, the card's own", boosterInfo[1].label, on)}
+          data-kind="own"
+          className="efb-booster-button--own"
+        >
           <StateIcon className="size-4 shrink-0" aria-hidden data-testid="booster-state-icon" data-state={on ? "on" : "off"} />
-          <span className="efb-booster-button__label min-w-0">
-            <span className="sr-only">Booster 2, the card&apos;s own: </span>
-            {boosterInfo[1].label}
-          </span>
+          <span className="efb-booster-button__label min-w-0">{boosterInfo[1].label}</span>
           {!on && <BoosterOffBadge />}
         </BoosterButton>,
       );
@@ -762,10 +784,13 @@ export function PlayerDetailClient({
         ["base", `Base (${p.ovr})`],
       ];
 
+  // The league mark names the card's own league — the one the League filter
+  // matches —, the team's only when the card stores none (`cardLeagueOf`).
+  const league = cardLeagueOf(p);
   const marks: Array<{ key: string; src: string | null | undefined; name: string | null | undefined; fallback: string; fill: boolean }> = [
     { key: "nation", src: p.flagUrl, name: p.countryName, fallback: "Nationality", fill: true },
     { key: "team", src: p.teamEmblemUrl, name: p.teamName, fallback: "Team", fill: false },
-    { key: "league", src: p.leagueEmblemUrl, name: p.leagueName, fallback: "League", fill: false },
+    { key: "league", src: league?.emblemUrl, name: league?.name, fallback: "League", fill: false },
   ];
 
   return (

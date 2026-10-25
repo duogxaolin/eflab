@@ -144,17 +144,14 @@ function SkillTile({ skill, group }: { skill: SkillDTO; group: SkillGroup }) {
   const count = skill.playerCount;
   const countText = `${count.toLocaleString("en-US")} ${count === 1 ? "card" : "cards"}`;
   const leader = skill.leader;
-  const descId = `skill-desc-${skill.slug}`;
+  // Named by its content, in the order shown (WCAG 2.5.3 Label in Name,
+  // change a11y-names-and-card-league): "Momentum Dribbling Stat boost
+  // Allows players … Top card: Lionel Messi 160 cards" — the skill name, the
+  // boost chip, the description, the leader (after a visually hidden "Top
+  // card:") and the count. An aria-label could not say "top card" before the
+  // leader's visible name without breaking the visible text's order.
   return (
-    <Link
-      href={`/wiki/skills/${skill.publicSlug}`}
-      className="skill-tile"
-      data-group={group}
-      data-testid="skill-card"
-      data-skill={skill.publicSlug}
-      aria-label={`${label}, ${countText}${leader ? `, top card: ${leader.name}` : ""}`}
-      aria-describedby={descId}
-    >
+    <Link href={`/wiki/skills/${skill.publicSlug}`} className="skill-tile" data-group={group} data-testid="skill-card" data-skill={skill.publicSlug}>
       <span className="skill-tile__head">
         <span className="skill-tile__name">{label}</span>
         {/* Stored stat boosts only — never an invented one. */}
@@ -165,12 +162,10 @@ function SkillTile({ skill, group }: { skill: SkillDTO; group: SkillGroup }) {
           </span>
         )}
       </span>
-      <span id={descId} className="skill-tile__desc">
-        {skillDescription(skill)}
-      </span>
+      <span className="skill-tile__desc">{skillDescription(skill)}</span>
       <span className="skill-tile__footer">
         {/* Leader chip: the top holder's card face and name (inside the tile
-            link — no nested link; the tile's name above says it). */}
+            link — no nested link). */}
         {leader && (
           <span className="skill-tile__leader" data-testid="skill-leader" data-card-id={leader.id}>
             {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -187,6 +182,7 @@ function SkillTile({ skill, group }: { skill: SkillDTO; group: SkillGroup }) {
                 (e.currentTarget as HTMLImageElement).style.visibility = "hidden";
               }}
             />
+            <span className="sr-only">Top card:</span>
             <span className="skill-tile__leader-name">{leader.name}</span>
           </span>
         )}
