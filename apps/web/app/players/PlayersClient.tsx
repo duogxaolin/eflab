@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import type { Route } from "next";
 import Link from "next/link";
@@ -30,6 +30,7 @@ import { FiltersPanel, type FilterDialogKind } from "@/components/filters/Filter
 import { ActiveFilterChips } from "@/components/filters/ActiveFilterChips";
 import { PLAYERS_GRID, PLAYERS_PAGE_SIZE } from "./players-grid";
 import { Modal } from "@/components/filters/Modal";
+import { SkipLink } from "@/components/layout/SkipLink";
 import {
   LIST_SEARCH_MAX_LENGTH,
   SEARCH_MIN_LENGTH,
@@ -86,6 +87,48 @@ const searchable = (q: string) => q.length === 0 || searchApplies(q);
  *  last keystroke, survey 2026-10-23 S2 §4). */
 const SEARCH_DEBOUNCE_MS = 500;
 const LIST_STALE_MS = 60 * 60_000;
+/** Targets of the page's skip links: the filter rail and the results line. */
+const FILTERS_ID = "players-filters";
+const RESULTS_ID = "players-results";
+
+/** The sort row below 768 px scrolls sideways (one line, edge to edge): at
+ *  320–390 px "Top rated" sat past the edge with no sign that the row goes on
+ *  (browser QA 2026-10-25 (a)). This marks which ends hide content
+ *  (`data-fade-start` / `data-fade-end`: a fading edge in CSS, only while the
+ *  row actually scrolls) and keeps the chosen sort — or, for a field sort,
+ *  its select — in view, on load and on each change (`scrollLeft` only: the
+ *  page never moves vertically). */
+function useSortRowCue(ref: RefObject<HTMLDivElement | null>, activeKey: string) {
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const mark = () => {
+      const hiddenEnd = el.scrollWidth - el.clientWidth - el.scrollLeft;
+      el.dataset.fadeStart = el.scrollLeft > 1 ? "true" : "false";
+      el.dataset.fadeEnd = hiddenEnd > 1 ? "true" : "false";
+    };
+    mark();
+    el.addEventListener("scroll", mark, { passive: true });
+    const ro = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(mark);
+    ro?.observe(el);
+    if (el.firstElementChild) ro?.observe(el.firstElementChild);
+    return () => {
+      el.removeEventListener("scroll", mark);
+      ro?.disconnect();
+    };
+  }, [ref]);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || el.scrollWidth <= el.clientWidth) return;
+    const active = el.querySelector<HTMLElement>('[role="radio"][aria-checked="true"]') ?? el.querySelector<HTMLElement>("select");
+    if (!active) return;
+    const box = el.getBoundingClientRect();
+    const r = active.getBoundingClientRect();
+    const edge = parseFloat(getComputedStyle(el).scrollPaddingInlineStart) || 0;
+    if (r.left < box.left + edge) el.scrollLeft += r.left - box.left - edge;
+    else if (r.right > box.right - edge) el.scrollLeft += r.right - box.right + edge;
+  }, [ref, activeKey]);
+}
 
 /** The rail's and the phone sheet's Reset (shown while a filter is active).
  *  It disappears with the filters, so focus first moves to the first filter
@@ -258,6 +301,10 @@ export function PlayersClient() {
   // An empty page of a non-empty list = a page past the end: it is about to be
   // replaced by the last page, so it renders as loading, never as "No players".
   const pastEnd = listData !== undefined && listData.items.length === 0 && listData.total > 0;
+  // No card matches (settled, not an error): the empty state stands alone —
+  // no "0 cards · page 1 of 1" and no pagination beside "No results found."
+  // (browser QA 2026-10-25 (h)); the count line still announces it.
+  const noResults = !listQuery.isError && !listQuery.isPending && !listQuery.isPlaceholderData && listData !== undefined && listData.total === 0;
 
   // Scroll back to the top of the grid when the page changes (not on first render).
   const gridTopRef = useRef<HTMLDivElement>(null);
@@ -306,6 +353,8 @@ export function PlayersClient() {
   // high → low); the direction buttons change it afterwards.
   const chooseSort = (sort: PlayersSort) => update({ sort, order: defaultSortOrder(sort) });
   const fieldSortActive = !isSortPreset(state.sort);
+  const sortRowRef = useRef<HTMLDivElement>(null);
+  useSortRowCue(sortRowRef, `${state.sort}:${state.order}`);
 
   // Sort row: the presets — New cards (the default, no `sort` in the URL),
   // High to low and Low to high by max overall (change
@@ -318,9 +367,13 @@ export function PlayersClient() {
   // wraps right-aligned when it does not fit (one line from 1280 px); below
   // 768 px it scrolls sideways edge to edge (-mx-4 matches the page gutter).
   // The vertical padding keeps the focus rings inside the scroller; `relative`
-  // keeps any absolutely positioned descendant inside its clip.
+  // keeps any absolutely positioned descendant inside its clip. While it
+  // scrolls, its hidden ends fade out (`.efb-sort-scroller`, useSortRowCue).
   const sortControl = (
-    <div className="relative -mx-4 -my-1 overflow-x-auto px-4 py-1 hide-scrollbar md:mx-0 md:min-w-0 md:overflow-visible md:px-0">
+    <div
+      ref={sortRowRef}
+      className="efb-sort-scroller relative -mx-4 -my-1 overflow-x-auto px-4 py-1 hide-scrollbar md:mx-0 md:min-w-0 md:overflow-visible md:px-0"
+    >
       <div className="flex w-max items-center gap-2 md:w-auto md:flex-wrap md:justify-end">
         <div role="radiogroup" aria-label="Sort" className="segment shrink-0 p-1">
           {SORT_PRESETS.map((p) => (
@@ -368,20 +421,33 @@ export function PlayersClient() {
 
   return (
     <div className="lg:grid lg:grid-cols-[minmax(0,1fr)_17.5rem] lg:items-start lg:gap-6">
-      <div className="min-w-0">
-        <ol data-slot="breadcrumbs" aria-label="Breadcrumbs" className="breadcrumbs -ml-0.5 m-0 list-none p-0">
-          <li className="breadcrumbs__item">
-            <Link className="breadcrumbs__link hit-44" href="/">
-              Home
-            </Link>
-            <span className="breadcrumbs__separator" aria-hidden>
-              ›
-            </span>
-          </li>
-          <li className="breadcrumbs__item" aria-current="page">
-            Players
-          </li>
-        </ol>
+      <div className="relative min-w-0">
+        {/* Skip links (browser QA 2026-10-25 W1): the filter rail follows the
+            72 cards in the tab order (it sits right of the grid from 1024 px),
+            so the page's first stops jump to it — or past the controls to the
+            results. Below 1024 px the rail is a sheet whose Filters button
+            already comes before the grid: only "Skip to results" there. */}
+        <SkipLink targetId={FILTERS_ID} className="max-lg:hidden" data-testid="skip-to-filters">
+          Skip to filters
+        </SkipLink>
+        <SkipLink targetId={RESULTS_ID} data-testid="skip-to-results">
+          Skip to results
+        </SkipLink>
+        <nav aria-label="Breadcrumb">
+          <ol data-slot="breadcrumbs" className="breadcrumbs -ml-0.5 m-0 list-none p-0">
+            <li className="breadcrumbs__item">
+              <Link className="breadcrumbs__link hit-44" href="/">
+                Home
+              </Link>
+              <span className="breadcrumbs__separator" aria-hidden>
+                ›
+              </span>
+            </li>
+            <li className="breadcrumbs__item" aria-current="page">
+              Players
+            </li>
+          </ol>
+        </nav>
 
         {/* Title (24/30) + sort row: side by side from 768 px (the title
             centred on the first 40 px line of the sort row), stacked below. */}
@@ -465,15 +531,25 @@ export function PlayersClient() {
             query is in flight the grid still shows the previous result
             (placeholderData), so the counter says "Updating…" instead of a
             stale total. */}
-        <div ref={gridTopRef} className="mt-3 flex min-h-8 flex-wrap items-center gap-x-3 gap-y-2 text-xs tabular-nums text-[var(--color-text-secondary)]">
+        {/* Also the "Skip to results" target (always mounted, unlike the
+            grid, which gives way to its skeleton, error or empty state). */}
+        <div
+          ref={gridTopRef}
+          id={RESULTS_ID}
+          className="efb-skip-target mt-3 flex min-h-8 flex-wrap items-center gap-x-3 gap-y-2 text-xs tabular-nums text-[var(--color-text-secondary)]"
+        >
           <span className="mr-auto" aria-live="polite" aria-busy={listQuery.isPlaceholderData || undefined} data-testid="players-count">
-            {listQuery.isError
-              ? "—"
-              : listQuery.isPending || pastEnd
-                ? "Loading…"
-                : listQuery.isPlaceholderData
-                  ? "Updating…"
-                  : `${total.toLocaleString("en-US")} ${total === 1 ? "card" : "cards"} · page ${state.page.toLocaleString("en-US")} of ${totalPages.toLocaleString("en-US")}`}
+            {listQuery.isError ? (
+              "—"
+            ) : listQuery.isPending || pastEnd ? (
+              "Loading…"
+            ) : listQuery.isPlaceholderData ? (
+              "Updating…"
+            ) : noResults ? (
+              <span className="sr-only">No results found.</span>
+            ) : (
+              `${total.toLocaleString("en-US")} ${total === 1 ? "card" : "cards"} · page ${state.page.toLocaleString("en-US")} of ${totalPages.toLocaleString("en-US")}`
+            )}
           </span>
         </div>
         {/* Always mounted (polite live region); empty and room-less unless a
@@ -506,11 +582,15 @@ export function PlayersClient() {
           </div>
         )}
 
-        {!pastEnd && <Pagination className="mt-4" page={state.page} totalPages={totalPages} onChange={(p) => update({ page: p })} />}
+        {!pastEnd && !noResults && <Pagination className="mt-4" page={state.page} totalPages={totalPages} onChange={(p) => update({ page: p })} />}
       </div>
 
       {/* Desktop rail (≥ 1024): sticky, 280 px, #181818, radius 24, padding 16 */}
-      <aside aria-label="Filters" className="filter-rail sticky top-24 hidden max-h-[calc(100dvh-6rem)] overflow-y-auto lg:block">
+      <aside
+        id={FILTERS_ID}
+        aria-label="Filters"
+        className="efb-skip-target filter-rail sticky top-24 hidden max-h-[calc(100dvh-6rem)] overflow-y-auto lg:block"
+      >
         {/* Title row with Reset while a filter is active (the reference's
             rail header). */}
         <div className="filter-rail__head">

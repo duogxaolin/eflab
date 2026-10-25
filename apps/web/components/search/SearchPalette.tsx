@@ -3,6 +3,7 @@ import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { Search, X } from "lucide-react";
 import { SEARCH_MAX_LENGTH, SEARCH_MIN_LENGTH, type CardPreview } from "@eflab/shared";
 import { trpc } from "@/lib/trpc";
+import { useBrowserOnline } from "@/lib/query-state";
 import { PlayerSearchRow } from "./PlayerSearchRow";
 import { useLoadMoreOnScroll, usePlayerSearchPages } from "./usePlayerSearchPages";
 
@@ -169,6 +170,11 @@ export function SearchPalette({
   };
 
   const listing = open && options.length > 0 && (showLatest || search.current);
+  // A failed list says why when the browser is offline (the query client
+  // fails offline requests at once and reloads them on reconnect).
+  const online = useBrowserOnline();
+  const searchFailedText = online ? "Search failed." : "Search failed — you appear to be offline.";
+  const latestFailedText = online ? "Could not load the latest players." : "Could not load the latest players — you appear to be offline.";
   const status = showLatest
     ? trimmed.length > 0
       ? `Type at least ${SEARCH_MIN_LENGTH} characters to search.`
@@ -176,7 +182,7 @@ export function SearchPalette({
     : search.waiting
       ? "Searching…"
       : search.failed
-        ? "Search failed."
+        ? searchFailedText
         : search.rows.length === 0
           ? `No players found for "${search.query}".`
           : search.hasMore
@@ -278,7 +284,7 @@ export function SearchPalette({
           {!open ? null : showLatest ? (
             latest.isError ? (
               <p className="efb-palette__note">
-                Could not load the latest players.{" "}
+                {latestFailedText}{" "}
                 <button type="button" onClick={() => void latest.refetch()} className="efb-palette__link">
                   Retry
                 </button>
@@ -297,7 +303,7 @@ export function SearchPalette({
             <p className="efb-palette__note animate-pulse">Searching…</p>
           ) : search.failed ? (
             <p className="efb-palette__note efb-palette__note--error">
-              Search failed.{" "}
+              {searchFailedText}{" "}
               <button type="button" onClick={search.retry} className="efb-palette__link">
                 Retry
               </button>

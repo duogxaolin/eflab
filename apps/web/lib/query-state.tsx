@@ -1,11 +1,36 @@
 "use client";
+import { useSyncExternalStore } from "react";
+import { onlineManager } from "@tanstack/react-query";
 import { AlertTriangle, RotateCcw } from "lucide-react";
-import { trpcErrorStatus } from "@/lib/trpc";
+import { browserOnline, trpcErrorStatus } from "@/lib/trpc";
+
+/** Whether the browser is online (re-renders on the `online` / `offline`
+ *  events, through TanStack Query's online manager); true on the server. */
+export function useBrowserOnline(): boolean {
+  return useSyncExternalStore(
+    (onChange) => onlineManager.subscribe(() => onChange()),
+    browserOnline,
+    () => true,
+  );
+}
+
+/** The sentence under an error title: offline, no answer, a 5xx or a 4xx. */
+export function queryErrorDetail(error: unknown, online: boolean): string {
+  const status = trpcErrorStatus(error);
+  if (status === undefined && !online) return "You appear to be offline. It loads again when the connection is back — or press Retry.";
+  return status === undefined
+    ? "The eflab API did not answer. Check your connection and try again."
+    : status >= 500
+      ? "The eflab API returned an error. Please try again."
+      : `The request was rejected (HTTP ${status}).`;
+}
 
 /**
  * Explicit error state for a failed data query (site-quality-baseline
  * "Debounced Search and Error States"): message + Retry button. Rendered by
- * every data page from `isError` instead of an empty-result message.
+ * every data page from `isError` instead of an empty-result message. Offline
+ * it says so (the query client fails offline requests at once instead of
+ * pausing them, lib/trpc.tsx, and reloads them on reconnect).
  */
 export function QueryErrorState({
   error,
@@ -18,13 +43,8 @@ export function QueryErrorState({
   title?: string;
   className?: string;
 }) {
-  const status = trpcErrorStatus(error);
-  const detail =
-    status === undefined
-      ? "The eflab API did not answer. Check your connection and try again."
-      : status >= 500
-        ? "The eflab API returned an error. Please try again."
-        : `The request was rejected (HTTP ${status}).`;
+  const online = useBrowserOnline();
+  const detail = queryErrorDetail(error, online);
   return (
     <div
       role="alert"
@@ -42,6 +62,39 @@ export function QueryErrorState({
         Retry
       </button>
     </div>
+  );
+}
+
+/**
+ * Compact inline failure line for a secondary list a page can show without
+ * (the skill details on the player page and in compare): what failed, the
+ * offline note when it applies, and Retry. Polite, not an alert — the page's
+ * main content is there.
+ */
+export function InlineQueryError({
+  error,
+  onRetry,
+  what,
+  className = "",
+  "data-testid": testId,
+}: {
+  error?: unknown;
+  onRetry: () => void;
+  /** "Could not load <what>." */
+  what: string;
+  className?: string;
+  "data-testid"?: string;
+}) {
+  const online = useBrowserOnline();
+  const status = trpcErrorStatus(error);
+  const note = status === undefined && !online ? " You appear to be offline." : "";
+  return (
+    <p role="status" className={`text-xs text-[var(--color-text-secondary)] ${className}`} data-testid={testId}>
+      Could not load {what}.{note}{" "}
+      <button type="button" onClick={onRetry} className="efb-inline-retry hit-44">
+        Retry
+      </button>
+    </p>
   );
 }
 

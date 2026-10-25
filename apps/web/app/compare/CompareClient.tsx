@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { trpc } from "@/lib/trpc";
@@ -501,6 +501,8 @@ export function CompareClient() {
   }, [focusSide, focusFilled]);
 
   const canSwap = slots.left !== null && slots.right !== null;
+  const swapHintId = useId();
+  const copyHintId = useId();
   const swap = () => {
     if (!canSwap) return;
     userCommit({ left: slotsRef.current.right, right: slotsRef.current.left });
@@ -515,7 +517,12 @@ export function CompareClient() {
   useEffect(() => () => clearTimeout(copyTimer.current), []);
   const linkTextRef = useRef<HTMLSpanElement>(null);
   const [failedLink, setFailedLink] = useState("");
+  // An empty compare has nothing to share: Copy link waits for a card, as
+  // Swap waits for two (browser QA 2026-10-25 W6 — it used to copy a bare
+  // /compare and say "Link copied").
+  const canCopy = slots.left !== null || slots.right !== null;
   const copyLink = async () => {
+    if (!canCopy) return;
     clearTimeout(copyTimer.current);
     const href = window.location.href;
     try {
@@ -609,29 +616,34 @@ export function CompareClient() {
 
   return (
     <div>
-      <ol data-slot="breadcrumbs" aria-label="Breadcrumbs" className="breadcrumbs -ml-0.5 mb-3 list-none p-0">
-        <li className="breadcrumbs__item">
-          <Link className="breadcrumbs__link hit-44" href="/">
-            Home
-          </Link>
-          <span className="breadcrumbs__separator" aria-hidden>
-            ›
-          </span>
-        </li>
-        <li className="breadcrumbs__item" aria-current="page">
-          Compare
-        </li>
-      </ol>
+      <nav aria-label="Breadcrumb">
+        <ol data-slot="breadcrumbs" className="breadcrumbs -ml-0.5 mb-3 list-none p-0">
+          <li className="breadcrumbs__item">
+            <Link className="breadcrumbs__link hit-44" href="/">
+              Home
+            </Link>
+            <span className="breadcrumbs__separator" aria-hidden>
+              ›
+            </span>
+          </li>
+          <li className="breadcrumbs__item" aria-current="page">
+            Compare
+          </li>
+        </ol>
+      </nav>
 
       {/* Title row: H1 36/40 (30/36 below 768) + the 36 × 36 ghost swap and
           copy-link buttons at the right. */}
       <div className="flex items-start justify-between gap-4">
         <h1 className="efb-h1 text-[var(--color-text-primary)]">Compare</h1>
         <div className="flex shrink-0 items-center gap-0.5">
+          {/* Unavailable actions stay focusable (aria-disabled) and say why
+              in their description, not only in the title. */}
           <button
             type="button"
             onClick={swap}
             aria-disabled={!canSwap}
+            aria-describedby={canSwap ? undefined : swapHintId}
             className="button button--md button--icon-only button--ghost"
             title={canSwap ? "Swap players" : "Pick two players to swap them"}
             aria-label="Swap the two players"
@@ -642,13 +654,21 @@ export function CompareClient() {
           <button
             type="button"
             onClick={() => void copyLink()}
+            aria-disabled={!canCopy}
+            aria-describedby={canCopy ? undefined : copyHintId}
             className="button button--md button--icon-only button--ghost"
-            title="Copy share link"
+            title={canCopy ? "Copy share link" : "Pick a player to copy the link"}
             aria-label={copy === "copied" ? "Link copied" : "Copy share link"}
             data-testid="compare-copy-link"
           >
             {copy === "copied" ? <Check className="size-5 text-[var(--color-accent)]" aria-hidden /> : <LinkIcon className="size-5" aria-hidden />}
           </button>
+          <span id={swapHintId} className="sr-only">
+            Pick two players to swap them.
+          </span>
+          <span id={copyHintId} className="sr-only">
+            Pick a player to copy the link.
+          </span>
         </div>
       </div>
       <p className="efb-subtitle mt-3">

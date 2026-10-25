@@ -26,9 +26,11 @@ import {
 // popover never stays open behind the focus (QA 2026-10-23 bug 6); its
 // visible controls are all tab stops. Placement and the 8 px viewport clamp
 // are shared with the tooltip (`floating.ts`); a popover taller than the
-// viewport scrolls inside.
+// viewport scrolls inside; below lg it stays above the fixed bottom chrome
+// (tab bar, Progression dock and strip — `chromeFloor`).
 // With `sheetBelow` a popover is shown as a bottom sheet on a narrow viewport
-// when it is taller than half of it (the stat-row Adjust popover on phones).
+// when it is taller than half of the area above that chrome (the stat-row
+// Adjust popover on phones).
 // Content renders only while open.
 
 const FOCUSABLE =
@@ -102,7 +104,7 @@ export function PopoverPanel({
       showPopoverFrom(panel, triggerRef.current);
       const a = anchor.current;
       if (a) placeFloating(a, panel, { side, matchWidth });
-      if (sheetBelow !== undefined && wantsSheet(panel, sheetBelow)) {
+      if (sheetBelow !== undefined && wantsSheet(panel, sheetBelow, a)) {
         panel.setAttribute(SHEET_ATTR, "");
         placeFloating(a ?? panel, panel, { side, matchWidth });
       }

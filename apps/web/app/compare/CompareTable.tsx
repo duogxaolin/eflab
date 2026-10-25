@@ -2,6 +2,7 @@
 import { useMemo, type ReactNode } from "react";
 import type { BaseStat, BuildResult, PlayerCardDTO, SkillDTO } from "@eflab/shared";
 import { trpc } from "@/lib/trpc";
+import { InlineQueryError } from "@/lib/query-state";
 import { WeakFootStars } from "@/components/detail/StarRating";
 import { SkillChip } from "@/components/detail/SkillChip";
 import { orderSkills, skillDisplayName } from "@/components/detail/skill-display";
@@ -262,13 +263,18 @@ export function CompareTable({ left, right }: { left: CompareColumn; right: Comp
             </div>
           ))}
         </div>
+        {/* The skill list failed (API error, offline): the chips keep their
+            fallback names; this line says so and retries. */}
+        {skillsQ.isError && (
+          <InlineQueryError error={skillsQ.error} onRetry={() => void skillsQ.refetch()} what="the skill details" className="mt-3" data-testid="compare-skills-error" />
+        )}
       </section>
 
       {L.physique && R.physique && (
         <CompareSectionTable
           id="compare-body-model"
           title="Body Model"
-          caption="The body model values (1–10) of the two cards; when they differ, the difference is shown next to both values."
+          caption="The body model values of the two cards; when they differ, the difference is shown next to both values."
           left={L}
           right={R}
           testId="compare-body-model"

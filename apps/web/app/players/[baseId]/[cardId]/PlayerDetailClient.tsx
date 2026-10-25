@@ -7,7 +7,7 @@ import { CalendarDays, ChevronDown, Circle, CircleCheck, Footprints, MoveVertica
 import { trpc } from "@/lib/trpc";
 import { PlayerCard } from "@/components/cards/PlayerCard";
 import { PitchMap } from "@/components/players/PitchMap";
-import { QueryErrorState } from "@/lib/query-state";
+import { InlineQueryError, QueryErrorState } from "@/lib/query-state";
 import { formatUtcDate } from "@/lib/format-date";
 import { conditionUrl } from "@/lib/r2-images";
 import { forgetRememberedManager, readRememberedManager, rememberManager } from "@/lib/remembered-manager";
@@ -182,6 +182,20 @@ function useDesktopLayout(): boolean | null {
 /** The stats a booster raises, as readable names ("Offensive Awareness, Ball Control, …"). */
 const boosterStatNames = (b: { stats: Partial<Record<BaseStat, number>> }): string =>
   boosterLabel("Booster", (Object.entries(b.stats) as Array<[BaseStat, number]>).filter(([, v]) => typeof v === "number" && v !== 0)).replace(/^[^·]*·\s*/, "");
+
+/** "Off" in words on a switched-off booster toggle (browser QA 2026-10-25
+ *  (f)): the state was only an empty circle icon and `aria-pressed`; a
+ *  Trending card's level pill already says "Off". Outside the truncating
+ *  label, so it never gets cut; part of the button's name. */
+function BoosterOffBadge() {
+  return (
+    <span className="efb-booster-button__off" data-testid="booster-off">
+      {/* Keeps the name "…, Balance, Off" (not "BalanceOff"). */}
+      <span className="sr-only">, </span>
+      Off
+    </span>
+  );
+}
 
 /** One booster control of the Overview card: the shared look, the readable
  *  label truncated on a wide mouse layout with the full text in a tooltip
@@ -638,6 +652,7 @@ export function PlayerDetailClient({
               <span className="sr-only">Booster 1: </span>
               {boosterInfo[0].label}
             </span>
+            {!on && <BoosterOffBadge />}
           </BoosterButton>,
         );
       }
@@ -666,6 +681,7 @@ export function PlayerDetailClient({
             <span className="sr-only">Booster 2, the card&apos;s own: </span>
             {boosterInfo[1].label}
           </span>
+          {!on && <BoosterOffBadge />}
         </BoosterButton>,
       );
     } else if (takesSecond) {
@@ -754,44 +770,42 @@ export function PlayerDetailClient({
 
   return (
     <div data-card-tint={p.cardType}>
-      {/* Breadcrumb */}
-      <ol data-slot="breadcrumbs" aria-label="Breadcrumbs" className="breadcrumbs -ml-0.5 mb-3 list-none p-0">
-        <li className="breadcrumbs__item">
-          <Link className="breadcrumbs__link hit-44" href="/">
-            Home
-          </Link>
-          <span className="breadcrumbs__separator" aria-hidden>
-            ›
-          </span>
-        </li>
-        <li className="breadcrumbs__item">
-          <Link className="breadcrumbs__link hit-44" href="/players">
-            Players
-          </Link>
-          <span className="breadcrumbs__separator" aria-hidden>
-            ›
-          </span>
-        </li>
-        <li className="breadcrumbs__item breadcrumbs__item--muted">
-          {p.name}
-          <span className="breadcrumbs__separator" aria-hidden>
-            ›
-          </span>
-        </li>
-        <li className="breadcrumbs__item" aria-current="page">
-          {packTitle}
-        </li>
-      </ol>
+      {/* Breadcrumb (a navigation landmark; the last item is the page) */}
+      <nav aria-label="Breadcrumb">
+        <ol data-slot="breadcrumbs" className="breadcrumbs -ml-0.5 mb-3 list-none p-0">
+          <li className="breadcrumbs__item">
+            <Link className="breadcrumbs__link hit-44" href="/">
+              Home
+            </Link>
+            <span className="breadcrumbs__separator" aria-hidden>
+              ›
+            </span>
+          </li>
+          <li className="breadcrumbs__item">
+            <Link className="breadcrumbs__link hit-44" href="/players">
+              Players
+            </Link>
+            <span className="breadcrumbs__separator" aria-hidden>
+              ›
+            </span>
+          </li>
+          <li className="breadcrumbs__item breadcrumbs__item--muted">
+            {p.name}
+            <span className="breadcrumbs__separator" aria-hidden>
+              ›
+            </span>
+          </li>
+          <li className="breadcrumbs__item" aria-current="page">
+            {packTitle}
+          </li>
+        </ol>
+      </nav>
 
       {/* ================= HEADER: name + one OVR pill ================= */}
       <header className="mb-10 min-w-0 text-center lg:text-left">
         <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-2 lg:justify-start">
           <h1 className="text-display-sm md:text-display font-bold text-white">{p.name}</h1>
-          <span
-            className="chip chip--accent chip--lg tabular-nums"
-            data-testid="ovr-pill"
-            title={`Overall at max level ${p.levelCap} (dump, Booster 1 only, no Manager Proficiency bonus); the card shows the current build's estimate`}
-          >
+          <span className="chip chip--accent chip--lg tabular-nums" data-testid="ovr-pill">
             <span className="chip__label">{p.maxOvr} OVR</span>
           </span>
           {/* Visible qualifier: the pill is the dump's max overall (Booster 1,
@@ -801,6 +815,13 @@ export function PlayerDetailClient({
               tone (≥ 4.8:1 there), not the muted token. */}
           <span className="text-caption whitespace-nowrap text-[var(--color-text-on-backdrop)]" data-testid="ovr-pill-note">
             dump max · no proficiency bonus
+          </span>
+          {/* The full explanation, once only in a `title` (unreachable by
+              keyboard and touch — browser QA 2026-10-25 (d)): read after the
+              visible note, not shown again. */}
+          <span className="sr-only" data-testid="ovr-pill-explanation">
+            The pill is the overall at max level {p.levelCap} from the data dump, with Booster 1 only and no Manager Proficiency bonus; the card shows the overall of the
+            current build.
           </span>
         </div>
         {/* A <div>, not a <p>: the playstyle triggers render their tooltip
@@ -1018,8 +1039,11 @@ export function PlayerDetailClient({
               />
             )}
 
+            {/* Two columns; a single booster control takes the whole row, so
+                its stat list is not cut at half width (browser QA 2026-10-25
+                (g): a Trending card's "+3 · GK Awareness, …" at 1440 px). */}
             {boosterControls.length > 0 && (
-              <div className="grid grid-cols-2 gap-2" role="group" aria-label="Boosters" data-testid="booster-row">
+              <div className={`grid gap-2 ${boosterControls.length === 1 ? "grid-cols-1" : "grid-cols-2"}`} role="group" aria-label="Boosters" data-testid="booster-row">
                 {boosterControls}
               </div>
             )}
@@ -1106,6 +1130,17 @@ export function PlayerDetailClient({
                     </li>
                   ))}
                 </ul>
+              )}
+              {/* The skill list failed (API error, offline): the chips keep
+                  their fallback names; this line says so and retries. */}
+              {skillsQ.isError && skillLabels.length > 0 && (
+                <InlineQueryError
+                  error={skillsQ.error}
+                  onRetry={() => void skillsQ.refetch()}
+                  what="the skill details"
+                  className="mt-2"
+                  data-testid="skill-list-error"
+                />
               )}
             </div>
           </section>

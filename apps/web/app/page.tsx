@@ -9,7 +9,7 @@ import { PlayerCard } from "@/components/cards/PlayerCard";
 import { PackCarousel } from "@/components/packs/PackCarousel";
 import { PlayerSearchRow } from "@/components/search/PlayerSearchRow";
 import { useLoadMoreOnScroll, usePlayerSearchPages } from "@/components/search/usePlayerSearchPages";
-import { QueryErrorState } from "@/lib/query-state";
+import { QueryErrorState, useBrowserOnline } from "@/lib/query-state";
 import { Search, Sparkles, Package, X } from "lucide-react";
 import { SectionHeader } from "@/components/layout/SectionHeader";
 
@@ -100,6 +100,10 @@ export default function HomePage() {
 
   const text = q.trim();
   const search = usePlayerSearchPages(q, { enabled: true, eagerPages: HOME_EAGER_PAGES });
+  // "Search failed" says why when the browser is offline (the query client
+  // fails offline requests at once and reloads them on reconnect).
+  const online = useBrowserOnline();
+  const searchFailedText = online ? "Search failed." : "Search failed — you appear to be offline.";
   const searchResults = search.rows;
 
   const latestCards = (latest.data ?? []).slice(0, LATEST_COUNT);
@@ -192,7 +196,7 @@ export default function HomePage() {
       : search.waiting
         ? "Searching…"
         : search.failed
-          ? "Search failed."
+          ? searchFailedText
           : searchResults.length === 0
             ? `No players found for "${search.query}".`
             : search.hasMore
@@ -277,7 +281,7 @@ export default function HomePage() {
                 <p className="efb-home-results__note animate-pulse">Searching…</p>
               ) : search.failed ? (
                 <p className="efb-home-results__note">
-                  Search failed.{" "}
+                  {searchFailedText}{" "}
                   <button type="button" onClick={search.retry} className="cursor-pointer text-[var(--color-accent)] hover:underline">
                     Retry
                   </button>
@@ -339,9 +343,10 @@ export default function HomePage() {
           The reference calls its section "Trending Players", but that list
           mixes community signals we do not hold; ours is exactly the "New
           cards" sort of /players de-duplicated by base player, so it keeps
-          the honest "Latest" label and links to that sort. */}
+          the honest "Latest" label and links to that sort — /players itself,
+          whose default sort is New cards (the canonical URL has no `sort`). */}
       <section className="space-y-3" aria-labelledby="home-latest-players">
-        <SectionHeader id="home-latest-players" title="Latest Players" icon={Sparkles} tone="amber" showAllHref={"/players?sort=new" as Route} />
+        <SectionHeader id="home-latest-players" title="Latest Players" icon={Sparkles} tone="amber" showAllHref="/players" />
 
         {latest.isError ? (
           <QueryErrorState error={latest.error} onRetry={() => void latest.refetch()} title="Could not load the latest players" />

@@ -13,6 +13,14 @@ import { useEffect, type RefObject } from "react";
 // else on the roomier side and is then clamped into the viewport.
 // Horizontally it starts at the anchor's left edge (or spans the anchor with
 // `matchWidth`), clamped — no horizontal overflow at 320 px.
+// Below lg the fixed bottom chrome (the tab bar, the player page's
+// Progression dock and its category strip — marked with FLOOR_ATTR) takes
+// the lower edge of the viewport: the available area ends FLOATING_GAP above
+// its top edge (`chromeFloor`), so no floating element covers it (browser QA
+// 2026-10-25 W3: a stat row's Adjust popover hid the strip's top 29 px at
+// 390 × 844). Chrome that holds the anchor is not a floor (the strip's own
+// popovers open above it anyway), and nothing is while the anchor sits in an
+// open modal <dialog> (the phone Progression sheet covers the chrome).
 
 /** Gap between an anchor and its floating element. */
 export const FLOATING_GAP = 6;
@@ -35,61 +43,105 @@ export function visibleViewport(): { left: number; top: number; width: number; h
   return { left: 0, top: 0, width: document.documentElement.clientWidth, height: window.innerHeight };
 }
 
+/** Marks fixed bottom chrome no floating element may cover (MobileBottomNav,
+ *  the ProgressionDock's dock and strip). */
+export const FLOOR_ATTR = "data-floating-floor";
+
+/** The top edge of the shown bottom chrome a floating element placed against
+ *  `anchor` must stay above, or Infinity: chrome holding the anchor, hidden
+ *  chrome (from lg) and chrome in the upper half of the visible viewport are
+ *  ignored, and so is all of it while the anchor is inside an open modal
+ *  dialog (which covers the chrome). */
+export function chromeFloor(anchor: Element | null): number {
+  if (typeof document === "undefined" || anchor?.closest("dialog[open]")) return Infinity;
+  const view = visibleViewport();
+  let floor = Infinity;
+  for (const el of document.querySelectorAll(`[${FLOOR_ATTR}]`)) {
+    if (anchor && el.contains(anchor)) continue;
+    const r = el.getBoundingClientRect();
+    if (r.width === 0 || r.height === 0) continue;
+    if (r.top < view.top + view.height / 2) continue;
+    floor = Math.min(floor, r.top);
+  }
+  return floor;
+}
+
+/** The lowest y (layout-viewport coordinates) a floating element placed
+ *  against `anchor` may reach: the visible viewport's bottom or the top of
+ *  the bottom chrome, minus the gap. */
+function bottomLimit(anchor: Element | null, view: ReturnType<typeof visibleViewport>): number {
+  return Math.min(view.top + view.height - VIEWPORT_MARGIN, chromeFloor(anchor) - FLOATING_GAP);
+}
+
 // ── Sheet form ────────────────────────────────────────────────────────────────
 // A popover that opts in (PopoverPanel `sheetBelow`) is shown as a bottom
 // sheet instead of next to its anchor when, on a viewport narrower than that
-// breakpoint, its anchored form is taller than half the visible viewport
-// (the stat-row Adjust popover below 640 px). The choice is made once per
-// opening (`wantsSheet`, measured in the anchored form right after showing)
-// and marked with SHEET_ATTR; while it is set, every placement pins the
-// element to the bottom of the visible viewport at its full width, at most
-// 85 % of its height, scrolling inside. Same element, same state, focus and
-// dismissal — only the shape changes (`.efb-popover[data-sheet]`).
+// breakpoint, its anchored form is taller than half the visible area (the
+// visible viewport above the bottom chrome; the stat-row Adjust popover below
+// 640 px). The choice is made once per opening (`wantsSheet`, measured in the
+// anchored form right after showing) and marked with SHEET_ATTR; while it is
+// set, every placement pins the element to the bottom of the visible
+// viewport at its full width, at most 85 % of its height, scrolling inside —
+// or, over bottom chrome, to FLOATING_GAP above the chrome, 8 px in from both
+// sides with all corners rounded (SHEET_FLOORED_ATTR). Same element, same
+// state, focus and dismissal — only the shape changes
+// (`.efb-popover[data-sheet]`).
 
 /** Marks a popover shown in its sheet form. */
 export const SHEET_ATTR = "data-sheet";
-/** Largest share of the visible viewport height a popover sheet takes. */
+/** Marks a sheet-form popover that stands on the bottom chrome. */
+export const SHEET_FLOORED_ATTR = "data-sheet-floored";
+/** Largest share of the visible area's height a popover sheet takes. */
 const SHEET_MAX_SHARE = 0.85;
 
 /** True when a shown floating element, placed in its anchored form, is taller
- *  than half the visible viewport and the viewport is narrower than `below`. */
-export function wantsSheet(floating: HTMLElement, below: number): boolean {
+ *  than half the visible area above the bottom chrome (`anchor`'s floor) and
+ *  the viewport is narrower than `below`. */
+export function wantsSheet(floating: HTMLElement, below: number, anchor: Element | null = null): boolean {
   const view = visibleViewport();
-  return view.width < below && floating.getBoundingClientRect().height > view.height / 2;
+  const area = Math.min(view.top + view.height, chromeFloor(anchor) - FLOATING_GAP) - view.top;
+  return view.width < below && floating.getBoundingClientRect().height > area / 2;
 }
 
 /** Back to the anchored form (start of every opening). */
 export function clearSheet(floating: HTMLElement): void {
   if (!floating.hasAttribute(SHEET_ATTR)) return;
   floating.removeAttribute(SHEET_ATTR);
+  floating.removeAttribute(SHEET_FLOORED_ATTR);
   floating.style.width = "";
 }
 
-function placeSheet(floating: HTMLElement): void {
+function placeSheet(anchor: Element, floating: HTMLElement): void {
   const view = visibleViewport();
-  floating.style.width = `${Math.floor(view.width)}px`;
-  floating.style.maxHeight = `${Math.floor(view.height * SHEET_MAX_SHARE)}px`;
+  const floor = chromeFloor(anchor);
+  const floored = floor < view.top + view.height;
+  floating.toggleAttribute(SHEET_FLOORED_ATTR, floored);
+  const inset = floored ? VIEWPORT_MARGIN : 0;
+  const bottom = floored ? floor - FLOATING_GAP : view.top + view.height;
+  floating.style.width = `${Math.floor(view.width - 2 * inset)}px`;
+  floating.style.maxHeight = `${Math.floor((bottom - view.top) * SHEET_MAX_SHARE)}px`;
   const h = Math.ceil(floating.getBoundingClientRect().height);
-  floating.style.left = `${Math.ceil(view.left)}px`;
-  floating.style.top = `${Math.floor(view.top + view.height - h)}px`;
+  floating.style.left = `${Math.ceil(view.left + inset)}px`;
+  floating.style.top = `${Math.floor(bottom - h)}px`;
 }
 
 /** Position a shown `position: fixed` element next to `anchor`, inside the
  *  visible viewport (or at its bottom edge when it is in its sheet form). */
 export function placeFloating(anchor: Element, floating: HTMLElement, { side = "bottom", matchWidth = false }: FloatingOptions = {}): void {
-  if (floating.hasAttribute(SHEET_ATTR)) return placeSheet(floating);
+  if (floating.hasAttribute(SHEET_ATTR)) return placeSheet(anchor, floating);
   const view = visibleViewport();
   const r = anchor.getBoundingClientRect();
   if (matchWidth) floating.style.width = `${Math.max(0, Math.min(r.width, view.width - 2 * VIEWPORT_MARGIN))}px`;
+  const minTop = view.top + VIEWPORT_MARGIN;
+  // The visible viewport's bottom, or above the bottom chrome (`chromeFloor`).
+  const maxBottom = bottomLimit(anchor, view);
   // Cap the height first so the measured height is the one that is placed.
-  floating.style.maxHeight = `${Math.max(0, Math.floor(view.height - 2 * VIEWPORT_MARGIN))}px`;
+  floating.style.maxHeight = `${Math.max(0, Math.floor(maxBottom - minTop))}px`;
   // Fractional sizes rounded up, positions rounded inwards: the margin is
   // never less than 8 px, also with a sub-pixel content height.
   const size = floating.getBoundingClientRect();
   const w = Math.ceil(size.width);
   const h = Math.ceil(size.height);
-  const minTop = view.top + VIEWPORT_MARGIN;
-  const maxBottom = view.top + view.height - VIEWPORT_MARGIN;
   const below = r.bottom + FLOATING_GAP;
   const above = r.top - FLOATING_GAP - h;
   const fitsBelow = below + h <= maxBottom;

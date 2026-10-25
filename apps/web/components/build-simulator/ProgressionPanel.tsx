@@ -1363,7 +1363,9 @@ export function ProgressionDock({
   return (
     <div className="efb-dock-wrap lg:hidden" data-progression-dock="">
       {spend && (
-        <div ref={stripRef} className="efb-dock-strip" data-testid="dock-strip" role="group" aria-label="Training categories of the current build">
+        // data-floating-floor: no popover or tooltip covers the strip or the
+        // dock (floating.ts `chromeFloor`, browser QA 2026-10-25 W3).
+        <div ref={stripRef} className="efb-dock-strip" data-testid="dock-strip" data-floating-floor="" role="group" aria-label="Training categories of the current build">
           {spent.length > 0 ? (
             <span className="efb-dock-strip__items">
               {spent.map((c) => {
@@ -1411,7 +1413,7 @@ export function ProgressionDock({
         </div>
       )}
 
-      <div className="efb-dock" role="group" aria-label={mode === "trending" ? "Build" : "Progression"}>
+      <div className="efb-dock" data-floating-floor="" role="group" aria-label={mode === "trending" ? "Build" : "Progression"}>
         <button type="button" {...opensPopover} className="efb-dock__proficiency hit-44" aria-label={`Manager Proficiency ${mp} — change manager and proficiency`} data-testid="dock-proficiency-chip">
           {mp}
         </button>

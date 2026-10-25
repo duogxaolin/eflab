@@ -22,27 +22,29 @@ export function PackClient({ slug, initialData }: { slug: string; initialData: F
 
   return (
     <div>
-      <ol data-slot="breadcrumbs" aria-label="Breadcrumbs" className="breadcrumbs -ml-0.5 mb-3 list-none p-0">
-        <li className="breadcrumbs__item">
-          <Link className="breadcrumbs__link hit-44" href="/">
-            Home
-          </Link>
-          <span className="breadcrumbs__separator" aria-hidden>
-            ›
-          </span>
-        </li>
-        <li className="breadcrumbs__item">
-          <Link className="breadcrumbs__link hit-44" href="/packs">
-            Packs
-          </Link>
-          <span className="breadcrumbs__separator" aria-hidden>
-            ›
-          </span>
-        </li>
-        <li className="breadcrumbs__item" aria-current="page">
-          {bundle.name}
-        </li>
-      </ol>
+      <nav aria-label="Breadcrumb">
+        <ol data-slot="breadcrumbs" className="breadcrumbs -ml-0.5 mb-3 list-none p-0">
+          <li className="breadcrumbs__item">
+            <Link className="breadcrumbs__link hit-44" href="/">
+              Home
+            </Link>
+            <span className="breadcrumbs__separator" aria-hidden>
+              ›
+            </span>
+          </li>
+          <li className="breadcrumbs__item">
+            <Link className="breadcrumbs__link hit-44" href="/packs">
+              Packs
+            </Link>
+            <span className="breadcrumbs__separator" aria-hidden>
+              ›
+            </span>
+          </li>
+          <li className="breadcrumbs__item" aria-current="page">
+            {bundle.name}
+          </li>
+        </ol>
+      </nav>
 
       <h1 className="efb-h1 text-[var(--color-text-primary)]">{bundle.name}</h1>
       <ul className="mt-3 flex list-none flex-wrap items-center gap-2 p-0" aria-label="Pack details">

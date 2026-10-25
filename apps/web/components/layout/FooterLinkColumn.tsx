@@ -20,8 +20,11 @@ export function FooterLinkColumn({ title, links }: { title: string; links: reado
   const listId = useId();
   return (
     <nav aria-label={title} className="min-w-0 border-b border-[var(--color-line-separator)] lg:border-0">
-      <h3 className="mb-5 hidden text-base font-semibold text-white lg:block">{title}</h3>
-      <h3 className="m-0 lg:hidden">
+      {/* h2: the footer follows each page's content, which may end at h1
+          (an empty /compare, the 404 page) — an h3 there skipped a level
+          (axe heading-order, browser QA 2026-10-25 (j)). Looks unchanged. */}
+      <h2 className="mb-5 hidden text-base font-semibold text-white lg:block">{title}</h2>
+      <h2 className="m-0 lg:hidden">
         <button
           type="button"
           aria-expanded={open}
@@ -35,7 +38,7 @@ export function FooterLinkColumn({ title, links }: { title: string; links: reado
             aria-hidden
           />
         </button>
-      </h3>
+      </h2>
       <ul id={listId} className={`m-0 flex list-none flex-col gap-3 p-0 text-sm leading-5 max-lg:gap-2 max-lg:pb-4 ${open ? "" : "max-lg:hidden"}`}>
         {links.map((l) => (
           <li key={l.href}>
