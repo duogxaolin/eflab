@@ -220,7 +220,7 @@ The Playing Style filter SHALL list only styles whose identifiers are verified a
 - **THEN** the filter does not offer a made-up identifier for it and the documentation lists it as unavailable.
 
 ### Requirement: Player Detail Information Sections
-The player detail page SHALL show a single overall pill, a Card Info block (name, featured pack, card type, nation, team, position, age, strong foot, height, weight, condition, card id with a copy control, release date), a Body Model section, Injury Resistance and Form, with stat names never truncated at 1280 and 390 px, "+N" booster chips on affected stats, a fifth tier colour for values of 100 or more taken from the tier tokens, click-to-highlight (pinned) of stats belonging to a category, with a hover / keyboard-focus preview of a category before it is pinned, efootbase skill labels with Showtime skills first, and proficiency text of the form "N Full · N Half".
+The player detail page SHALL show a single overall pill, a Card Info block (name, featured pack, card type, nation, team, league — the card's own league, see a11y-and-card-league "Card League In The Card DTO" —, position, age, strong foot, height, weight, condition, card id with a copy control, release date), a Body Model section, Injury Resistance and Form, with stat names never truncated at 1280 and 390 px, "+N" booster chips on affected stats, a fifth tier colour for values of 100 or more taken from the tier tokens, click-to-highlight (pinned) of stats belonging to a category, with a hover / keyboard-focus preview of a category before it is pinned, efootbase skill labels with Showtime skills first, and proficiency text of the form "N Full · N Half".
 
 #### Scenario: Card info
 - **WHEN** a user opens a player page
@@ -229,6 +229,10 @@ The player detail page SHALL show a single overall pill, a Card Info block (name
 #### Scenario: Stat names
 - **WHEN** the detail page is viewed at 390 px
 - **THEN** no stat name is truncated with an ellipsis.
+
+#### Scenario: League row
+- **WHEN** a player page is opened
+- **THEN** Card Info shows a "League" row with the card's own league name (no row for a card that has no league and no team), and it equals the league the League filter matches for that card.
 
 ### Requirement: Packs Header and Counts
 The packs page SHALL NOT use emoji in its header and SHALL count players as unique players across bundles.
