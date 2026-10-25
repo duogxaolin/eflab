@@ -15,6 +15,12 @@ import { playerCardDynamicUrl } from "@/lib/r2-images";
  * overall at the right as a 40 × 24 badge filled with its tier colour (black
  * text). The badge is the card's overall at max level from the dump
  * (Booster 1 on), so its accessible text says "max overall".
+ * On a narrow row (a phone: text column under 360 px — a container query in
+ * globals.css) the line wraps instead of cutting the words that tell the
+ * cards of one player apart (browser QA 2026-10-25 W4): the styles flow onto
+ * a second line when they do not fit (no "·" separators there — the icons
+ * separate them), and the pack chip takes its own line, up to two lines.
+ * Wider rows keep the single line.
  * Extra button props (role="option", id, aria-selected, tabIndex, mouse
  * handlers) pass through: the lists keep DOM focus in their input and point
  * at the active row with `aria-activedescendant`.
@@ -69,10 +75,14 @@ export function PlayerSearchRow({
             </>
           )}
           {pack && (
-            <span className="efb-result-row__pack">
-              <span className="sr-only">Pack: </span>
-              {pack}
-            </span>
+            <>
+              {/* A line break before the chip on a narrow row (CSS). */}
+              <span aria-hidden className="efb-result-row__break" />
+              <span className="efb-result-row__pack">
+                <span className="sr-only">Pack: </span>
+                {pack}
+              </span>
+            </>
           )}
         </span>
       </span>

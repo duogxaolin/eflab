@@ -39,7 +39,7 @@ OVR    = min(127, max(40, floor((sum + 499) / 1000)))
 
 `positionTiles` evaluates it at all 13 positions with the card's aptitudes (database coding 0 full, 1 half, 2 none — the dump's coding is inverted, 2 full … 0 none); the panel's overall is the tile at the selected position, so the two can never disagree.
 
-A manager is an input of the engine (`SimulateInput.manager = { stats }`): choosing one in the UI sets the Manager Proficiency level to the manager's rating (83–90) and passes its one or two pill stats (efootbase lists 24 of its 69 picker managers with a single pill). Moving the slider deselects the manager, choosing it again deselects it and keeps the level, Reset and Max OVR keep it — the same behaviour the survey recorded on efootbase.
+A manager is an input of the engine (`SimulateInput.manager = { stats }`): choosing one in the UI sets the Manager Proficiency level to the manager's rating (83–90) and passes its one or two pill stats (efootbase lists 24 of its 70 picker managers with a single pill). Moving the slider deselects the manager, choosing it again deselects it and keeps the level, Reset and Max OVR keep it — the same behaviour the survey recorded on efootbase.
 
 **Max OVR** keeps the dynamic programme over the ten categories, now on the exact integer weights: it maximises Σ weight × stat (the linear part of the formula, without the bonus, scaling and rounding), so the preset is the same at every proficiency level and for every manager.
 

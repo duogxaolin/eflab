@@ -201,9 +201,46 @@ export const MANAGER_CROSSFILL_COLUMNS: ReadonlySet<string> = new Set([
   "age", "country", "adaptability", "affinity", "marketValue",
   "possessionGame", "quickCounter", "longBallCounter", "outWide", "longBall", "overload",
 ]);
-// Written only from the static snapshot (a dedicated UPDATE), never by the fixture
-// upsert — so a seed without dump/efootbase/static/managers.json leaves it as is.
-export const MANAGER_STATIC_COLUMNS: ReadonlySet<string> = new Set(["inPicker"]);
+// Written only from the static snapshot (one dedicated UPDATE: the picker flag and
+// the 0-based snapshot position), never by the fixture upsert — so a seed without
+// dump/efootbase/static/managers.json leaves both as they are.
+export const MANAGER_STATIC_COLUMNS: ReadonlySet<string> = new Set(["inPicker", "pickerOrder"]);
+
+/**
+ * The card's own league (dump `league`; openspec efootbase-data-refresh-1024,
+ * catalogue-data-refresh "Card League"): the id when it is an integer the League
+ * table holds at write time — `knownLeagueIds` = the ids the seed writes in the
+ * same transaction (fixtures/leagues.json), or, for the incremental sync, the
+ * stored ids plus the ones it inserts — else null (missing, not an integer, or
+ * unknown: such a card matches no League selection).
+ */
+export function cardLeagueId(r: EfbRow, knownLeagueIds: ReadonlySet<number>): number | null {
+  const l = r.league;
+  return typeof l === "number" && Number.isSafeInteger(l) && knownLeagueIds.has(l) ? l : null;
+}
+
+/** A manifest `dumpedAt` the seed stores: ISO-8601 in UTC (`Z`), at most milliseconds. */
+const DUMPED_AT_RE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?Z$/;
+
+/**
+ * The time a dump was taken, from its manifest's `dumpedAt` (scripts/efootbase_dump.py
+ * writes `--dumped-at`, or "manual" without it). A Date only for a real calendar
+ * time in strict ISO-8601 UTC; anything else — absent, "manual", an offset, a
+ * malformed or impossible date — is null, and the seed keeps the stored value
+ * (never a guessed date).
+ */
+export function parseDumpedAt(value: unknown): Date | null {
+  if (typeof value !== "string") return null;
+  const m = DUMPED_AT_RE.exec(value);
+  if (!m) return null;
+  const [y, mo, d, h, mi, s, ms] = [m[1], m[2], m[3], m[4], m[5], m[6] ?? "0", (m[7] ?? "0").padEnd(3, "0")].map(Number) as number[];
+  const t = Date.UTC(y!, mo! - 1, d!, h!, mi!, s!, ms!);
+  const date = new Date(t);
+  // Date.UTC rolls over (month 13, Feb 30, hour 24 …): only an exact round trip is a real time.
+  const same = date.getUTCFullYear() === y && date.getUTCMonth() === mo! - 1 && date.getUTCDate() === d
+    && date.getUTCHours() === h && date.getUTCMinutes() === mi && date.getUTCSeconds() === s;
+  return Number.isFinite(t) && same ? date : null;
+}
 
 /** efootbase stat name (either spelling) → eFootLab stat; unknown → throws. */
 export function mapEfootbaseStat(key: string, where: string): BaseStat {
@@ -408,7 +445,8 @@ export function rowBoosters(r: EfbRow): Array<[number, BoosterObj]> {
 
 /** Map one dump row to the Player columns the seeder owns. A registered-position
  *  aptitude that is not "registered" (2) is appended to `aptitudeMismatch` (the
- *  caller aborts on any); a bad `pos` or `condition` throws. */
+ *  caller aborts on any); a bad `pos` or `condition` throws. `knownLeagueIds` =
+ *  the League ids the write path's League table holds (see `cardLeagueId`). */
 export function buildPlayerRow(
   r: EfbRow,
   pid: bigint,
@@ -416,6 +454,7 @@ export function buildPlayerRow(
   countryNameToId: Map<string, number>,
   teamNameToId: Map<string, number>,
   packNameToId: Map<string, string>,
+  knownLeagueIds: ReadonlySet<number>,
   aptitudeMismatch: string[],
 ): Record<string, unknown> {
   const pos = r.pos;
@@ -453,6 +492,7 @@ export function buildPlayerRow(
     featuredPackId: r.featured && r.featured !== "none" ? (packNameToId.get(r.featured) ?? null) : null,
     dreamTeam: r.dream_team === 1,
     teamId: r.team_name ? (teamNameToId.get(r.team_name) ?? null) : null,
+    leagueId: cardLeagueId(r, knownLeagueIds),
     ovr,
     maxOvr: asInt(r.overall_at_max_level, ovr),
     condition,

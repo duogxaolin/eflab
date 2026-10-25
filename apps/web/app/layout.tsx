@@ -7,6 +7,10 @@ import { SiteHeader } from "@/components/layout/SiteHeader";
 import { MobileBottomNav } from "@/components/layout/MobileBottomNav";
 import { SiteFooter } from "@/components/layout/SiteFooter";
 import { PageSlot } from "@/components/layout/PageSlot";
+import { SkipLink } from "@/components/layout/SkipLink";
+
+/** id of the page's `<main>` (the "Skip to content" target). */
+const MAIN_ID = "main-content";
 
 const inter = Inter({
   subsets: ["latin"],
@@ -48,6 +52,11 @@ export default function RootLayout({ children }: { children: ReactNode }) {
       {/* Below lg the body reserves the floating tab bar's height plus the
           safe-area inset, so the last footer line scrolls clear of the bar. */}
       <body className="relative flex min-h-screen flex-col text-[var(--color-text-primary)] max-lg:pb-[calc(5.25rem+env(safe-area-inset-bottom,0px))]">
+        {/* The first tab stop of every page: hidden until focused, it moves
+            focus past the header to the page content (`main`). */}
+        <SkipLink targetId={MAIN_ID} className="efb-skip-link--fixed" data-testid="skip-to-content">
+          Skip to content
+        </SkipLink>
         {/* Aurora strip at the top of the document (scrolls with the page,
             pointer-events:none, behind the app). The tint layer is switched on
             by a page that sets data-card-tint (see globals.css). */}
@@ -58,7 +67,11 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         <Providers>
           <div className="relative z-1 flex flex-1 flex-col">
             <SiteHeader />
-            <main className="flex-1 mx-auto w-full max-w-6xl px-4 py-8">
+            {/* The skip link's focus target: focusable only while it holds
+                the skip link's focus (SkipLink sets and removes its
+                tabindex); no outline, scroll margin under the header —
+                `.efb-skip-target`. */}
+            <main id={MAIN_ID} className="efb-skip-target flex-1 mx-auto w-full max-w-6xl px-4 py-8">
               {/* Not `{children}` directly: see PageSlot (hydration #418). */}
               <PageSlot>{children}</PageSlot>
             </main>

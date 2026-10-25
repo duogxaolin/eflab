@@ -36,7 +36,7 @@ The worker loads the root `.env` with `tsx --env-file-if-exists`. **A variable t
 
 - Node ≥ 22 and the repository with `pnpm install` done (the worker runs from source through `tsx`).
 - `python3` with **`boto3`** (`pip install boto3`) — `r2_upload.py` needs it. A run that would upload checks `import boto3` and the three R2 credentials **before** its first request, and fails naming what is missing. `SYNC_PYTHON` selects another interpreter (an absolute path is safest under a service manager).
-- The local Postgres (`docker compose up -d`) with all migrations applied (`pnpm db:migrate`).
+- The local Postgres (`docker compose up -d`) with all migrations applied (`pnpm db:migrate` — it does not read the root `.env`, so `DATABASE_URL` must be in the environment; since 2026-10-24 that includes `20261024000000_catalogue_data_refresh`, whose columns the seed and the incremental run write).
 - For full runs: the static efootbase snapshot directory (`skills.json` **and** `skill-icons/`, see `docs/efootbase-static-snapshot.md`) and at least **2 GB free** in the temporary directory (`os.tmpdir()`, i.e. `TMPDIR`, which is also passed to the children).
 
 ## Environment variables (names and meaning)
@@ -176,7 +176,7 @@ The worker's console shows one line per tick event and run (`[worker] …`). The
 ## First-run checklist
 
 1. **Back up**: `pg_dump -Fc` of the live database to a file outside the repository (record the path).
-2. **Migrate**: `pnpm db:migrate` adds migration `20261019230000_admin_sync_worker` — four tables, three enums, the indexes and the single `SyncConfig` row. No existing table changes. `pnpm db:generate` afterwards.
+2. **Migrate**: `pnpm db:migrate` (with `DATABASE_URL` in the environment — the command does not read the root `.env`) adds migration `20261019230000_admin_sync_worker` — four tables, three enums, the indexes and the single `SyncConfig` row. No existing table changes. `pnpm db:generate` afterwards.
 3. **Create the admin**: `pnpm admin:create <name>` at the hidden prompt.
 4. **Start the API and the web**, sign in at `/admin/login`.
 5. **Decide about the schedule before the worker's first tick.** It is enabled by default (incremental every 360 min, full on Sunday 03:00 UTC). A first worker with no run history therefore **queues a scheduled incremental run on its first tick**, and a full run instead if it starts inside the full window. To go step by step, untick "enabled" in the dashboard's Schedule form and save first: manual runs still work.

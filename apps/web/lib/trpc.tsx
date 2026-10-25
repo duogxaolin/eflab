@@ -1,7 +1,7 @@
 "use client";
 import { createTRPCReact } from "@trpc/react-query";
 import { httpBatchLink, loggerLink, TRPCClientError } from "@trpc/client";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider, onlineManager } from "@tanstack/react-query";
 import { useState, type ReactNode } from "react";
 import type { AppRouter } from "@eflab/api";
 import { superjson } from "@eflab/shared";
@@ -23,11 +23,22 @@ export function trpcErrorStatus(error: unknown): number | undefined {
   return undefined;
 }
 
+/** The browser's online state: TanStack Query's online manager (fed by the
+ *  `online` / `offline` events) and `navigator.onLine` (a page opened while
+ *  offline has fired no event yet). True on the server. */
+export function browserOnline(): boolean {
+  return onlineManager.isOnline() && (typeof navigator === "undefined" || navigator.onLine !== false);
+}
+
 /** Retry policy: never retry a client error (4xx — a 404/400 will not get
- *  better by asking again), retry network / 5xx failures twice. */
-export function shouldRetry(failureCount: number, error: unknown): boolean {
+ *  better by asking again), retry network / 5xx failures twice — but not
+ *  while the browser reports itself offline: the failure is shown at once
+ *  (with Retry), and the query runs again by itself on reconnect
+ *  (`refetchOnReconnect`, browser QA 2026-10-25 W5). */
+export function shouldRetry(failureCount: number, error: unknown, online: boolean = browserOnline()): boolean {
   const status = trpcErrorStatus(error);
   if (status !== undefined && status >= 400 && status < 500) return false;
+  if (!online) return false;
   return failureCount < 2;
 }
 
@@ -35,7 +46,20 @@ export function makeQueryClient(): QueryClient {
   return new QueryClient({
     defaultOptions: {
       queries: {
-        retry: shouldRetry,
+        // "always", not TanStack's default "online": offline, an "online"
+        // query PAUSES (fetchStatus "paused") and never fails, so a list sat
+        // on "Updating…" with stale cards and no Retry for as long as the
+        // network was gone (browser QA 2026-10-25 W5). With "always" the
+        // request is made, fails, and the page shows its error state with
+        // Retry (site-quality-baseline "Debounced Search and Error States").
+        networkMode: "always",
+        // Explicit: under "always" TanStack defaults it to false. On the
+        // `online` event every stale query refetches — an errored one has no
+        // data and always counts as stale — so the error states clear by
+        // themselves when the connection is back (the "online" mode's
+        // default behaviour, kept).
+        refetchOnReconnect: true,
+        retry: (failureCount, error) => shouldRetry(failureCount, error),
         // Catalogue data (players, bundles, skills) changes only on a reseed:
         // a minute of freshness avoids refetching the same list when the user
         // tabs away and back, and lets server-provided initialData stand.

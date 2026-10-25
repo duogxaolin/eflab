@@ -17,6 +17,30 @@
 #                           (default 4301; it serves a scratch database only).
 #       SMOKE_SKIP_ADMIN=1  skip the admin checks on purpose (reported SKIPPED).
 #       SMOKE_REQUIRE_ADMIN=1  a skipped admin section fails the run.
+#       PSQL            psql binary for the independent SQL (default `psql` on PATH).
+#       SMOKE_REQUIRE_REFRESH=1  the checks below that would be SKIPPED for the
+#                       schema state (migration missing, card leagues / picker
+#                       order not stored yet) FAIL instead — for the run after
+#                       the refresh (efootbase-data-refresh-1024 task 5.1), which
+#                       passes only with 0 skipped.
+#
+# Data-dependent checks (openspec efootbase-data-refresh-1024, design D8) do
+# not pin the numbers of one dump: each compares the API with an INDEPENDENT
+# read-only SQL computation of the same rule (psql, default_transaction_read_only)
+# on the database of DATABASE_URL (shell first, then the repo-root .env — the one
+# the API started here uses; with API_URL, DATABASE_URL must name the database
+# that API serves: the first SQL check compares the catalogue sizes). The dated
+# numbers stay in the specs as examples. Without psql or DATABASE_URL these
+# checks fail (they never pass without comparing).
+#
+# Schema state: the checks of procedures that read the columns of migration
+# 20261024000000_catalogue_data_refresh (player.byId / player.compare — full
+# rows —, manager.picker — its order —, the League filter — the card league —,
+# catalogue.meta) are SKIPPED, loudly and counted apart, while the database
+# lacks that migration; the checks of stored card leagues / picker order are
+# SKIPPED while a seed has not written them yet. Skips never count as passes;
+# with SMOKE_REQUIRE_REFRESH=1 — or when the independent SQL is unavailable, so
+# the schema state is unknown — they FAIL instead.
 #
 # Every check is counted; the script exits non-zero when any check fails and
 # always stops the API(s) it started and drops the scratch database it created
@@ -43,8 +67,12 @@ APASS=0
 AFAIL=0
 ADMIN_SKIPPED=""
 
+SKIP=0
+SKIPPED_NAMES=()
+
 pass() { PASS=$((PASS + 1)); echo "✓ $1"; }
 fail() { FAIL=$((FAIL + 1)); FAILED_NAMES+=("$1"); echo "✗ $1"; [ -n "${2:-}" ] && echo "    $2"; }
+skip() { SKIP=$((SKIP + 1)); SKIPPED_NAMES+=("$1 — $2"); echo "○ SKIPPED $1 — $2"; }
 
 # ---------------------------------------------------------------------------
 # API lifecycle
@@ -214,6 +242,127 @@ trpc_get() {
 result() { printf '%s' "$BODY" | py 'import json,sys; d=json.load(sys.stdin)["result"]["data"]["json"]; print(eval(sys.argv[1]))' "$1" 2>/dev/null; }
 
 # ---------------------------------------------------------------------------
+# Independent read-only SQL (design D8 of efootbase-data-refresh-1024): the
+# libpq variables of DATABASE_URL (shell first, then the repo-root .env — the
+# precedence the API started here uses); the password stays in the
+# environment of psql, never in an argument list. Every session is read-only.
+# ---------------------------------------------------------------------------
+SQL_DB_PY='
+import os, shlex, sys, urllib.parse
+root = sys.argv[1]
+q = shlex.quote
+def out(**kv): print(" ".join("%s=%s" % (k, q(v)) for k, v in kv.items()))
+url = os.environ.get("DATABASE_URL") or ""
+if not url:
+    try:
+        for line in open(os.path.join(root, ".env"), encoding="utf-8"):
+            line = line.strip()
+            if line.startswith("DATABASE_URL="):
+                url = line.split("=", 1)[1].strip().strip("\"").strip("\x27")
+    except OSError:
+        pass
+if not url:
+    out(SQL_ERR="DATABASE_URL is not set (shell or repo-root .env)"); sys.exit()
+u = urllib.parse.urlsplit(url)
+if u.scheme not in ("postgres", "postgresql") or not u.hostname or not u.path.strip("/"):
+    out(SQL_ERR="DATABASE_URL is not a postgres URL with a database name"); sys.exit()
+out(SQL_ERR="", SQL_PGHOST=u.hostname, SQL_PGPORT=str(u.port or 5432), SQL_PGUSER=urllib.parse.unquote(u.username or ""),
+    SQL_PGPASSWORD=urllib.parse.unquote(u.password or ""), SQL_DB=urllib.parse.unquote(u.path.lstrip("/")))
+'
+SQL_ERR="could not read DATABASE_URL"
+eval "$(py "$SQL_DB_PY" "$ROOT")"
+command -v "${PSQL:-psql}" >/dev/null 2>&1 || SQL_ERR="psql is not on PATH (set PSQL)"
+# sql "<query>" → rows (tab-separated), or nothing and a non-zero status.
+sql() {
+  [ -z "$SQL_ERR" ] || return 1
+  PGHOST="$SQL_PGHOST" PGPORT="$SQL_PGPORT" PGUSER="$SQL_PGUSER" PGPASSWORD="$SQL_PGPASSWORD" PGDATABASE="$SQL_DB" \
+    PGOPTIONS="-c default_transaction_read_only=on" PGCONNECT_TIMEOUT=5 \
+    "${PSQL:-psql}" -X -A -t -q -F $'\t' -v ON_ERROR_STOP=1 -c "$1" 2>/dev/null
+}
+if [ -n "$SQL_ERR" ]; then
+  echo "!!! independent SQL unavailable: $SQL_ERR — every rule check below FAILS (none passes without comparing)"
+else
+  echo "independent SQL: read-only session on database $SQL_DB ($SQL_PGHOST:$SQL_PGPORT)"
+fi
+
+# The name-or-pack search rule (player.search / player.list `q`) as SQL: a pack
+# matches when its name, folded EXACTLY like normalizeSearchQuery in
+# @eflab/shared (NFD, U+0300–U+036F removed, lower case, whitespace collapsed),
+# contains the folded term — folded here in Python, never with SQL unaccent
+# (whose folding differs). Prints the matching pack ids as a SQL list.
+FOLD_PY='
+import re, sys, unicodedata
+def fold(s):
+    s = re.sub("[̀-ͯ]", "", unicodedata.normalize("NFD", s))
+    return re.sub(r"\s+", " ", s.lower()).strip()
+term = fold(sys.argv[1])
+ids = []
+for line in sys.stdin.read().splitlines():
+    pid, _, name = line.partition("\t")
+    if term and term in fold(name):
+        if not re.fullmatch(r"[a-z0-9-]+", pid):
+            sys.exit("unexpected pack id %r" % pid)
+        ids.append(pid)
+print(",".join("\x27%s\x27" % i for i in ids) or "NULL")
+'
+PACKS_TSV="$(sql 'SELECT id, name FROM "Pack"')"
+# search_sql <term — lower-case ASCII letters, digits, spaces>: the cards the rule
+# matches as "id <tab> maxOvr <tab> name <tab> pack name", max overall DESC, id DESC.
+search_sql() {
+  local term="$1" packs
+  [[ "$term" =~ ^[a-z0-9\ ]+$ ]] || return 1
+  packs="$(printf '%s\n' "$PACKS_TSV" | py "$FOLD_PY" "$term")" || return 1
+  printf 'SELECT p.id, p."maxOvr", p.name, coalesce(pk.name, %s) FROM "Player" p LEFT JOIN "Pack" pk ON pk.id = p."featuredPackId" WHERE p."nameNormalized" LIKE %s OR p.id IN (SELECT "playerId" FROM "PackCard" WHERE "packId" IN (%s)) ORDER BY p."maxOvr" DESC, p.id DESC' \
+    "''" "'%$term%'" "$packs"
+}
+
+# Schema state (see the header): migration 20261024000000_catalogue_data_refresh
+# applied, and what a seed has written since.
+MIGRATED="no"
+LEAGUES_STORED="false"
+PICKER_STORED="false"
+DUMP_DATE=""
+if [ "$(sql "SELECT (to_regclass('public.\"CatalogueMeta\"') IS NOT NULL
+    AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'Player' AND column_name = 'leagueId')
+    AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'Manager' AND column_name = 'pickerOrder'))::text")" = "true" ]; then
+  MIGRATED="yes"
+  LEAGUES_STORED="$(sql 'SELECT (EXISTS (SELECT 1 FROM "Player" WHERE "leagueId" IS NOT NULL))::text')"
+  PICKER_STORED="$(sql 'SELECT (EXISTS (SELECT 1 FROM "Manager" WHERE "pickerOrder" IS NOT NULL))::text')"
+  DUMP_DATE="$(sql "SELECT coalesce(to_char(\"playersDumpedAt\", 'YYYY-MM-DD\"T\"HH24:MI:SS.MS\"Z\"'), '') FROM \"CatalogueMeta\" WHERE id = 1")"
+  echo "schema: migration 20261024000000_catalogue_data_refresh applied — card leagues stored: $LEAGUES_STORED, picker order stored: $PICKER_STORED, dump date: ${DUMP_DATE:-none}"
+else
+  echo "!!! schema: migration 20261024000000_catalogue_data_refresh NOT applied — the checks that read its columns are SKIPPED (see the summary)"
+fi
+# not_ready <check> <reason>: SKIPPED for the schema state, or FAILED when the
+# refresh is required (SMOKE_REQUIRE_REFRESH=1) or the state is unknown (no SQL).
+not_ready() {
+  if [ -n "$SQL_ERR" ]; then
+    fail "$1" "schema state unknown — independent SQL unavailable: $SQL_ERR"
+  elif [ "${SMOKE_REQUIRE_REFRESH:-}" = "1" ]; then
+    fail "$1" "SMOKE_REQUIRE_REFRESH=1: $2"
+  else
+    skip "$1" "$2"
+  fi
+}
+needs_migration() {
+  [ "$MIGRATED" = "yes" ] && return 0
+  not_ready "$1" "the database lacks migration 20261024000000_catalogue_data_refresh (Player.leagueId, Manager.pickerOrder, CatalogueMeta)"
+  return 1
+}
+needs_card_leagues() {
+  needs_migration "$1" || return 1
+  [ "$LEAGUES_STORED" = "true" ] && return 0
+  not_ready "$1" "no card league stored yet (written by the first seed after the migration)"
+  return 1
+}
+needs_picker_order() {
+  needs_migration "$1" || return 1
+  [ "$PICKER_STORED" = "true" ] && return 0
+  not_ready "$1" "no picker order stored yet (written by the first seed with the manager snapshot after the migration)"
+  return 1
+}
+
+# ---------------------------------------------------------------------------
 # Checks
 # ---------------------------------------------------------------------------
 
@@ -224,6 +373,19 @@ if [ "$H_CODE" = "200" ] && printf '%s' "$H_BODY" | grep -q '"status":"ok"' && p
   pass "GET /health → 200, status ok, db connected"
 else
   fail "GET /health" "code=$H_CODE body=${H_BODY:0:200}"
+fi
+
+# 1b. The SQL reads the API's database: the unfiltered list (the default
+#     scope, every card type) counts exactly the Player rows — an independent
+#     read-only count (catalog-browsing-parity "Default scope"; 50,694 on the
+#     2026-10-18 data). Every rule check below depends on this.
+trpc_get "player.list" '{"limit":1}'
+API_TOTAL="$(result 'd["total"]')"
+SQL_TOTAL="$(sql 'SELECT count(*) FROM "Player"')"
+if [ "$CODE" = "200" ] && [ -n "$SQL_TOTAL" ] && [ "$API_TOTAL" = "$SQL_TOTAL" ] && [ "$SQL_TOTAL" -gt 0 ]; then
+  pass "player.list unfiltered → $API_TOTAL cards = SELECT count(*) FROM \"Player\" (the SQL reads the API's database)"
+else
+  fail "player.list unfiltered = the independent catalogue count" "api=$API_TOTAL sql=${SQL_TOTAL:-unavailable (${SQL_ERR:-query failed})} code=$CODE"
 fi
 
 # 2. featured.list → every bundle has a unique non-empty slug and ≥ 1 card; the
@@ -264,18 +426,17 @@ else
 fi
 
 # 2b. featured.list carries the newest card release (the /packs "Last updated"
-#     chip, change efootbase-function-parity) = the release date of the first
-#     card of the New cards order; each bundle keeps its stored position
-#     (0..n-1, the /packs order).
+#     chip, change efootbase-function-parity) = the newest stored release date
+#     (independent SQL; the first card of the New cards order has it); each
+#     bundle keeps its stored position (0..n-1, the /packs order).
+NEWEST_RELEASE="$(sql "SELECT to_char(max(\"releaseDate\"), 'YYYY-MM-DD\"T\"HH24:MI:SS.MS\"Z\"') FROM \"Player\"")"
 trpc_get "player.list" '{"page":1,"limit":1,"sort":"new"}'
-NEWEST_BASE="$(result 'd["items"][0]["baseId"]')"
 NEWEST_ID="$(result 'd["items"][0]["id"]')"
-trpc_get "player.byId" "{\"baseId\":\"$NEWEST_BASE\",\"cardId\":\"$NEWEST_ID\"}"
-NEWEST_RELEASE="$(result 'd["releaseDate"]')"
-if [ "$FB_CODE" = "200" ] && [ -n "$FB_NEWEST" ] && [ "$FB_NEWEST" != "None" ] && [ "$FB_NEWEST" = "$NEWEST_RELEASE" ] && [ "$FB_POSITIONS" = "True" ]; then
-  pass "featured.list newestCardRelease = $FB_NEWEST (the newest card's release); bundle positions 0..n-1"
+NEWEST_ID_SQL="$(sql 'SELECT id FROM "Player" ORDER BY "releaseDate" DESC NULLS LAST, id DESC LIMIT 1')"
+if [ "$FB_CODE" = "200" ] && [ -n "$FB_NEWEST" ] && [ "$FB_NEWEST" != "None" ] && [ "$FB_NEWEST" = "$NEWEST_RELEASE" ] && [ "$FB_POSITIONS" = "True" ] && [ -n "$NEWEST_ID" ] && [ "$NEWEST_ID" = "$NEWEST_ID_SQL" ]; then
+  pass "featured.list newestCardRelease = $FB_NEWEST (the newest stored release, SQL); New cards starts with that card ($NEWEST_ID); bundle positions 0..n-1"
 else
-  fail "featured.list newestCardRelease / positions" "newest=$FB_NEWEST expected=$NEWEST_RELEASE positions=$FB_POSITIONS code=$FB_CODE"
+  fail "featured.list newestCardRelease / positions" "newest=$FB_NEWEST expected=$NEWEST_RELEASE positions=$FB_POSITIONS first=$NEWEST_ID sql_first=$NEWEST_ID_SQL code=$FB_CODE"
 fi
 
 # 3. removed procedures answer 404 (community / feed / tierList / user / pages /
@@ -292,19 +453,27 @@ else
   fail "manager.list / pack.list → 404" "manager=$MANAGER_CODE pack=$CODE body=${BODY:0:160}"
 fi
 
-# 4. skill.list → exactly 84 skills (67 original + 17 added by eflab-parity-fixes)
+# 4. skill.list → every released skill (84 on the 2026-10-18 data: 67 original +
+#    17 added by eflab-parity-fixes) = the independent count of released rows,
+#    each with its holder count (the /wiki/skills rarity rank is computed from
+#    these) = the PlayerSkill count of that skill.
 trpc_get "skill.list" '{}'
 SKILL_COUNT="$(result 'len(d)')"
-if [ "$CODE" = "200" ] && [ "$SKILL_COUNT" = "84" ]; then
-  pass "skill.list → 84 skills"
+SKILL_COUNT_SQL="$(sql 'SELECT count(*) FROM "Skill" WHERE released')"
+SKILL_HOLDERS_API="$(result '",".join("%d:%d" % (s["id"], s["playerCount"]) for s in sorted(d, key=lambda s: s["id"]))')"
+SKILL_HOLDERS_SQL="$(sql 'SELECT string_agg(s.id || '"':'"' || (SELECT count(*) FROM "PlayerSkill" ps WHERE ps."skillId" = s.id), '"','"' ORDER BY s.id) FROM "Skill" s WHERE s.released')"
+if [ "$CODE" = "200" ] && [ -n "$SKILL_COUNT_SQL" ] && [ "$SKILL_COUNT" = "$SKILL_COUNT_SQL" ] && [ "$SKILL_COUNT" -gt 0 ] && [ -n "$SKILL_HOLDERS_SQL" ] && [ "$SKILL_HOLDERS_API" = "$SKILL_HOLDERS_SQL" ]; then
+  pass "skill.list → $SKILL_COUNT skills = the released rows (SQL); every holder count = its PlayerSkill count"
 else
-  fail "skill.list → 84 skills" "code=$CODE got=$SKILL_COUNT"
+  fail "skill.list = the released skills with their holder counts" "code=$CODE api=$SKILL_COUNT sql=$SKILL_COUNT_SQL holders_equal=$([ "$SKILL_HOLDERS_API" = "$SKILL_HOLDERS_SQL" ] && echo yes || echo no)"
 fi
 
 # 4b. static efootbase data (efootbase-static-data; needs a seed with the
-#     dump/efootbase/static snapshot): 67 grouped skills (23 Showtime + 44 Classic)
-#     each with a description and an R2 icon URL, 17 "Other" entries, no hidden
-#     (unreleased) skill, effects carry eFootLab stat names
+#     dump/efootbase/static snapshot): the grouped skills (23 Showtime + 44
+#     Classic on 2026-10-18) each with a description and an R2 icon URL, the
+#     "Other" entries (17), no hidden (unreleased) skill, the skills with
+#     effects (28) carrying eFootLab stat names — each count equal to the
+#     independent SQL count of the stored rows.
 SKILL_STATIC="$(result '"%d %d %d %d %d %d %d" % (
   sum(1 for s in d if s["group"] == "showtime"),
   sum(1 for s in d if s["group"] == "classic"),
@@ -313,10 +482,14 @@ SKILL_STATIC="$(result '"%d %d %d %d %d %d %d" % (
   sum(1 for s in d if not s["released"] or s["slug"] in ("sharp-cut", "beast-drive", "decisive-pass", "gk-rush-out", "gk-aerial-claim")),
   sum(1 for s in d if s["effects"]),
   sum(1 for s in d for e in s["effects"] if e["stat"] in ("tackling", "jumping", "setPieceTaking", "set_piece_taking")))')"
-if [ "$CODE" = "200" ] && [ "$SKILL_STATIC" = "23 44 17 67 0 28 0" ]; then
-  pass "skill.list static data → Showtime 23 · Classic 44 · Other 17 · 67 with description + icon · 0 hidden · 28 with effects (eFootLab stat names)"
+SKILL_STATIC_SQL="$(sql "SELECT concat_ws(' ',
+  count(*) FILTER (WHERE \"group\" = 'SHOWTIME'), count(*) FILTER (WHERE \"group\" = 'CLASSIC'), count(*) FILTER (WHERE \"group\" IS NULL),
+  count(*) FILTER (WHERE \"group\" IS NOT NULL AND description <> '' AND \"iconKey\" LIKE 'skills/Skill\\_%.webp'),
+  0, count(*) FILTER (WHERE effects <> '[]'::jsonb), 0) FROM \"Skill\" WHERE released")"
+if [ "$CODE" = "200" ] && [ -n "$SKILL_STATIC_SQL" ] && [ "$SKILL_STATIC" = "$SKILL_STATIC_SQL" ] && [ "${SKILL_STATIC%% *}" -gt 0 ]; then
+  pass "skill.list static data → Showtime · Classic · Other · with description + icon · hidden · with effects · raw stat names = $SKILL_STATIC (SQL: $SKILL_STATIC_SQL)"
 else
-  fail "skill.list static data (expected '23 44 17 67 0 28 0')" "code=$CODE got='$SKILL_STATIC'"
+  fail "skill.list static data = the stored rows" "code=$CODE api='$SKILL_STATIC' sql='$SKILL_STATIC_SQL'"
 fi
 trpc_get "skill.byId" '{"slug":"momentum-dribbling"}'
 MD="$(result '"%s|%s|%s|%s" % (d["group"], ",".join("%s+%d" % (e["stat"], e["value"]) for e in d["effects"]), bool(d["activation"]), d["iconUrl"].rsplit("/", 1)[-1])')"
@@ -332,32 +505,57 @@ if [ "$ICON_CODE" = "200 image/webp" ]; then
 else
   fail "skill icon on R2 → 200 image/webp" "url=$ICON_URL got=$ICON_CODE"
 fi
-# 4c. manager.picker (change efootbase-exact-model-managers): the 69 picker
-#     managers, rating DESC then id ASC, each with 1–2 eFootLab stat pills (24
-#     have one pill on efootbase) and an image URL on the configured R2 host
-#     (the host the skill icon above came from); one image answers 200 webp.
-#     A malformed input is a 4xx, never a 5xx.
+# 4c. manager.picker (change efootbase-exact-model-managers; order since
+#     efootbase-data-refresh-1024, catalogue-data-refresh "Manager Picker
+#     Order"): exactly the picker managers (70 on 2026-10-24, 46 with two pills;
+#     69 / 45 on 2026-10-18)
+#     in the order rating DESC, pickerOrder ASC NULLS LAST, id ASC — the same ids
+#     in the same order as the independent SQL —, each with 1–2 eFootLab stat
+#     pills and an image URL on the configured R2 host (the host the skill icon
+#     above came from); one image answers 200 webp. Once a seed stored the
+#     order: every picker manager has one, distinct 0…n−1, none outside the
+#     picker. A malformed input is a 4xx, never a 5xx.
 BASE_STATS_PY='["offensiveAwareness","ballControl","dribbling","tightPossession","lowPass","loftedPass","finishing","heading","placeKicking","curl","speed","acceleration","kickingPower","jump","physicalContact","balance","stamina","defensiveAwareness","ballWinning","defensiveEngagement","aggression","gkAwareness","gkCatching","gkParrying","gkReflexes","gkReach"]'
 ICON_HOST="$(py 'import sys,urllib.parse; print(urllib.parse.urlsplit(sys.argv[1]).netloc)' "$ICON_URL")"
-trpc_get "manager.picker" '{}'
-MP="$(result "'%d|%s|%s|%d|%d|%d|%s' % (len(d), [ (-m['rating'], int(m['id'])) for m in d ] == sorted((-m['rating'], int(m['id'])) for m in d), all(1 <= len(m['pills']) <= 2 and len(set(m['pills'])) == len(m['pills']) and all(p in $BASE_STATS_PY for p in m['pills']) for m in d), sum(len(m['pills']) == 2 for m in d), len({m['id'] for m in d}), sum(83 <= m['rating'] <= 90 and bool(m['name']) for m in d), all(m['imageUrl'] and m['imageUrl'].split('/')[2] == '$ICON_HOST' for m in d))")"
-MGR_IMG="$(result 'd[0]["imageUrl"]')"
-if [ "$CODE" = "200" ] && [ "$MP" = "69|True|True|45|69|69|True" ]; then
-  pass "manager.picker → 69 managers, rating desc then id asc, 1–2 valid pills each (45 with two), ratings 83–90, images on $ICON_HOST"
-else
-  fail "manager.picker (expected '69|True|True|45|69|69|True')" "code=$CODE got='$MP' body=${BODY:0:200}"
+if needs_migration "manager.picker (order by the stored picker order)"; then
+  trpc_get "manager.picker" '{}'
+  MP="$(result "'%d|%s|%d|%d|%d|%s' % (len(d), all(1 <= len(m['pills']) <= 2 and len(set(m['pills'])) == len(m['pills']) and all(p in $BASE_STATS_PY for p in m['pills']) for m in d), sum(len(m['pills']) == 2 for m in d), len({m['id'] for m in d}), sum(83 <= m['rating'] <= 90 and bool(m['name']) for m in d), all(m['imageUrl'] and m['imageUrl'].split('/')[2] == '$ICON_HOST' for m in d))")"
+  MP_IDS="$(result '",".join(m["id"] for m in d)')"
+  MGR_IMG="$(result 'd[0]["imageUrl"]')"
+  MP_SQL_N="$(sql 'SELECT count(*) || '"'|'"' || count(*) FILTER (WHERE "booster2Stat" IS NOT NULL) FROM "Manager" WHERE "inPicker"')"
+  MP_SQL_IDS="$(sql 'SELECT string_agg(id::text, '"','"' ORDER BY rating DESC, "pickerOrder" ASC NULLS LAST, id ASC) FROM "Manager" WHERE "inPicker"')"
+  MP_N="${MP_SQL_N%%|*}"
+  if [ "$CODE" = "200" ] && [ -n "$MP_SQL_IDS" ] && [ "$MP_IDS" = "$MP_SQL_IDS" ] && [ "$MP" = "$MP_N|True|${MP_SQL_N#*|}|$MP_N|$MP_N|True" ] && [ "$MP_N" -gt 0 ]; then
+    pass "manager.picker → $MP_N managers = the inPicker rows in the order rating DESC, pickerOrder, id (SQL); 1–2 valid pills each (${MP_SQL_N#*|} with two), ratings 83–90, images on $ICON_HOST"
+  else
+    fail "manager.picker = the inPicker rows in the order rating, pickerOrder, id (SQL)" "code=$CODE got='$MP' sql_counts='$MP_SQL_N' same_order=$([ "$MP_IDS" = "$MP_SQL_IDS" ] && echo yes || echo no) body=${BODY:0:200}"
+  fi
+  MGR_IMG_CODE="$(curl -sS -m 10 -o /dev/null -I -w '%{http_code} %{content_type}' "$MGR_IMG" 2>/dev/null || echo 000)"
+  if [ "$MGR_IMG_CODE" = "200 image/webp" ]; then
+    pass "picker manager image on R2 → 200 image/webp"
+  else
+    fail "picker manager image on R2 → 200 image/webp" "url=$MGR_IMG got=$MGR_IMG_CODE"
+  fi
 fi
-MGR_IMG_CODE="$(curl -sS -m 10 -o /dev/null -I -w '%{http_code} %{content_type}' "$MGR_IMG" 2>/dev/null || echo 000)"
-if [ "$MGR_IMG_CODE" = "200 image/webp" ]; then
-  pass "picker manager image on R2 → 200 image/webp"
-else
-  fail "picker manager image on R2 → 200 image/webp" "url=$MGR_IMG got=$MGR_IMG_CODE"
+if needs_picker_order "picker order stored for every picker manager"; then
+  PO="$(sql 'SELECT concat_ws('"'|'"', count(*) FILTER (WHERE "inPicker"), count(DISTINCT "pickerOrder") FILTER (WHERE "inPicker"),
+    min("pickerOrder") FILTER (WHERE "inPicker"), max("pickerOrder") FILTER (WHERE "inPicker"),
+    count(*) FILTER (WHERE "inPicker" AND "pickerOrder" IS NULL), count(*) FILTER (WHERE NOT "inPicker" AND "pickerOrder" IS NOT NULL)) FROM "Manager"')"
+  PO_N="${PO%%|*}"
+  if [ -n "$PO_N" ] && [ "$PO" = "$PO_N|$PO_N|0|$((PO_N - 1))|0|0" ]; then
+    pass "picker order: the $PO_N picker managers hold the distinct orders 0…$((PO_N - 1)), no other manager has one (SQL)"
+  else
+    fail "picker order 0…n−1 on the picker managers only" "got='$PO' (n|distinct|min|max|picker without|others with)"
+  fi
 fi
-BAD_CODE="$(curl -sS -m 10 -o /dev/null -w '%{http_code}' "$API/trpc/manager.picker?input=%7Bnot-json" 2>/dev/null || echo 000)"
-if [ "${BAD_CODE:0:1}" = "4" ] || [ "$BAD_CODE" = "200" ]; then
-  pass "manager.picker with a malformed input → $BAD_CODE (no 5xx)"
-else
-  fail "manager.picker with a malformed input → no 5xx" "code=$BAD_CODE"
+# (manager.picker ignores its input, so a malformed one runs the query: gated like it.)
+if needs_migration "manager.picker with a malformed input → no 5xx"; then
+  BAD_CODE="$(curl -sS -m 10 -o /dev/null -w '%{http_code}' "$API/trpc/manager.picker?input=%7Bnot-json" 2>/dev/null || echo 000)"
+  if [ "${BAD_CODE:0:1}" = "4" ] || [ "$BAD_CODE" = "200" ]; then
+    pass "manager.picker with a malformed input → $BAD_CODE (no 5xx)"
+  else
+    fail "manager.picker with a malformed input → no 5xx" "code=$BAD_CODE"
+  fi
 fi
 
 trpc_get "skill.byId" '{"slug":"sharp-cut"}'
@@ -374,8 +572,12 @@ fi
 #     phenomenal-pass, heading, rising-shot, acrobatic-clearance), and a leader
 #     (the holder with the highest max overall, ties by the higher card id);
 #     skill.byId answers both slugs; skill.players gives the leader and the
-#     best card of 12 other base players (Fortress / Long Reach Tackle on the
-#     2026-10-18 data, survey 2026-10-23 S3 §6), the old page / limit ignored.
+#     best card of 12 other base players (survey 2026-10-23 S3 §6), the old
+#     page / limit ignored. Leaders and top cards are compared with the same
+#     rule in independent SQL (window functions; on the 2026-10-18 data the
+#     Fortress leader was Rijkaard 88045755960808, then 12 rows ending with
+#     Desailly, Cannavaro 88036360723173; Long Reach Tackle: Rijkaard, then
+#     Maldini, Stam, Nesta).
 trpc_get "skill.list" '{}'
 SK_WIKI="$(result '(lambda g: "%d|%s|%s|%s|%s|%d" % (
   len(g),
@@ -384,12 +586,29 @@ SK_WIKI="$(result '(lambda g: "%d|%s|%s|%s|%s|%d" % (
   ",".join(sorted(s["publicSlug"] for s in d if s["publicSlug"] != s["slug"])),
   all(s["leader"] and s["leader"]["maxOvr"] >= 40 for s in g if s["playerCount"] > 0),
   sum(1 for s in d if s["group"] is None and (s["key"] is not None or s["publicSlug"] != s["slug"]))))([s for s in d if s["group"]])')"
-FORTRESS_LEADER="$(result 'next(s["leader"]["id"] for s in d if s["slug"] == "fortress")')"
-if [ "$CODE" = "200" ] && [ "$SK_WIKI" = "67|True|True|acrobatic-clearance,heading,phenomenal-pass,rising-shot|True|0" ] && [ "$FORTRESS_LEADER" = "88045755960808" ]; then
-  pass "skill.list → 67 grouped skills with key, public slug (unique, no clash; 4 differ: acrobatic-clearance, heading, phenomenal-pass, rising-shot) and leader; Fortress leader Rijkaard 88045755960808"
+SK_LEADERS="$(result '",".join("%d:%s" % (s["id"], s["leader"]["id"] if s["leader"] else "-") for s in sorted(d, key=lambda s: s["id"]))')"
+SK_GROUPED_SQL="$(sql 'SELECT count(*) FROM "Skill" WHERE released AND "group" IS NOT NULL')"
+SK_LEADERS_SQL="$(sql 'SELECT string_agg(s.id || '"':'"' || coalesce(l.id::text, '"'-'"'), '"','"' ORDER BY s.id)
+  FROM "Skill" s LEFT JOIN (
+    SELECT "skillId", id FROM (
+      SELECT ps."skillId", p.id, row_number() OVER (PARTITION BY ps."skillId" ORDER BY p."maxOvr" DESC, p.id DESC) AS rn
+      FROM "PlayerSkill" ps JOIN "Player" p ON p.id = ps."playerId") ranked
+    WHERE rn = 1) l ON l."skillId" = s.id
+  WHERE s.released')"
+if [ "$CODE" = "200" ] && [ -n "$SK_GROUPED_SQL" ] && [ "$SK_WIKI" = "$SK_GROUPED_SQL|True|True|acrobatic-clearance,heading,phenomenal-pass,rising-shot|True|0" ] && [ -n "$SK_LEADERS_SQL" ] && [ "$SK_LEADERS" = "$SK_LEADERS_SQL" ]; then
+  pass "skill.list → $SK_GROUPED_SQL grouped skills (SQL) with key, public slug (unique, no clash; 4 differ: acrobatic-clearance, heading, phenomenal-pass, rising-shot); every skill's leader = its holder with the highest max overall, then card id (SQL)"
 else
-  fail "skill.list public slugs / keys / leaders (expected '67|True|True|acrobatic-clearance,heading,phenomenal-pass,rising-shot|True|0')" "code=$CODE got='$SK_WIKI' fortress=$FORTRESS_LEADER"
+  fail "skill.list public slugs / keys / leaders (expected '$SK_GROUPED_SQL|True|True|acrobatic-clearance,heading,phenomenal-pass,rising-shot|True|0' and the SQL leaders)" "code=$CODE got='$SK_WIKI' leaders_equal=$([ "$SK_LEADERS" = "$SK_LEADERS_SQL" ] && echo yes || echo no)"
 fi
+# top_cards_sql <slug>: the best card of each base player holding the skill,
+# max overall DESC then id DESC, first 13 (leader + 12) — "id <tab> name".
+top_cards_sql() {
+  sql "SELECT id, name FROM (
+    SELECT p.id, p.name, p.\"maxOvr\", row_number() OVER (PARTITION BY p.\"baseId\" ORDER BY p.\"maxOvr\" DESC, p.id DESC) AS rn
+    FROM \"PlayerSkill\" ps JOIN \"Player\" p ON p.id = ps.\"playerId\" JOIN \"Skill\" s ON s.id = ps.\"skillId\"
+    WHERE s.slug = '$1') best
+  WHERE rn = 1 ORDER BY \"maxOvr\" DESC, id DESC LIMIT 13"
+}
 trpc_get "skill.byId" '{"slug":"phenomenal-pass"}'
 PP_PUBLIC="$(result '"%s|%s|%s" % (d["slug"], d["publicSlug"], d["key"])')"
 trpc_get "skill.byId" '{"slug":"phenomenal-passing"}'
@@ -400,18 +619,22 @@ else
   fail "skill.byId by public / stored slug" "public=$PP_PUBLIC stored=$PP_STORED code=$CODE"
 fi
 trpc_get "skill.players" '{"slug":"fortress","page":3,"limit":24}'
-FORTRESS="$(result '"%s|%d|%s|%s|%s|%s" % (d["leader"]["id"], len(d["rows"]), d["rows"][-1]["id"], d["rows"][-2]["name"], "88039581948640" in [r["id"] for r in d["rows"]], len({r["baseId"] for r in d["rows"]} | {d["leader"]["baseId"]}) == 13 and [ (-r["maxOvr"], -int(r["id"])) for r in d["rows"] ] == sorted((-r["maxOvr"], -int(r["id"])) for r in d["rows"]))')"
-if [ "$CODE" = "200" ] && [ "$FORTRESS" = "88045755960808|12|88036360723173|Marcel Desailly|False|True" ]; then
-  pass "skill.players fortress → leader Rijkaard, 12 rows (one per base player, max overall order) ending with Cannavaro 88036360723173 after Desailly, without the second Thuram 88039581948640 (old page / limit ignored)"
+FORTRESS="$(result '"\n".join("%s\t%s" % (r["id"], r["name"]) for r in ([d["leader"]] if d["leader"] else []) + d["rows"])')"
+FORTRESS_SHAPE="$(result '"%d|%s" % (len(d["rows"]), len({r["baseId"] for r in d["rows"]} | {d["leader"]["baseId"]}) == len(d["rows"]) + 1 and [ (-r["maxOvr"], -int(r["id"])) for r in d["rows"] ] == sorted((-r["maxOvr"], -int(r["id"])) for r in d["rows"]))')"
+FORTRESS_SQL="$(top_cards_sql fortress)"
+FORTRESS_N_SQL="$(printf '%s\n' "$FORTRESS_SQL" | grep -c .)"
+if [ "$CODE" = "200" ] && [ -n "$FORTRESS_SQL" ] && [ "$FORTRESS" = "$FORTRESS_SQL" ] && [ "$FORTRESS_SHAPE" = "$((FORTRESS_N_SQL - 1))|True" ]; then
+  pass "skill.players fortress → leader $(printf '%s' "$FORTRESS_SQL" | head -n 1 | cut -f2) + $((FORTRESS_N_SQL - 1)) rows (one per base player, max overall order) = the SQL top cards (old page / limit ignored)"
 else
-  fail "skill.players fortress (expected '88045755960808|12|88036360723173|Marcel Desailly|False|True')" "code=$CODE got='$FORTRESS' body=${BODY:0:200}"
+  fail "skill.players fortress = the SQL top cards (leader + 12, one per base player)" "code=$CODE shape='$FORTRESS_SHAPE' api_first='$(printf '%s' "$FORTRESS" | head -n 1)' sql_first='$(printf '%s' "$FORTRESS_SQL" | head -n 1)' body=${BODY:0:200}"
 fi
 trpc_get "skill.players" '{"slug":"long-reach-tackle"}'
-LRT="$(result '"%s|%s" % (d["leader"]["name"], ",".join(r["name"] for r in d["rows"][:3]))')"
-if [ "$CODE" = "200" ] && [ "$LRT" = "Frank Rijkaard|Paolo Maldini,Jaap Stam,Alessandro Nesta" ]; then
-  pass "skill.players long-reach-tackle → leader Rijkaard, then Maldini, Stam, Nesta"
+LRT="$(result '"\n".join("%s\t%s" % (r["id"], r["name"]) for r in ([d["leader"]] if d["leader"] else []) + d["rows"])')"
+LRT_SQL="$(top_cards_sql long-reach-tackle)"
+if [ "$CODE" = "200" ] && [ -n "$LRT_SQL" ] && [ "$LRT" = "$LRT_SQL" ]; then
+  pass "skill.players long-reach-tackle → $(printf '%s\n' "$LRT_SQL" | head -n 4 | cut -f2 | paste -sd, -)… = the SQL top cards"
 else
-  fail "skill.players long-reach-tackle (expected 'Frank Rijkaard|Paolo Maldini,Jaap Stam,Alessandro Nesta')" "code=$CODE got='$LRT'"
+  fail "skill.players long-reach-tackle = the SQL top cards" "code=$CODE api='$(printf '%s' "$LRT" | head -n 4 | cut -f2 | paste -sd, -)' sql='$(printf '%s' "$LRT_SQL" | head -n 4 | cut -f2 | paste -sd, -)'"
 fi
 trpc_get "skill.players" '{"slug":"sharp-cut"}'
 if [ "$CODE" = "200" ] && [ "$(result 'd["leader"] is None and d["rows"] == []')" = "True" ]; then
@@ -459,7 +682,9 @@ else
 fi
 
 # 5c. sort presets (New cards · High to low · Low to high, change
-#     efootbase-function-parity; the former trending / top are still accepted):
+#     efootbase-function-parity; Top rated since task 6.3 of
+#     efootbase-data-refresh-1024 — TOP_RATED in @eflab/shared, measured
+#     2026-10-24; the former trending is still accepted as New cards):
 #     each answers 200 and pages 1–5 carry no duplicate id
 for PRESET in new highest lowest trending top; do
   P_IDS="$(mktemp -t eflab-smoke-preset.XXXXXX)"
@@ -482,7 +707,8 @@ done
 # reference's rule, survey 2026-10-23 S2 §2): max overall DESC, id DESC /
 # max overall ASC, id ASC — page 1 is in that exact order, starts at the
 # catalogue's highest / lowest max overall (the maxOvr field sort agrees), and
-# the legacy presets read as the new ones (top = highest, trending = new).
+# the legacy preset reads as the new one (trending = new; `top` is Top rated,
+# checked against SQL in 5c-top below).
 # sort_ids <preset> [extra JSON members]: the page's ids, comma-separated, or
 # nothing when the call failed. The second argument is optional (`${2:-}`:
 # under `set -u` a bare `$2` aborted the command substitution, both sides of
@@ -499,15 +725,13 @@ trpc_get "player.list" '{"page":1,"limit":1,"sort":"maxOvr","order":"desc"}'
 FIELD_MAX="$(result 'd["items"][0]["maxOvr"]')"
 trpc_get "player.list" '{"page":1,"limit":1,"sort":"maxOvr","order":"asc"}'
 FIELD_MIN="$(result 'd["items"][0]["maxOvr"]')"
-SORT_TOP="$(sort_ids top)"
-SORT_HIGHEST="$(sort_ids highest)"
 SORT_TRENDING="$(sort_ids trending)"
 SORT_NEW="$(sort_ids new)"
 # 48 ids = 47 commas; two empty answers must never compare equal.
 ids48() { [ "$(printf '%s' "$1" | tr -cd ',' | wc -c | tr -d ' ')" = "47" ]; }
-LEGACY_SAME="$(ids48 "$SORT_TOP" && ids48 "$SORT_TRENDING" && [ "$SORT_TOP" = "$SORT_HIGHEST" ] && [ "$SORT_TRENDING" = "$SORT_NEW" ] && echo yes || echo no)"
+LEGACY_SAME="$(ids48 "$SORT_TRENDING" && [ "$SORT_TRENDING" = "$SORT_NEW" ] && echo yes || echo no)"
 if [ "$HI_ORDER" = "True" ] && [ "$LO_ORDER" = "True" ] && [ -n "$HI_MAX" ] && [ "$HI_MAX" = "$FIELD_MAX" ] && [ "$LO_MIN" = "$FIELD_MIN" ] && [ "$LEGACY_SAME" = "yes" ]; then
-  pass "sort=highest → max overall DESC, id DESC from $HI_MAX; sort=lowest → max overall ASC, id ASC from $LO_MIN; legacy top = highest, trending = new"
+  pass "sort=highest → max overall DESC, id DESC from $HI_MAX; sort=lowest → max overall ASC, id ASC from $LO_MIN; legacy trending = new"
 else
   fail "sort=highest / lowest by max overall with the id tiebreak; legacy presets" "hi_order=$HI_ORDER lo_order=$LO_ORDER hi=$HI_MAX/$FIELD_MAX lo=$LO_MIN/$FIELD_MIN legacy=$LEGACY_SAME"
 fi
@@ -521,6 +745,57 @@ if [ -n "$LEG_HI" ] && [ "$LEG_HI" = "$LEG_FIELD" ]; then
   pass "Legendary High to low = the max overall order (48 ids, id tiebreak)"
 else
   fail "Legendary High to low = the max overall order" "hi=${LEG_HI:0:80} field=${LEG_FIELD:0:80}"
+fi
+
+# 5c-top. Top rated (catalogue-data-refresh "Top Rated Sort"; design D7 result of
+#     efootbase-data-refresh-1024, measured 2026-10-24: at least 10 votes, the
+#     average DESC, then the higher card id): the whole list, read page by page
+#     (200 a page), is exactly the independent SQL set in the same order — for
+#     every card, for Standard alone, for Icons (the spec scenario's set), and with a second card type plus a
+#     Community Rating minimum; the listed cards' smallest vote count is 10
+#     (cards with exactly 10 votes are listed, none with fewer).
+# top_all '<extra JSON members>' → "total|id,id,…" over every page; nothing on a failure.
+top_all() {
+  local extra="${1:-}" p=1 ids="" total="" chunk=""
+  while :; do
+    trpc_get "player.list" "{\"page\":$p,\"limit\":200,\"sort\":\"top\"$extra}"
+    [ "$CODE" = "200" ] || return 0
+    total="$(result 'd["total"]')"
+    case "$total" in ''|*[!0-9]*) return 0 ;; esac
+    chunk="$(result '",".join(i["id"] for i in d["items"])')"
+    [ -n "$chunk" ] && ids="${ids:+$ids,}$chunk"
+    [ $((p * 200)) -ge "$total" ] && break
+    p=$((p + 1))
+    [ "$p" -le 20 ] || return 0
+  done
+  echo "$total|$ids"
+}
+# top_sql '<extra SQL predicate>' → "count|id,id,…" by the same rule, computed by Postgres.
+top_sql() {
+  sql "SELECT count(*) || '|' || coalesce(string_agg(id::text, ',' ORDER BY \"avgRating\" DESC, id DESC), '') FROM \"Player\"
+    WHERE \"ratingCount\" >= 10 AND \"avgRating\" IS NOT NULL ${1:-}"
+}
+TR_ALL="$(top_all)"
+TR_ALL_SQL="$(top_sql)"
+TR_STD="$(top_all ',"cardTypeIn":["STANDARD"]')"
+TR_STD_SQL="$(top_sql "AND \"cardType\" = 'STANDARD'")"
+TR_ICONS="$(top_all ',"cardTypeIn":["LEGENDARY"]')"
+TR_ICONS_SQL="$(top_sql "AND \"cardType\" = 'LEGENDARY'")"
+TR_MIX="$(top_all ',"cardTypeIn":["STANDARD","SELECTION"],"ratingMin":8')"
+TR_MIX_SQL="$(top_sql "AND \"cardType\" IN ('STANDARD', 'SELECTION') AND \"avgRating\" >= 8")"
+# The listed cards' vote counts (ids are digits only — checked before they reach SQL).
+TR_VOTES=""
+if printf '%s' "${TR_ALL#*|}" | grep -Eq '^[0-9]+(,[0-9]+)*$'; then
+  TR_VOTES="$(sql "SELECT min(\"ratingCount\") || '|' || count(*) FILTER (WHERE \"ratingCount\" = 10) FROM \"Player\" WHERE id IN (${TR_ALL#*|})")"
+fi
+TR_DUP="$(printf '%s' "${TR_ALL#*|}" | tr ',' '\n' | sort | uniq -d | wc -l | tr -d ' ')"
+if [ -n "$TR_ALL_SQL" ] && [ "$TR_ALL" = "$TR_ALL_SQL" ] && [ "${TR_ALL%%|*}" -gt 0 ] 2>/dev/null && [ "$TR_DUP" = "0" ] \
+  && [ -n "$TR_STD_SQL" ] && [ "$TR_STD" = "$TR_STD_SQL" ] && [ -n "$TR_ICONS_SQL" ] && [ "$TR_ICONS" = "$TR_ICONS_SQL" ] \
+  && [ -n "$TR_MIX_SQL" ] && [ "$TR_MIX" = "$TR_MIX_SQL" ] \
+  && [ "${TR_VOTES%%|*}" = "10" ] && [ "${TR_VOTES#*|}" -gt 0 ] 2>/dev/null; then
+  pass "sort=top → ${TR_ALL%%|*} cards = SQL (ratingCount ≥ 10, avgRating DESC, id DESC; same ids, same order, no duplicate across pages); Standard ${TR_STD%%|*}, Icons ${TR_ICONS%%|*} and Standard + Selection with rating ≥ 8 ${TR_MIX%%|*} = SQL; smallest listed vote count 10 (${TR_VOTES#*|} cards with exactly 10)"
+else
+  fail "sort=top = the measured Top rated rule (SQL)" "api=${TR_ALL%%|*} sql=${TR_ALL_SQL%%|*} same=$([ "$TR_ALL" = "$TR_ALL_SQL" ] && echo yes || echo no) dup=$TR_DUP std=${TR_STD%%|*}/${TR_STD_SQL%%|*} same=$([ "$TR_STD" = "$TR_STD_SQL" ] && echo yes || echo no) icons=${TR_ICONS%%|*}/${TR_ICONS_SQL%%|*} same=$([ "$TR_ICONS" = "$TR_ICONS_SQL" ] && echo yes || echo no) mix=${TR_MIX%%|*}/${TR_MIX_SQL%%|*} same=$([ "$TR_MIX" = "$TR_MIX_SQL" ] && echo yes || echo no) votes=$TR_VOTES"
 fi
 
 # 5d. the new filters narrow the list and never widen it; an AND of two skills
@@ -576,30 +851,40 @@ if [ -n "$POS_CF" ] && [ -n "$POS_SS" ] && [ -n "$POS_CFSS" ] && [ "$POS_CFSS" =
 else
   fail "player.list positions [CF,SS] is an OR of the registered positions CF and SS" "cf=$POS_CF ss=$POS_SS cfss=$POS_CFSS merged=$POS_MERGED code=$CODE"
 fi
-# The survey's sets (2026-10-18 data): Legendary + CB = 23, + LB = 32 —
-# registered positions; the aptitude rule gave 45 / 56.
+# The survey's sets: Legendary + CB, then + LB — registered positions (23 and
+# 32 on the 2026-10-18 data; the aptitude rule gave 45 / 56) = the independent
+# count of Legendary cards registered at CB (index 1) / CB or LB (1, 2).
 trpc_get "player.list" '{"limit":48,"cardTypeIn":["LEGENDARY"],"positions":["CB"]}'
 LEG_CB="$(result '"%d|%s" % (d["total"], all(i["registeredPosition"] == 1 for i in d["items"]))')"
 trpc_get "player.list" '{"limit":48,"cardTypeIn":["LEGENDARY"],"positions":["CB","LB"]}'
 LEG_CBLB="$(result '"%d|%s" % (d["total"], all(i["registeredPosition"] in (1, 2) for i in d["items"]))')"
-if [ "$LEG_CB" = "23|True" ] && [ "$LEG_CBLB" = "32|True" ]; then
-  pass "player.list Legendary + CB → 23, + LB → 32 (every card registered there)"
+LEG_CB_SQL="$(sql "SELECT count(*) FROM \"Player\" WHERE \"cardType\" = 'LEGENDARY' AND \"registeredPosition\" = 1")"
+LEG_CBLB_SQL="$(sql "SELECT count(*) FROM \"Player\" WHERE \"cardType\" = 'LEGENDARY' AND \"registeredPosition\" IN (1, 2)")"
+if [ -n "$LEG_CB_SQL" ] && [ "$LEG_CB" = "$LEG_CB_SQL|True" ] && [ "$LEG_CBLB" = "$LEG_CBLB_SQL|True" ] && [ "$LEG_CB_SQL" -gt 0 ] && [ "$LEG_CBLB_SQL" -gt "$LEG_CB_SQL" ]; then
+  pass "player.list Legendary + CB → $LEG_CB_SQL, + LB → $LEG_CBLB_SQL = the registered-position counts (SQL; every card registered there)"
 else
-  fail "player.list Legendary + CB = 23, + LB = 32" "cb=$LEG_CB cblb=$LEG_CBLB"
+  fail "player.list Legendary + CB / + LB = the registered-position counts" "cb=$LEG_CB sql=$LEG_CB_SQL cblb=$LEG_CBLB sql=$LEG_CBLB_SQL"
 fi
-trpc_get "player.leagues" '{}'
-LG_A="$(result 'd[0]["id"]')"
-LG_B="$(result 'd[1]["id"]')"
-trpc_get "player.list" "{\"limit\":1,\"leagueIds\":[$LG_A]}"
-LG_A_N="$(result 'd["total"]')"
-trpc_get "player.list" "{\"limit\":1,\"leagueIds\":[$LG_B]}"
-LG_B_N="$(result 'd["total"]')"
-trpc_get "player.list" "{\"limit\":1,\"leagueIds\":[$LG_A,$LG_B,$LG_A]}"
-LG_AB_N="$(result 'd["total"]')"
-if [ -n "$LG_A_N" ] && [ -n "$LG_B_N" ] && [ -n "$LG_AB_N" ] && [ "$LG_AB_N" = $((LG_A_N + LG_B_N)) ] && [ "$LG_AB_N" -gt 0 ]; then
-  pass "player.list leagueIds [$LG_A,$LG_B] → $LG_AB_N cards = $LG_A_N + $LG_B_N (OR, duplicate ignored)"
-else
-  fail "player.list leagueIds of two leagues is additive" "a=$LG_A_N b=$LG_B_N ab=$LG_AB_N code=$CODE"
+# League filter = the card's OWN league (efootbase-data-refresh-1024,
+# catalogue-data-refresh "Card League"): each list equals the independent count
+# of cards whose stored league is in it (OR, duplicate ignored).
+LG_A="" LG_B="" LG_AB_N=""
+if needs_card_leagues "player.list leagueIds = the stored card leagues (two leagues, OR)"; then
+  trpc_get "player.leagues" '{}'
+  LG_A="$(result 'd[0]["id"]')"
+  LG_B="$(result 'd[1]["id"]')"
+  trpc_get "player.list" "{\"limit\":1,\"leagueIds\":[$LG_A]}"
+  LG_A_N="$(result 'd["total"]')"
+  trpc_get "player.list" "{\"limit\":1,\"leagueIds\":[$LG_B]}"
+  LG_B_N="$(result 'd["total"]')"
+  trpc_get "player.list" "{\"limit\":1,\"leagueIds\":[$LG_A,$LG_B,$LG_A]}"
+  LG_AB_N="$(result 'd["total"]')"
+  LG_SQL="$(sql "SELECT concat_ws('|', count(*) FILTER (WHERE \"leagueId\" = $LG_A), count(*) FILTER (WHERE \"leagueId\" = $LG_B), count(*) FILTER (WHERE \"leagueId\" IN ($LG_A, $LG_B))) FROM \"Player\"")"
+  if [ -n "$LG_SQL" ] && [ "$LG_A_N|$LG_B_N|$LG_AB_N" = "$LG_SQL" ] && [ "$LG_AB_N" -gt 0 ]; then
+    pass "player.list leagueIds [$LG_A] → $LG_A_N, [$LG_B] → $LG_B_N, [$LG_A,$LG_B,$LG_A] → $LG_AB_N = the cards whose own league is in the list (SQL)"
+  else
+    fail "player.list leagueIds = the stored card leagues" "api=$LG_A_N|$LG_B_N|$LG_AB_N sql=$LG_SQL code=$CODE"
+  fi
 fi
 trpc_get "player.teams" '{}'
 TM_A="$(result 'd[0]["id"]')"
@@ -615,15 +900,22 @@ if [ -n "$TM_A_N" ] && [ -n "$TM_B_N" ] && [ -n "$TM_AB_N" ] && [ "$TM_AB_N" = $
 else
   fail "player.list clubIds of two teams is additive" "a=$TM_A_N b=$TM_B_N ab=$TM_AB_N code=$CODE"
 fi
-# AND between lists: positions ∧ leagues ∧ nations is a subset of each list alone
-trpc_get "player.list" "{\"limit\":1,\"positions\":[\"CF\",\"SS\"],\"leagueIds\":[$LG_A,$LG_B],\"nationalityIds\":[1,14]}"
-AND_N="$(result 'd["total"]')"
-trpc_get "player.list" '{"limit":1,"nationalityIds":[1,14]}'
-NAT_N="$(result 'd["total"]')"
-if [ "$CODE" = "200" ] && [ -n "$AND_N" ] && [ -n "$NAT_N" ] && [ "$AND_N" -le "$POS_CFSS" ] && [ "$AND_N" -le "$LG_AB_N" ] && [ "$AND_N" -le "$NAT_N" ]; then
-  pass "player.list positions ∧ leagueIds ∧ nationalityIds → $AND_N cards (≤ $POS_CFSS, ≤ $LG_AB_N, ≤ $NAT_N)"
+# AND between lists: positions ∧ leagues ∧ nations = the independent count of
+# the conjunction (a subset of each list alone).
+if [ -n "$LG_AB_N" ]; then
+  trpc_get "player.list" "{\"limit\":1,\"positions\":[\"CF\",\"SS\"],\"leagueIds\":[$LG_A,$LG_B],\"nationalityIds\":[1,14]}"
+  AND_N="$(result 'd["total"]')"
+  AND_CODE="$CODE"
+  trpc_get "player.list" '{"limit":1,"nationalityIds":[1,14]}'
+  NAT_N="$(result 'd["total"]')"
+  AND_SQL="$(sql "SELECT count(*) FROM \"Player\" WHERE \"registeredPosition\" IN (11, 12) AND \"leagueId\" IN ($LG_A, $LG_B) AND \"nationalityId\" IN (1, 14)")"
+  if [ "$AND_CODE" = "200" ] && [ -n "$AND_N" ] && [ "$AND_N" = "$AND_SQL" ] && [ "$AND_N" -le "$POS_CFSS" ] && [ "$AND_N" -le "$LG_AB_N" ] && [ "$AND_N" -le "$NAT_N" ]; then
+    pass "player.list positions ∧ leagueIds ∧ nationalityIds → $AND_N cards = the conjunction (SQL; ≤ $POS_CFSS, ≤ $LG_AB_N, ≤ $NAT_N)"
+  else
+    fail "player.list lists are AND-ed with each other" "and=$AND_N sql=$AND_SQL cfss=$POS_CFSS leagues=$LG_AB_N nations=$NAT_N code=$AND_CODE"
+  fi
 else
-  fail "player.list lists are AND-ed with each other" "and=$AND_N cfss=$POS_CFSS leagues=$LG_AB_N nations=$NAT_N code=$CODE"
+  not_ready "player.list positions ∧ leagueIds ∧ nationalityIds" "needs the stored card leagues (see the League check above)"
 fi
 # invalid lists → 400
 IDS_51="$(py 'print(",".join(str(i) for i in range(1, 52)))')"
@@ -680,16 +972,94 @@ trpc_get "player.list" "{\"limit\":1,\"clubIds\":[$ARSENAL_ID]}"
 TN_ID="$(result 'd["total"]')"
 trpc_get "player.list" '{"limit":1,"teamNames":["Arsenal FC"]}'
 TN_NAME="$(result 'd["total"]')"
-trpc_get "player.list" '{"limit":1,"teamNames":["Arsenal FC"],"leagueIds":[26]}'
-TN_J1="$(result 'd["total"]')"
 trpc_get "player.list" '{"limit":1,"teamNames":["No Such Team FC 1999"]}'
 TN_NONE="$(result 'd["total"]')"
 trpc_get "player.list" "{\"limit\":1,\"teamNames\":[\"Arsenal FC\"],\"clubIds\":[$ARSENAL_ID]}"
 TN_BOTH="$(result 'd["total"]')"
-if [ -n "$TN_ID" ] && [ "$TN_ID" -gt 0 ] && [ "$TN_NAME" = "$TN_ID" ] && [ "$TN_BOTH" = "$TN_ID" ] && [ "$TN_J1" = "0" ] && [ "$TN_NONE" = "0" ]; then
-  pass "player.list teamNames [Arsenal FC] → $TN_NAME = clubIds [$ARSENAL_ID]; with League J1 → 0 (AND, not narrowed); an unknown name → 0"
+TN_SQL="$(sql "SELECT count(*) FROM \"Player\" p JOIN \"Team\" t ON t.id = p.\"teamId\" WHERE t.name = 'Arsenal FC'")"
+if [ -n "$TN_ID" ] && [ "$TN_ID" -gt 0 ] && [ "$TN_NAME" = "$TN_ID" ] && [ "$TN_NAME" = "$TN_SQL" ] && [ "$TN_BOTH" = "$TN_ID" ] && [ "$TN_NONE" = "0" ]; then
+  pass "player.list teamNames [Arsenal FC] → $TN_NAME = clubIds [$ARSENAL_ID] = the team's cards (SQL); an unknown name → 0"
 else
-  fail "player.list teamNames" "id=$TN_ID name=$TN_NAME both=$TN_BOTH j1=$TN_J1 none=$TN_NONE"
+  fail "player.list teamNames" "id=$TN_ID name=$TN_NAME sql=$TN_SQL both=$TN_BOTH none=$TN_NONE"
+fi
+# Team AND League (the Team list is not narrowed by the League): Arsenal FC with
+# League J1 (26) = the Arsenal FC cards whose own league is 26 (none on the
+# 2026-10-18 data).
+if needs_card_leagues "player.list teamNames [Arsenal FC] ∧ leagueIds [26]"; then
+  trpc_get "player.list" '{"limit":1,"teamNames":["Arsenal FC"],"leagueIds":[26]}'
+  TN_J1="$(result 'd["total"]')"
+  TN_J1_SQL="$(sql "SELECT count(*) FROM \"Player\" p JOIN \"Team\" t ON t.id = p.\"teamId\" WHERE t.name = 'Arsenal FC' AND p.\"leagueId\" = 26")"
+  if [ "$CODE" = "200" ] && [ -n "$TN_J1" ] && [ "$TN_J1" = "$TN_J1_SQL" ]; then
+    pass "player.list teamNames [Arsenal FC] ∧ League J1 → $TN_J1 = the Arsenal FC cards in league 26 (SQL)"
+  else
+    fail "player.list teamNames ∧ leagueIds (AND)" "api=$TN_J1 sql=$TN_J1_SQL code=$CODE"
+  fi
+fi
+
+# 5h. Card league (efootbase-data-refresh-1024, catalogue-data-refresh "Card
+#     League"): leagues 4 ∨ 26 with Arsenal FC ∨ Vissel Kobe lists the cards
+#     whose OWN league is 4 or 26 and whose team is one of the two — the
+#     independent count (503 on the 2026-10-18 data, the reference's number;
+#     the former team-league rule gave 547) — and no Vissel Kobe card whose own
+#     league is another one (30 on 2026-10-18).
+if needs_card_leagues "player.list card league (leagues 4 ∨ 26 × Arsenal FC ∨ Vissel Kobe)"; then
+  trpc_get "player.list" '{"limit":200,"leagueIds":[4,26],"teamNames":["Arsenal FC","Vissel Kobe"],"sort":"highest"}'
+  CL_API="$(result '"%d|%s" % (d["total"], ",".join(i["id"] for i in d["items"]))')"
+  CL_SQL="$(sql "SELECT count(*) OVER () || '|', p.id FROM \"Player\" p JOIN \"Team\" t ON t.id = p.\"teamId\"
+    WHERE p.\"leagueId\" IN (4, 26) AND t.name IN ('Arsenal FC', 'Vissel Kobe') ORDER BY p.\"maxOvr\" DESC, p.id DESC LIMIT 200" \
+    | py 'import sys; rows=[l.split("\t") for l in sys.stdin.read().splitlines() if l]; print((rows[0][0] if rows else "0|") + ",".join(r[1] for r in rows))')"
+  CL_OTHER="$(sql "SELECT concat_ws('|', count(*) FILTER (WHERE p.\"leagueId\" IS DISTINCT FROM t.\"leagueId\"),
+    count(*) FILTER (WHERE t.\"leagueId\" IN (4, 26)), count(*) FILTER (WHERE t.name = 'Vissel Kobe' AND p.\"leagueId\" NOT IN (4, 26)))
+    FROM \"Player\" p JOIN \"Team\" t ON t.id = p.\"teamId\" WHERE t.name IN ('Arsenal FC', 'Vissel Kobe')")"
+  if [ "$CODE" = "200" ] && [ -n "$CL_SQL" ] && [ "$CL_API" = "$CL_SQL" ] && [ "${CL_API%%|*}" -gt 0 ]; then
+    pass "player.list leagues 4 ∨ 26 × Arsenal FC ∨ Vissel Kobe → ${CL_API%%|*} cards = the cards whose own league is 4 or 26 (SQL, same ids in High to low order); by the teams' league it would be $(printf '%s' "$CL_OTHER" | cut -d'|' -f2), $(printf '%s' "$CL_OTHER" | cut -d'|' -f3) Vissel Kobe cards of another league are not listed"
+  else
+    fail "player.list card league = the independent count" "api=${CL_API%%|*} sql=${CL_SQL%%|*} same_ids=$([ "$CL_API" = "$CL_SQL" ] && echo yes || echo no) code=$CODE"
+  fi
+fi
+
+# 5i. Community Rating (efootbase-data-refresh-1024, catalogue-data-refresh
+#     "Community Rating Filter"): ratingMin N keeps the cards whose stored
+#     average is at least N — no vote minimum, a card without ratings never
+#     matches. Icons + 10 = the independent count of Icons with an average of 10
+#     (every one exactly 10); ratingMin 2 = every card with an average ≥ 2;
+#     1 / 11 / null / a fraction → 400. avgRating is a column of the original
+#     schema, so this check needs no migration.
+trpc_get "player.list" '{"limit":200,"cardTypeIn":["LEGENDARY"],"ratingMin":10,"sort":"new"}'
+CR_ICONS="$(result '"%d|%s" % (d["total"], ",".join(i["id"] for i in d["items"]))')"
+CR_ICONS_SQL="$(sql "SELECT count(*) OVER () || '|', id FROM \"Player\" WHERE \"cardType\" = 'LEGENDARY' AND \"avgRating\" >= 10
+  ORDER BY \"releaseDate\" DESC NULLS LAST, id DESC LIMIT 200" \
+  | py 'import sys; rows=[l.split("\t") for l in sys.stdin.read().splitlines() if l]; print((rows[0][0] if rows else "0|") + ",".join(r[1] for r in rows))')"
+CR_EXACT="$(sql "SELECT count(*) FILTER (WHERE \"avgRating\" > 10) FROM \"Player\" WHERE \"cardType\" = 'LEGENDARY'")"
+trpc_get "player.list" '{"limit":1,"ratingMin":2}'
+CR_2="$(result 'd["total"]')"
+CR_UNRATED="$(sql 'SELECT count(*) FROM "Player" WHERE "avgRating" IS NULL')"
+trpc_get "player.list" '{"limit":1,"ratingMin":1}'
+C_R1="$CODE"
+trpc_get "player.list" '{"limit":1,"ratingMin":11}'
+C_R11="$CODE"
+trpc_get "player.list" '{"limit":1,"ratingMin":null}'
+C_RNULL="$CODE"
+trpc_get "player.list" '{"limit":1,"ratingMin":2.5}'
+C_RFRAC="$CODE"
+CR_2_RATED="$(sql 'SELECT count(*) FROM "Player" WHERE "avgRating" >= 2')"
+if [ -n "$CR_ICONS_SQL" ] && [ "$CR_ICONS" = "$CR_ICONS_SQL" ] && [ "$CR_EXACT" = "0" ] && [ -n "$CR_2_RATED" ] && [ "$CR_2" = "$CR_2_RATED" ] \
+  && [ "$C_R1" = "400" ] && [ "$C_R11" = "400" ] && [ "$C_RNULL" = "400" ] && [ "$C_RFRAC" = "400" ]; then
+  pass "player.list Icons + ratingMin 10 → ${CR_ICONS%%|*} cards = the Icons with an average of 10 (SQL, same ids, none above 10); ratingMin 2 → $CR_2 = the cards rated ≥ 2 ($CR_UNRATED unrated cards never match); ratingMin 1 / 11 / null / 2.5 → 400"
+else
+  fail "player.list ratingMin = the stored average rule" "icons=${CR_ICONS%%|*} sql=${CR_ICONS_SQL%%|*} same_ids=$([ "$CR_ICONS" = "$CR_ICONS_SQL" ] && echo yes || echo no) above10=$CR_EXACT r2=$CR_2 sql=$CR_2_RATED codes=$C_R1/$C_R11/$C_RNULL/$C_RFRAC"
+fi
+
+# 5j. The dump date (catalogue-data-refresh "Stored Dump Date"): catalogue.meta
+#     answers the stored CatalogueMeta.playersDumpedAt (ISO UTC) or null.
+if needs_migration "catalogue.meta = the stored dump date"; then
+  trpc_get "catalogue.meta" '{}'
+  CM="$(result 'd["playersDumpedAt"] or ""')"
+  if [ "$CODE" = "200" ] && [ "$CM" = "$DUMP_DATE" ] && { [ -n "$CM" ] || [ "${SMOKE_REQUIRE_REFRESH:-}" != "1" ]; }; then
+    pass "catalogue.meta → playersDumpedAt ${CM:-null} = CatalogueMeta (SQL)"
+  else
+    fail "catalogue.meta = the stored dump date" "api='$CM' sql='$DUMP_DATE' code=$CODE body=${BODY:0:160}"
+  fi
 fi
 trpc_get "skill.list" '{}'
 RABONA_ID="$(result 'next(s["id"] for s in d if s["key"] == "s_rabona")')"
@@ -748,11 +1118,13 @@ else
 fi
 rm -f "$IDS_FILE"
 
-# 7. compare keeps input order: [A,B] and [B,A]
+# 7. compare keeps input order: [A,B] and [B,A] (full card rows: needs the migrated schema)
 trpc_get "player.list" '{"page":1,"limit":2,"sort":"ovr","order":"desc"}'
 ID_A="$(result 'd["items"][0]["id"]')"
 ID_B="$(result 'd["items"][1]["id"]')"
-if [ -n "$ID_A" ] && [ -n "$ID_B" ] && [ "$ID_A" != "$ID_B" ]; then
+if ! needs_migration "player.compare keeps selection order"; then
+  :
+elif [ -n "$ID_A" ] && [ -n "$ID_B" ] && [ "$ID_A" != "$ID_B" ]; then
   trpc_get "player.compare" "{\"cardIds\":[\"$ID_A\",\"$ID_B\"]}"
   ORDER_AB="$(result '",".join(str(p["id"]) for p in d)')"
   trpc_get "player.compare" "{\"cardIds\":[\"$ID_B\",\"$ID_A\"]}"
@@ -789,24 +1161,42 @@ if [ "$CODE" = "200" ] && [ "$TOP_NAME" = "Lionel Messi" ]; then
 else
   fail "player.search 'Lionel Messi' → first result Lionel Messi" "code=$CODE first=$TOP_NAME"
 fi
-# A pack-name term: no card name contains "wonderkids" — the 8 cards of the
-# pack "Wonderkids 8 Oct '26", Pau Cubarsí first.
-trpc_get "player.search" '{"q":"wonderkids"}'
-WK="$(result '"%d|%s|%s|%s" % (len(d["rows"]), d["rows"][0]["name"] if d["rows"] else "", d["hasMore"], len({r["packName"] for r in d["rows"]}) == 1 and "wonderkids" in (d["rows"][0]["packName"] or "").lower())')"
-WK_ORDER="$(search_order_ok)"
-if [ "$CODE" = "200" ] && [ "$WK" = "8|Pau Cubarsí|False|True" ] && [ "$WK_ORDER" = "True" ]; then
-  pass "player.search 'wonderkids' → the 8 cards of the Wonderkids pack, Pau Cubarsí first, each with the pack name"
+# search_page_vs_sql <term>: player.search page 1 (rows: id, name, pack name;
+# hasMore) against the rule in SQL (search_sql). Sets SP_RESULT to
+# "<sql count>|<equal>" (and BODY / CODE, like trpc_get — not run in a subshell).
+SP_RESULT=""
+search_page_vs_sql() {
+  local term="$1" want
+  trpc_get "player.search" "{\"q\":\"$term\"}"
+  if ! want="$(sql "$(search_sql "$term")")"; then SP_RESULT="|sql failed"; return; fi
+  SP_RESULT="$(printf '%s' "$BODY" | py '
+import json, sys
+d = json.load(sys.stdin)["result"]["data"]["json"]
+rows = [l.split("\t") for l in sys.argv[1].splitlines() if l]
+got = [(r["id"], r["name"], r["packName"] or "") for r in d["rows"]]
+want = [(r[0], r[2], r[3]) for r in rows[:12]]
+print("%d|%s" % (len(rows), got == want and d["hasMore"] == (len(rows) > 12)))' "$want" 2>/dev/null)"
+}
+# A pack-name term: no card name contains "wonderkids" — the cards of the pack
+# "Wonderkids 8 Oct '26" (8 on the 2026-10-18 data, Pau Cubarsí first), each
+# row with its pack name.
+search_page_vs_sql wonderkids
+WK="$SP_RESULT"
+WK_NAMES="$(sql "SELECT count(*) FROM \"Player\" WHERE \"nameNormalized\" LIKE '%wonderkids%'")"
+if [ "$CODE" = "200" ] && [ "${WK#*|}" = "True" ] && [ "${WK%%|*}" -gt 0 ] && [ "$WK_NAMES" = "0" ]; then
+  pass "player.search 'wonderkids' → the ${WK%%|*} cards of the matching pack (no card name has it) = the rule in SQL: same rows, order, pack names and hasMore"
 else
-  fail "player.search 'wonderkids' (expected '8|Pau Cubarsí|False|True')" "code=$CODE got='$WK' order=$WK_ORDER body=${BODY:0:200}"
+  fail "player.search 'wonderkids' = the rule in SQL" "code=$CODE got='$WK' names_with_term=$WK_NAMES body=${BODY:0:200}"
 fi
-# Name or pack: "cote" → 7 cards, Didier Drogba (pack "Côte d'Ivoire 2006", no
-# "cote" in his name) among them.
-trpc_get "player.search" '{"q":"cote"}'
-COTE="$(result '"%d|%s" % (len(d["rows"]), next((r["packName"] for r in d["rows"] if r["id"] == "88040387251713"), "missing"))')"
-if [ "$CODE" = "200" ] && [ "$COTE" = "7|Côte d'Ivoire 2006" ]; then
-  pass "player.search 'cote' → 7 cards incl. Didier Drogba 88040387251713 (pack Côte d'Ivoire 2006)"
+# Name or pack: "cote" → the cards named "cote" plus those of the packs whose
+# folded name has it, e.g. Didier Drogba of "Côte d'Ivoire 2006" (7 cards on
+# the 2026-10-18 data).
+search_page_vs_sql cote
+COTE="$SP_RESULT"
+if [ "$CODE" = "200" ] && [ "${COTE#*|}" = "True" ] && [ "${COTE%%|*}" -gt 0 ]; then
+  pass "player.search 'cote' → ${COTE%%|*} cards = the rule in SQL (accent-folded pack names, e.g. Côte d'Ivoire)"
 else
-  fail "player.search 'cote' (expected \"7|Côte d'Ivoire 2006\")" "code=$CODE got='$COTE'"
+  fail "player.search 'cote' = the rule in SQL" "code=$CODE got='$COTE'"
 fi
 # Contiguous substring only: reversed words find nothing.
 trpc_get "player.search" '{"q":"messi lionel"}'
@@ -815,35 +1205,44 @@ if [ "$CODE" = "200" ] && [ "$(result 'len(d["rows"]) == 0 and d["hasMore"] is F
 else
   fail "player.search 'messi lionel' → no result" "code=$CODE body=${BODY:0:200}"
 fi
-# Max overall order, whole word or not: "ronald" → Cristiano Ronaldo 103,
-# Ronaldinho 102, Ronald Koeman 102 (id DESC breaks the tie); "ronaldo" →
-# Cristiano Ronaldo first.
-trpc_get "player.search" '{"q":"ronald"}'
-RONALD="$(result '"|".join("%s %d" % (r["name"], r["maxOvr"]) for r in d["rows"][:3])')"
+# Max overall order, whole word or not: "ronald" → the rule in SQL (on the
+# 2026-10-18 data Cristiano Ronaldo 103, Ronaldinho 102, Ronald Koeman 102 —
+# id DESC breaks the tie); "ronaldo" → its first row = the SQL first row
+# (Cristiano Ronaldo).
+search_page_vs_sql ronald
+RONALD="$SP_RESULT"
 RONALD_ORDER="$(search_order_ok)"
-trpc_get "player.search" '{"q":"ronaldo"}'
+RONALD_TOP3="$(result '"|".join("%s %d" % (r["name"], r["maxOvr"]) for r in d["rows"][:3])')"
+search_page_vs_sql ronaldo
+RONALDO="$SP_RESULT"
 RONALDO_TOP="$(result 'd["rows"][0]["name"]')"
-if [ "$CODE" = "200" ] && [ "$RONALD" = "Cristiano Ronaldo 103|Ronaldinho Gaúcho 102|Ronald Koeman 102" ] && [ "$RONALD_ORDER" = "True" ] && [ "$RONALDO_TOP" = "Cristiano Ronaldo" ]; then
-  pass "player.search 'ronald' → $RONALD (max overall, then id); 'ronaldo' → Cristiano Ronaldo first"
+if [ "$CODE" = "200" ] && [ "${RONALD#*|}" = "True" ] && [ "$RONALD_ORDER" = "True" ] && [ "${RONALDO#*|}" = "True" ] && [ -n "$RONALDO_TOP" ]; then
+  pass "player.search 'ronald' → $RONALD_TOP3 … = the rule in SQL (max overall, then id); 'ronaldo' → $RONALDO_TOP first (SQL)"
 else
-  fail "player.search 'ronald' / 'ronaldo' order" "code=$CODE ronald='$RONALD' order=$RONALD_ORDER ronaldo=$RONALDO_TOP"
+  fail "player.search 'ronald' / 'ronaldo' = the rule in SQL" "code=$CODE ronald='$RONALD' top3='$RONALD_TOP3' order=$RONALD_ORDER ronaldo='$RONALDO'"
 fi
-# Paging: "messi" (113 cards: 63 names + the "Leo Messi Edition …" packs) →
-# pages of 12 with hasMore, the last page (10) holds 5 and has no more; the
-# ten pages hold 113 distinct cards in one max-overall order; page 51 and a
-# 2- or 101-character term are a 400.
+# Paging: "messi" (the cards named Messi + those of the "Leo Messi Edition …"
+# packs; 113 on the 2026-10-18 data, the independent SQL count now) → pages of
+# 12 with hasMore, the last page holds the rest and has no more; the pages
+# hold exactly the SQL ids in its max-overall order; page 51 and a 2- or
+# 101-character term are a 400.
+MESSI_SQL="$(sql "$(search_sql messi)" | cut -f1,2)"
+MESSI_N_SQL="$(printf '%s\n' "$MESSI_SQL" | grep -c .)"
+MESSI_PAGES=$(( (MESSI_N_SQL + 11) / 12 ))
 MESSI_IDS="$(mktemp -t eflab-smoke-messi.XXXXXX)"
 MESSI_FAIL=""
-for P in 1 2 3 4 5 6 7 8 9 10; do
+[ "$MESSI_N_SQL" -gt 0 ] && [ "$MESSI_PAGES" -le 50 ] || MESSI_FAIL="SQL count $MESSI_N_SQL (expected 1–600)"
+for P in $(seq 1 "$MESSI_PAGES"); do
+  [ -n "$MESSI_FAIL" ] && break
   trpc_get "player.search" "{\"q\":\"messi\",\"page\":$P}"
   if [ "$CODE" != "200" ]; then MESSI_FAIL="page $P code=$CODE"; break; fi
   SHAPE="$(result '"%d|%s" % (len(d["rows"]), d["hasMore"])')"
-  if [ "$P" -lt 10 ] && [ "$SHAPE" != "12|True" ]; then MESSI_FAIL="page $P → $SHAPE"; break; fi
-  if [ "$P" = "10" ] && [ "$SHAPE" != "5|False" ]; then MESSI_FAIL="page 10 → $SHAPE"; break; fi
-  result '"\n".join("%d %s" % (r["maxOvr"], r["id"]) for r in d["rows"])' >>"$MESSI_IDS"
+  if [ "$P" -lt "$MESSI_PAGES" ] && [ "$SHAPE" != "12|True" ]; then MESSI_FAIL="page $P → $SHAPE"; break; fi
+  if [ "$P" = "$MESSI_PAGES" ] && [ "$SHAPE" != "$((MESSI_N_SQL - 12 * (MESSI_PAGES - 1)))|False" ]; then MESSI_FAIL="page $P → $SHAPE"; break; fi
+  result '"\n".join("%s\t%d" % (r["id"], r["maxOvr"]) for r in d["rows"])' >>"$MESSI_IDS"
 done
-MESSI_N="$(cut -d' ' -f2 "$MESSI_IDS" | sort -u | grep -c .)"
-MESSI_SORTED="$(py 'import sys; rows=[l.split() for l in open(sys.argv[1]) if l.strip()]; keys=[(-int(a), -int(b)) for a, b in rows]; print(keys == sorted(keys))' "$MESSI_IDS")"
+MESSI_N="$(cut -f1 "$MESSI_IDS" | sort -u | grep -c .)"
+MESSI_SORTED="$([ "$(cat "$MESSI_IDS")" = "$MESSI_SQL" ] && echo True || echo False)"
 rm -f "$MESSI_IDS"
 trpc_get "player.search" '{"q":"me"}'
 C_Q2="$CODE"
@@ -853,10 +1252,10 @@ trpc_get "player.search" '{"q":"messi","page":51}'
 C_P51="$CODE"
 trpc_get "player.search" '{"q":"messi","limit":8}'
 C_LIMIT="$CODE"
-if [ -z "$MESSI_FAIL" ] && [ "$MESSI_N" = "113" ] && [ "$MESSI_SORTED" = "True" ] && [ "$C_Q2" = "400" ] && [ "$C_Q101" = "400" ] && [ "$C_P51" = "400" ] && [ "$C_LIMIT" = "200" ]; then
-  pass "player.search 'messi' → 9 pages of 12 (hasMore) + 5 = 113 distinct cards in max-overall order; q of 2 / 101 characters and page 51 → 400; an old limit is ignored"
+if [ -z "$MESSI_FAIL" ] && [ "$MESSI_N" = "$MESSI_N_SQL" ] && [ "$MESSI_SORTED" = "True" ] && [ "$C_Q2" = "400" ] && [ "$C_Q101" = "400" ] && [ "$C_P51" = "400" ] && [ "$C_LIMIT" = "200" ]; then
+  pass "player.search 'messi' → $((MESSI_PAGES - 1)) pages of 12 (hasMore) + $((MESSI_N_SQL - 12 * (MESSI_PAGES - 1))) = $MESSI_N_SQL distinct cards = the rule in SQL, same max-overall order; q of 2 / 101 characters and page 51 → 400; an old limit is ignored"
 else
-  fail "player.search paging and bounds" "fail=$MESSI_FAIL n=$MESSI_N sorted=$MESSI_SORTED q2=$C_Q2 q101=$C_Q101 p51=$C_P51 limit=$C_LIMIT"
+  fail "player.search paging and bounds" "fail=$MESSI_FAIL n=$MESSI_N sql=$MESSI_N_SQL same_order=$MESSI_SORTED q2=$C_Q2 q101=$C_Q101 p51=$C_P51 limit=$C_LIMIT"
 fi
 # player.trending (the palette's "Latest Players" empty state) carries the
 # same pack chip as the search rows: `packName` on every row (the card's pack
@@ -884,11 +1283,12 @@ else
   fail "player.trending packName (expected '18|True|True|True' and the same pack as player.search)" "code=$TR_CODE got='$TR' probe='$TR_PROBE' same=$TR_SAME"
 fi
 
-# 9b. player.list `q` uses the same rule: "messi" → 113 cards (name or pack);
-#     a term shorter than 3 characters is ignored (the whole catalogue), as on
-#     the reference; the reference's deep link (Epic, search messi, RWF, left
-#     foot, weak-foot accuracy 3★ = 2, base overall ≥ 87, High to low) lists
-#     exactly Messi 89136409091415 and 89133456301399.
+# 9b. player.list `q` uses the same rule: "messi" → the SQL count of the rule
+#     (113 on the 2026-10-18 data); a term shorter than 3 characters is
+#     ignored (the whole catalogue), as on the reference; the reference's deep
+#     link (Epic, search messi, RWF, left foot, weak-foot accuracy 3★ = 2, base
+#     overall ≥ 87, High to low) lists exactly the cards the rule gives in SQL
+#     (Messi 89136409091415 and 89133456301399 on the 2026-10-18 data).
 trpc_get "player.list" '{"q":"messi","limit":1}'
 LQ_MESSI="$(result 'd["total"]')"
 trpc_get "player.list" '{"q":"me","limit":1}'
@@ -897,10 +1297,13 @@ trpc_get "player.list" '{"limit":1}'
 LQ_ALL="$(result 'd["total"]')"
 trpc_get "player.list" '{"limit":10,"sort":"highest","q":"messi","cardTypeIn":["EPIC"],"positions":["RWF"],"strongerFoot":1,"weakFootAccuracyIn":[2],"ovrMin":87}'
 REF_LINK="$(result '"%d|%s" % (d["total"], ",".join(i["id"] for i in d["items"]))')"
-if [ "$LQ_MESSI" = "113" ] && [ -n "$LQ_ALL" ] && [ "$LQ_SHORT" = "$LQ_ALL" ] && [ "$REF_LINK" = "2|89136409091415,89133456301399" ]; then
-  pass "player.list q=messi → 113 (name or pack); q=me ignored ($LQ_SHORT = all); the reference link → exactly 89136409091415, 89133456301399"
+REF_SQL="$(sql "SELECT m.id FROM ($(search_sql messi)) m JOIN \"Player\" p ON p.id = m.id
+  WHERE p.\"cardType\" = 'EPIC' AND p.\"registeredPosition\" = 10 AND p.\"strongerFoot\" = 1 AND p.\"weakFootAccuracy\" = 2 AND p.ovr >= 87
+  ORDER BY p.\"maxOvr\" DESC, p.id DESC" | py 'import sys; ids=[l for l in sys.stdin.read().splitlines() if l]; print("%d|%s" % (len(ids), ",".join(ids[:10])))')"
+if [ "$LQ_MESSI" = "$MESSI_N_SQL" ] && [ -n "$LQ_ALL" ] && [ "$LQ_SHORT" = "$LQ_ALL" ] && [ "$REF_LINK" = "$REF_SQL" ] && [ "${REF_SQL%%|*}" -gt 0 ]; then
+  pass "player.list q=messi → $LQ_MESSI (name or pack, = SQL); q=me ignored ($LQ_SHORT = all); the reference link → ${REF_LINK#*|} = the rule in SQL"
 else
-  fail "player.list q rule / reference link" "messi=$LQ_MESSI short=$LQ_SHORT all=$LQ_ALL ref=$REF_LINK"
+  fail "player.list q rule / reference link = the rule in SQL" "messi=$LQ_MESSI sql=$MESSI_N_SQL short=$LQ_SHORT all=$LQ_ALL ref=$REF_LINK sql=$REF_SQL"
 fi
 
 # 9c. Name sort orders by the accent-free, lower-case name (nameNormalized,
@@ -945,16 +1348,19 @@ else
   fail "player.countries rows are id / name / flagUrl and hold the ten fixed nations" "code=$CODE rows=$NAT_ROWS fixed=$NAT_FIXED"
 fi
 
-# 10. player.byId resolves a real card (baseId must match the card)
-trpc_get "player.list" '{"page":1,"limit":1,"sort":"ovr","order":"desc"}'
-BASE_1="$(result 'd["items"][0]["baseId"]')"
-CARD_1="$(result 'd["items"][0]["id"]')"
-trpc_get "player.byId" "{\"baseId\":\"$BASE_1\",\"cardId\":\"$CARD_1\"}"
-BYID_ID="$(result 'd["id"]')"
-if [ "$CODE" = "200" ] && [ "$BYID_ID" = "$CARD_1" ]; then
-  pass "player.byId $BASE_1/$CARD_1 → card detail"
-else
-  fail "player.byId $BASE_1/$CARD_1" "code=$CODE id=$BYID_ID body=${BODY:0:160}"
+# 10. player.byId resolves a real card (baseId must match the card; full card
+#     rows: needs the migrated schema)
+if needs_migration "player.byId resolves a real card"; then
+  trpc_get "player.list" '{"page":1,"limit":1,"sort":"ovr","order":"desc"}'
+  BASE_1="$(result 'd["items"][0]["baseId"]')"
+  CARD_1="$(result 'd["items"][0]["id"]')"
+  trpc_get "player.byId" "{\"baseId\":\"$BASE_1\",\"cardId\":\"$CARD_1\"}"
+  BYID_ID="$(result 'd["id"]')"
+  if [ "$CODE" = "200" ] && [ "$BYID_ID" = "$CARD_1" ]; then
+    pass "player.byId $BASE_1/$CARD_1 → card detail"
+  else
+    fail "player.byId $BASE_1/$CARD_1" "code=$CODE id=$BYID_ID body=${BODY:0:160}"
+  fi
 fi
 
 # 11. out-of-range id (20 digits) → HTTP 400, never 500
@@ -1877,7 +2283,11 @@ run_admin_checks
 
 # ---------------------------------------------------------------------------
 echo ""
-echo "Smoke summary: $PASS passed, $FAIL failed (api: $API)"
+echo "Smoke summary: $PASS passed, $FAIL failed, $SKIP skipped (api: $API; SQL: ${SQL_DB:-none}; migration 20261024000000_catalogue_data_refresh: $MIGRATED${SMOKE_REQUIRE_REFRESH:+; SMOKE_REQUIRE_REFRESH=$SMOKE_REQUIRE_REFRESH})"
+if [ "$SKIP" -gt 0 ]; then
+  echo "Skipped (not counted as passed — they run once the database has the migration / the seeded columns):"
+  for n in "${SKIPPED_NAMES[@]}"; do echo "  ○ $n"; done
+fi
 if [ -n "$ADMIN_SKIPPED" ]; then
   echo "Admin smoke: SKIPPED — $ADMIN_SKIPPED (not counted as passed)"
 else

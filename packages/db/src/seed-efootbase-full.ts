@@ -43,6 +43,13 @@
 //     mapping for every efootbase write path. The four location variables below
 //     (EFOOTBASE_DUMP_PATH / _META_PATH / _PACKS_PATH / _STATIC_DIR) let a staging
 //     directory be seeded; nothing is written there.
+//   · openspec efootbase-data-refresh-1024: every card stores its own league
+//     (`leagueId` = dump `league` when it is one of the fixture leagues this seed
+//     writes, else NULL); the picker managers get their 0-based snapshot position
+//     (`pickerOrder`, the same UPDATE as `inPicker`); the single CatalogueMeta row
+//     gets the dump's date from the `manifest.json` next to the dump
+//     (`dumpedAt`, the date of the community ratings — a manifest without a strict
+//     UTC date keeps the stored one, with a notice) and the seed's commit time.
 
 import { createReadStream, readFileSync, existsSync } from "node:fs";
 import { createInterface } from "node:readline";
@@ -65,6 +72,7 @@ import {
   emblemUrl,
   mapEfootbaseStat,
   packFamily,
+  parseDumpedAt,
   rowBoosters,
   skillKeyToSlug,
   type BoosterObj,
@@ -79,6 +87,9 @@ const DUMP_DIR = resolve(__dirname, "../../../dump/efootbase");
 const JSONL_PATH = process.env.EFOOTBASE_DUMP_PATH ?? resolve(DUMP_DIR, "players.jsonl");
 const META_PATH = process.env.EFOOTBASE_META_PATH ?? resolve(DUMP_DIR, "players_meta.json");
 const PACKS_PATH = process.env.EFOOTBASE_PACKS_PATH ?? resolve(DUMP_DIR, "packs.json");
+// The dump script's manifest sits next to players.jsonl (also in a staging
+// directory and in the sync worker's full-run staging); only `dumpedAt` is read.
+const MANIFEST_PATH = resolve(dirname(JSONL_PATH), "manifest.json");
 const STATIC_DIR = process.env.EFOOTBASE_STATIC_DIR ?? resolve(DUMP_DIR, "static");
 const STATIC_SKILLS_PATH = resolve(STATIC_DIR, "skills.json");
 const STATIC_MANAGERS_PATH = resolve(STATIC_DIR, "managers.json");
@@ -193,7 +204,9 @@ function loadStaticSkills(fixtureBySlug: ReadonlyMap<string, FixtureSkill>): Map
 /**
  * Parse + validate dump/efootbase/static/managers.json: every picker manager must be
  * a fixture manager with the same name, rating and pills (fixtures/managers.json is
- * the committed, fact-only source). Returns the picker ids, or null when missing.
+ * the committed, fact-only source). Returns the picker ids IN SNAPSHOT ORDER (the
+ * array index is the stored `pickerOrder` — the reference's drawer order inside a
+ * rating, openspec efootbase-data-refresh-1024), or null when missing.
  */
 function loadStaticManagers(fixture: readonly FixtureManager[]): bigint[] | null {
   if (!existsSync(STATIC_MANAGERS_PATH)) {
@@ -220,7 +233,35 @@ function loadStaticManagers(fixture: readonly FixtureManager[]): bigint[] | null
     }
   }
   if (problems.length > 0) throw new Error(`${STATIC_MANAGERS_PATH} disagrees with fixtures/managers.json:\n  ${problems.join("\n  ")}`);
-  return [...ids].sort().map((id) => BigInt(id));
+  // A Set keeps insertion order: the snapshot's own order (never re-sorted).
+  return [...ids].map((id) => BigInt(id));
+}
+
+/**
+ * The time the seeded dump was taken (its manifest's `dumpedAt`), or null with a
+ * notice — no manifest, unreadable, no `dumpedAt`, "manual" (the dump script's
+ * value without --dumped-at) or not a strict UTC ISO time: the stored
+ * CatalogueMeta.playersDumpedAt is then kept. Read before the transaction.
+ */
+function loadDumpedAt(): Date | null {
+  if (!existsSync(MANIFEST_PATH)) {
+    console.log(`  ⚠ ${MANIFEST_PATH} missing — the stored dump date (CatalogueMeta.playersDumpedAt) is kept`);
+    return null;
+  }
+  let raw: unknown;
+  try {
+    raw = (JSON.parse(readFileSync(MANIFEST_PATH, "utf-8")) as { dumpedAt?: unknown } | null)?.dumpedAt;
+  } catch (e) {
+    console.log(`  ⚠ ${MANIFEST_PATH} is not valid JSON (${(e as Error).message}) — the stored dump date is kept`);
+    return null;
+  }
+  const at = parseDumpedAt(raw);
+  if (!at) {
+    console.log(`  ⚠ ${MANIFEST_PATH} dumpedAt ${JSON.stringify(raw) ?? "absent"} is not a UTC ISO time (e.g. 2026-10-24T09:00:00Z) — the stored dump date is kept`);
+    return null;
+  }
+  console.log(`  dump taken at ${at.toISOString()} (manifest dumpedAt)`);
+  return at;
 }
 
 // ---- helpers ----
@@ -275,6 +316,7 @@ async function main(): Promise<void> {
     console.log(`  skills: ${skillMeta.size} attached (${metas.filter((m) => m.group === "SHOWTIME").length} Showtime, ${metas.filter((m) => m.group === "CLASSIC").length} Classic, ${metas.filter((m) => m.iconKey).length} with icon, ${metas.filter((m) => m.effects.length > 0).length} with effects)`);
   }
   if (pickerIds) console.log(`  picker managers: ${pickerIds.length}`);
+  const dumpedAt = loadDumpedAt();
   const boostersFixture = JSON.parse(readFileSync(resolve(FIXTURES_DIR, "boosters.json"), "utf-8")) as {
     standard: FixtureBooster[];
     basic: FixtureBooster[];
@@ -366,6 +408,9 @@ async function main(): Promise<void> {
   }
   console.log(`  skills matched: ${skillKeyToId.size}/${skillKeys.size} (fixture has ${skillsFixture.skills.length})`);
 
+  // The League ids this seed writes (fixtures/leagues.json, replaced inside the
+  // transaction below) — a card's own league is stored only when it is one of them.
+  const knownLeagueIds: ReadonlySet<number> = new Set(Object.keys(leaguesFixture.leagues).map(Number));
   // Lookup ids (sequential, in first-seen dump order → stable across runs).
   const countryNameToId = new Map([...nationalityName.keys()].map((n, i) => [n, i + 1]));
   const teamNameToId = new Map([...teamName.keys()].map((n, i) => [n, i + 1]));
@@ -391,7 +436,7 @@ async function main(): Promise<void> {
   console.log(`  Player upsert columns: ${playerUpsert.columns.length} (cross-fill-owned excluded: ${PLAYER_CROSSFILL_COLUMNS.size})`);
 
   // ── Transaction: everything below is atomic ─────────────────────────────
-  const stats = { players: 0, playerSkills: 0, packCards: 0, bundles: 0, bundleCards: 0, aptitudeMismatch: [] as string[] };
+  const stats = { players: 0, playerSkills: 0, packCards: 0, bundles: 0, bundleCards: 0, noLeague: 0, aptitudeMismatch: [] as string[] };
   await prisma.$transaction(async (tx) => {
     if (RESET_USERS) {
       // Session and Account hang off User with ON DELETE CASCADE.
@@ -469,16 +514,31 @@ async function main(): Promise<void> {
     });
     console.log(`  skills ${skillsFixture.skills.length} | leagues ${Object.keys(leaguesFixture.leagues).length} | countries ${countryNameToId.size} | teams ${teamNameToId.size} | packs ${packNameToId.size}`);
 
-    // Manager (69 fact-only fixtures: id, name, rating, pills as eFootLab stat
-    // names, R2 art) — upsert; tactic columns stay cross-fill-owned.
+    // Manager (the fact-only fixtures — 70 since the 2026-10-24 snapshot: id,
+    // name, rating, pills as eFootLab stat names, R2 art) — upsert; tactic
+    // columns stay cross-fill-owned.
     await managerUpsert.run(tx, managerRows);
-    // Picker flag: exactly the snapshot ids (only rows whose flag changes are written).
+    // Picker flag and order: exactly the snapshot ids, each with its 0-based
+    // position in the snapshot (array_position is 1-based; NULL outside the
+    // picker). Only rows whose flag or order changes are written.
     if (pickerIds) {
-      const flipped = await tx.$executeRaw`UPDATE "Manager" SET "inPicker" = ("id" = ANY(${pickerIds}::int8[]))
-        WHERE "inPicker" IS DISTINCT FROM ("id" = ANY(${pickerIds}::int8[]))`;
-      const inPicker = await tx.manager.count({ where: { inPicker: true } });
-      if (inPicker !== pickerIds.length) throw new Error(`inPicker: ${inPicker} rows flagged, expected ${pickerIds.length}`);
-      console.log(`  picker managers flagged: ${inPicker} (${flipped} rows changed)`);
+      const flipped = await tx.$executeRaw`UPDATE "Manager"
+        SET "inPicker" = (array_position(${pickerIds}::int8[], "id") IS NOT NULL),
+            "pickerOrder" = array_position(${pickerIds}::int8[], "id") - 1
+        WHERE "inPicker" IS DISTINCT FROM (array_position(${pickerIds}::int8[], "id") IS NOT NULL)
+           OR "pickerOrder" IS DISTINCT FROM array_position(${pickerIds}::int8[], "id") - 1`;
+      const [check] = await tx.$queryRaw<Array<{ flagged: number; orders: number; lo: number | null; hi: number | null; stray: number }>>`
+        SELECT count(*) FILTER (WHERE "inPicker")::int AS flagged,
+               count(DISTINCT "pickerOrder") FILTER (WHERE "inPicker")::int AS orders,
+               min("pickerOrder") FILTER (WHERE "inPicker") AS lo,
+               max("pickerOrder") FILTER (WHERE "inPicker") AS hi,
+               count(*) FILTER (WHERE NOT "inPicker" AND "pickerOrder" IS NOT NULL)::int AS stray
+        FROM "Manager"`;
+      const n = pickerIds.length;
+      if (!check || check.flagged !== n || check.orders !== n || (n > 0 && (check.lo !== 0 || check.hi !== n - 1)) || check.stray !== 0) {
+        throw new Error(`picker managers: ${JSON.stringify(check)} — expected ${n} flagged with the distinct orders 0…${n - 1} and no order outside the picker`);
+      }
+      console.log(`  picker managers flagged: ${check.flagged}, picker order 0…${n - 1} (${flipped} rows changed)`);
     }
     // Booster — upsert by id, dump wins.
     await boosterUpsert.run(tx, [...boosterRows.values()]);
@@ -504,7 +564,8 @@ async function main(): Promise<void> {
 
     for await (const r of jsonlRows(JSONL_PATH)) {
       const pid = BigInt(r.id);
-      const row = buildPlayerRow(r, pid, cardTypeByCode, countryNameToId, teamNameToId, packNameToId, stats.aptitudeMismatch);
+      const row = buildPlayerRow(r, pid, cardTypeByCode, countryNameToId, teamNameToId, packNameToId, knownLeagueIds, stats.aptitudeMismatch);
+      if (row.leagueId === null) stats.noLeague++;
       playerBatch.push(row);
       for (const [key, skillId] of skillKeyToId) {
         if (r[key]) skillBatch.push({ playerId: pid, skillId });
@@ -516,6 +577,7 @@ async function main(): Promise<void> {
     if (stats.aptitudeMismatch.length > 0) {
       throw new Error(`${stats.aptitudeMismatch.length} rows whose aptitude at \`pos\` is not "registered" (2): ${stats.aptitudeMismatch.slice(0, 5).join("; ")}`);
     }
+    console.log(`  card league: ${rowCount - stats.noLeague} cards with their own league, ${stats.noLeague} without (dump \`league\` missing or not in fixtures/leagues.json)`);
 
     // Pack.playerCount from the PackCard rows just written.
     await tx.$executeRaw`UPDATE "Pack" p SET "playerCount" = c.n
@@ -576,6 +638,18 @@ async function main(): Promise<void> {
         console.log(`  kept ${extra.length} players not in the dump (pass --prune to delete): ${sample}`);
       }
     }
+
+    // ── CatalogueMeta (single row, id 1): the dump's date and this seed's time ──
+    // Typed Prisma writes (UTC whatever the session TimeZone — never a raw Date
+    // parameter). Without a usable manifest date the stored dump date stays.
+    const seededAt = new Date();
+    await tx.catalogueMeta.upsert({
+      where: { id: 1 },
+      create: { id: 1, playersDumpedAt: dumpedAt, seededAt },
+      update: dumpedAt ? { playersDumpedAt: dumpedAt, seededAt } : { seededAt },
+    });
+    const catalogueMeta = await tx.catalogueMeta.findUniqueOrThrow({ where: { id: 1 } });
+    console.log(`  catalogue meta: dump taken ${catalogueMeta.playersDumpedAt?.toISOString() ?? "unknown"}${dumpedAt ? "" : " (kept)"}, seeded ${seededAt.toISOString()}`);
   }, { timeout: TX_TIMEOUT_MS, maxWait: 30_000 });
 
   console.log(`\nseed-efootbase-full: done in ${(Date.now() - t0) / 1000 | 0}s`);

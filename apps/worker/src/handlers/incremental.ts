@@ -30,7 +30,9 @@
 //     new / changed and compares them again.
 //  6. ONE transaction: insert the missing League / Country / Team rows (ids as
 //     the seed allocates them: the next free ids in first-seen order, matched by
-//     name; leagues by code from the fixture), upsert the boosters the rows
+//     name; leagues by code from the fixture — each card's own `leagueId` is
+//     stored when the League table holds it after this write, as in the seed,
+//     else NULL), upsert the boosters the rows
 //     carry that are missing or differ (dump wins, as in the seed), upsert the
 //     new / changed Player rows over the model's columns minus
 //     PLAYER_CROSSFILL_COLUMNS (cross-fill values survive), insert their
@@ -207,9 +209,13 @@ async function incremental(ctx: RunContext): Promise<RunOutcome> {
     for (const c of newCountries.values()) countryNameToId.set(c.name, c.id);
     const teamNameToId = new Map<string, number>([...lookups.teamByName].map(([n, t]) => [n, t.id]));
     for (const t of newTeams.values()) teamNameToId.set(t.name, t.id);
+    // A card's own league is stored when the League table holds it after this
+    // write: the stored ids plus the leagues inserted below (catalogue-data-refresh
+    // "Card League" — the seed's rule with the seed's table); else NULL.
+    const knownLeagueIds = new Set<number>([...lookups.leagueIds, ...newLeagues.keys()]);
 
     const aptitudeMismatch: string[] = [];
-    const mappedRows = rows.map((r) => mapped(`card ${r.id}`, () => buildPlayerRow(r, BigInt(r.id), cardTypeByCode, countryNameToId, teamNameToId, lookups.packIdByName, aptitudeMismatch)));
+    const mappedRows = rows.map((r) => mapped(`card ${r.id}`, () => buildPlayerRow(r, BigInt(r.id), cardTypeByCode, countryNameToId, teamNameToId, lookups.packIdByName, knownLeagueIds, aptitudeMismatch)));
     if (aptitudeMismatch.length > 0) {
       throw fail(`${aptitudeMismatch.length} cards whose aptitude at \`pos\` is not "registered" (2): ${aptitudeMismatch.slice(0, 5).join("; ")} — nothing was written`);
     }

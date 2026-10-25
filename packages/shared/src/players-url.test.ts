@@ -25,7 +25,20 @@ import {
   type LegacyIdLookups,
   type PlayersState,
 } from "./players-url";
-import { FIXED_FIRST_NATIONS, MAX_FILTER_IDS, MAX_FILTER_SKILLS } from "./constants";
+import {
+  FIXED_FIRST_NATIONS,
+  LEGACY_SORT_PRESETS,
+  MAX_FILTER_IDS,
+  MAX_FILTER_SKILLS,
+  SORT_PRESETS,
+  SORT_PRESET_LABELS,
+  TOP_RATED,
+  legacySortPresetsFor,
+  resolveLegacySort,
+  sortPresetsFor,
+  topRatedQuery,
+  type TopRatedQuery,
+} from "./constants";
 import { playerListInput } from "./schemas";
 
 function assert(cond: unknown, msg: string): void {
@@ -79,6 +92,7 @@ const listOf = (qs: string) => playersListQuery(resolveLegacyIds(read(qs), LOOKU
     height: { min: 180 },
     weight: { max: 90 },
     age: { min: 18, max: 21 },
+    rating: 9,
     skills: ["s_sombrero", "s_rabona"],
     legacySkillIds: [],
     stats: { speed: { min: 85 }, finishing: { min: 80 } },
@@ -92,9 +106,13 @@ const listOf = (qs: string) => playersListQuery(resolveLegacyIds(read(qs), LOOKU
   const keys = Array.from(new Set(Array.from(new URLSearchParams(qs).keys())));
   assert(eq(keys, PLAYERS_URL_KEYS), `every key, in the spec order (${keys.join(", ")})`);
   assert(
+    eq(PLAYERS_URL_KEYS, ["search", "sort", "pos", "card", "base", "ovr", "foot", "condition", "form", "wfa", "wfu", "height", "weight", "age", "rating", "playingStyle", "skill", "nat", "league", "team", "stat", "smax", "body", "order", "page"]),
+    "the key order is the spec's (rating after age)",
+  );
+  assert(
     qs ===
       "search=messi&sort=name&pos=0&pos=12&card=1&card=5&base=87-&ovr=90-105&foot=1&condition=0&condition=4&form=0&form=2&wfa=3&wfu=0&wfu=1" +
-        "&height=180-&weight=-90&age=18-21&playingStyle=1&playingStyle=22&playingStyle=p_mazing_run&playingStyle=p_trickster" +
+        "&height=180-&weight=-90&age=18-21&rating=9&playingStyle=1&playingStyle=22&playingStyle=p_mazing_run&playingStyle=p_trickster" +
         "&skill=s_rabona&skill=s_sombrero&nat=3&nat=14&league=4&league=26&team=Arsenal+FC&team=Vissel+Kobe" +
         "&stat=finishing%3A80-%2Cspeed%3A85-&smax=1&body=legLength%3A13-&order=desc&page=3",
     `full state → exact canonical query (${qs})`,
@@ -150,6 +168,101 @@ const listOf = (qs: string) => playersListQuery(resolveLegacyIds(read(qs), LOOKU
   assert(filterDialogCounts(after).league === 2 && filterDialogCounts(after).team === 1, "League badge stays 2, Team badge 1");
 }
 
+// 2b. Community Rating (change efootbase-data-refresh-1024; spec
+//     catalog-browsing-parity "Rating parameter", catalogue-data-refresh
+//     "Community Rating Filter").
+{
+  // /players?card=1&rating=10 → 10 with Icons; slider to 9 → rating=9; back to 1 → no rating.
+  const s = read("card=1&rating=10");
+  assert(s.rating === 10 && eq(s.types, ["LEGENDARY"]), "card=1&rating=10 → Community Rating 10, Icons");
+  assert(playersListQuery(s, 72).ratingMin === 10 && eq(playersListQuery(s, 72).cardTypeIn, ["LEGENDARY"]), "… asks player.list for ratingMin 10 with the Icons");
+  assert(playerListInput.safeParse(playersListQuery(s, 72)).success, "… an input player.list accepts");
+  const at9 = writePlayersState({ ...s, rating: 9, page: 1 });
+  assert(at9 === "card=1&rating=9", `slider to 9 → ${at9}`);
+  const at1 = writePlayersState({ ...read(at9), rating: 1, page: 1 });
+  assert(at1 === "card=1" && playersListQuery(read(at1), 72).ratingMin === undefined, `slider back to 1 (All) → no rating in the URL or the request (${at1})`);
+  assert(eq(playersListQuery(read(at1), 72), playersListQuery(read("card=1"), 72)), "… the same request as without the filter");
+  assert(canonical("rating=10&age=18-&search=messi") === "search=messi&age=18-&rating=10", `the key sits after age in the canonical order (${canonical("rating=10&age=18-&search=messi")})`);
+  assert(canonical("rating=7&playingStyle=1&weight=-90") === "weight=-90&rating=7&playingStyle=1", "… and before playingStyle");
+  // Reader: 2–10 only; anything else is All (dropped, never sent).
+  for (const [v, want] of [["2", 2], ["10", 10], [" 5 ", 5], ["1", 1], ["0", 1], ["11", 1], ["2.5", 1], ["-3", 1], ["abc", 1], ["", 1], ["1e1", 1], ["٥", 1]] as Array<[string, number]>) {
+    assert(read(`rating=${encodeURIComponent(v)}`).rating === want, `rating=${JSON.stringify(v)} → ${want === 1 ? "All" : want}`);
+  }
+  assert(canonical("rating=1") === "" && canonical("rating=11") === "" && canonical("rating=05") === "rating=5", "rating=1 / 11 are dropped; rating=05 → rating=5");
+  // Chip, badge, Reset.
+  const r7 = read("rating=7&age=18-21&playingStyle=1");
+  const chips = activeFilters(r7).map(activeFilterKey);
+  assert(eq(chips, ["age", "rating:7", "style:1"]), `the Rating chip sits in URL key order (${chips.join(" ")})`);
+  assert(countActiveFilters(r7) === 3 && countActiveFilters(read("rating=7")) === 1 && countActiveFilters(read("rating=1")) === 0, "the Filters badge counts the rating once, All not at all");
+  const removed = withoutFilter(r7, { kind: "rating", value: 7 });
+  assert(removed.rating === 1 && writePlayersState(removed) === "age=18-21&playingStyle=1", "removing the Rating chip sets All and drops rating only");
+  assert(resetFilters(read("search=messi&rating=7")).rating === 1 && writePlayersState(resetFilters(read("search=messi&rating=7"))) === "search=messi", "Reset clears the rating");
+  assert(filterDialogCounts(r7).stats === 0 && Object.values(filterDialogCounts(r7)).every((n) => n === 0 || n === 1), "the rating is not a dialog row (no row badge)");
+  // ratingMin bounds of the API: 2–10, digits or a number; 1 / 11 / null / a fraction → refused.
+  const ok = (v: unknown) => playerListInput.safeParse({ ratingMin: v }).success;
+  assert(ok(2) && ok(10) && ok("7") && !ok(1) && !ok(11) && !ok(0) && !ok(null) && !ok(true) && !ok("") && !ok(2.5) && !ok("2.5") && !ok("1e1"), "player.list ratingMin: 2–10 (number or digits) only");
+}
+
+// 2c. Top rated (catalogue-data-refresh "Top Rated Sort"): ON since task 6.3 with
+//     the rule measured on 2026-10-24 (design D7 result) — `top` is a preset, no
+//     longer a legacy alias of High to low (the intentional meaning change for old
+//     eFootLab links); the switch still hides it when the rule is null.
+{
+  assert(eq(TOP_RATED, { minVotes: 10, tiebreak: "id" }), "TOP_RATED = the measured rule: at least 10 votes, average DESC, then card id DESC");
+  assert(eq(SORT_PRESETS, ["new", "highest", "lowest", "top"]), "the sort control offers New cards, High to low, Low to high and Top rated");
+  assert(SORT_PRESET_LABELS.top === "Top rated", "its label is \"Top rated\"");
+  assert(LEGACY_SORT_PRESETS.top === undefined && resolveLegacySort("top") === "top" && resolveLegacySort("trending") === "new", "sort=top is Top rated (not High to low); trending still reads as New cards");
+  assert(read("sort=top").sort === "top" && canonical("sort=top") === "sort=top" && playerListInput.parse({ sort: "top" }).sort === "top",
+    "/players?sort=top reads, writes back and asks the API for Top rated");
+  assert(eq(listOf("sort=top&card=0"), { ...listOf("card=0"), sort: "top" }), "Top rated changes only the sort of the list query (its vote minimum is applied by the API)");
+  assert(canonical("sort=top&card=1&rating=8") === "sort=top&card=1&rating=8" && canonical("card=1&sort=top") === "sort=top&card=1", "sort=top keeps its place in the key order with filters");
+  // With the rule switched off again, Top rated hides and `top` reads as High to low.
+  assert(eq(sortPresetsFor(null), ["new", "highest", "lowest"]) && legacySortPresetsFor(null).top === "highest" && legacySortPresetsFor(null).trending === "new",
+    "a null rule hides Top rated and maps `top` back to High to low");
+}
+
+// 2d. Top rated's query (topRatedQuery, sent unchanged by player.list as its
+//     where / orderBy): the set is every card with at least K votes and an
+//     average, the order the average DESC, then the card id DESC — checked on
+//     synthetic rows by a tiny interpreter of the two objects.
+{
+  const q = topRatedQuery(TOP_RATED!);
+  assert(eq(q.where, { ratingCount: { gte: 10 }, avgRating: { not: null } }), "Top rated where: ratingCount ≥ 10 and an average");
+  assert(eq(q.orderBy, [{ avgRating: { sort: "desc", nulls: "last" } }, { id: "desc" }]), "Top rated orderBy: avgRating DESC NULLS LAST, id DESC (a total order)");
+  assert(eq(topRatedQuery({ minVotes: 5, tiebreak: "votes" }).orderBy, [{ avgRating: { sort: "desc", nulls: "last" } }, { ratingCount: "desc" }, { id: "desc" }])
+    && eq(topRatedQuery({ minVotes: 5, tiebreak: "maxOvr" }).orderBy, [{ avgRating: { sort: "desc", nulls: "last" } }, { maxOvr: "desc" }, { id: "desc" }]),
+    "the other tiebreak candidates keep the id DESC tiebreaker last");
+  type Row = { id: bigint; avgRating: number | null; ratingCount: number; maxOvr: number };
+  const apply = (rows: Row[], query: TopRatedQuery) => {
+    const set = rows.filter((r) => r.ratingCount >= query.where.ratingCount.gte && r.avgRating !== null);
+    const cmp = (a: Row, b: Row) => {
+      for (const t of query.orderBy) {
+        const k = Object.keys(t)[0] as keyof Row;
+        const x = a[k] as number | bigint;
+        const y = b[k] as number | bigint;
+        if (x !== y) return x > y ? -1 : 1;
+      }
+      return 0;
+    };
+    return set.sort(cmp).map((r) => String(r.id));
+  };
+  // Shaped like the measured cases: a 9-vote card with the best average stays
+  // out, 10-vote cards are in, an exact tie (8.5) goes to the higher id whatever
+  // the votes or max overall, and an unrated card never appears.
+  const rows: Row[] = [
+    { id: 111n, avgRating: 9.25, ratingCount: 9, maxOvr: 73 },
+    { id: 162n, avgRating: 8.5, ratingCount: 10, maxOvr: 95 },
+    { id: 170n, avgRating: 8.5, ratingCount: 16, maxOvr: 87 },
+    { id: 168n, avgRating: 8.5, ratingCount: 10, maxOvr: 79 },
+    { id: 452n, avgRating: 8.78125, ratingCount: 32, maxOvr: 91 },
+    { id: 900n, avgRating: null, ratingCount: 0, maxOvr: 99 },
+    { id: 901n, avgRating: 10, ratingCount: 3, maxOvr: 80 },
+    { id: 155n, avgRating: 2.8, ratingCount: 15, maxOvr: 72 },
+  ];
+  assert(eq(apply(rows, q), ["452", "170", "168", "162", "155"]), "set = the cards with ≥ 10 votes; order = average DESC, ties by the higher id (170 > 168 > 162)");
+  assert(eq(apply(rows, topRatedQuery({ minVotes: 11, tiebreak: "id" })), ["452", "170", "155"]), "K = 11 would drop the 10-vote cards (the measured lists kept them)");
+}
+
 // 3. Older forms ask the API for exactly what their canonical form asks for.
 {
   const pairs: Array<[string, string]> = [
@@ -181,8 +294,7 @@ const listOf = (qs: string) => playersListQuery(resolveLegacyIds(read(qs), LOOKU
     ["league=26", "league=26"],
     ["sort=trending", ""],
     ["sort=new", ""],
-    ["sort=top", "sort=highest"],
-    ["sort=top&type=LEGENDARY", "sort=highest&card=1"],
+    ["sort=top&type=LEGENDARY", "sort=top&card=1"],
     ["page=1", ""],
   ];
   for (const [legacy, canon] of pairs) {

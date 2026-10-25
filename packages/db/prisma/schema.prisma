@@ -98,6 +98,13 @@ model Player {
   boosterId2     Int?
   // team link (from efootbase team_name) — nullable since some cards have no club.
   teamId         Int?
+  // The card's OWN league (dump `league`; openspec efootbase-data-refresh-1024,
+  // capability catalogue-data-refresh "Card League"): the League filter matches
+  // it. It can differ from the team's league (14 teams have cards in two
+  // leagues, e.g. Vissel Kobe 26 / 30). NULL when that league is not in the
+  // League table at write time. No foreign key on purpose: the seed replaces
+  // the League rows inside its transaction (design D2).
+  leagueId       Int?
   // community metrics from efootbase (views/ratings are efootbase community, not eflab's own).
   views          Int      @default(0)
   ratingCount    Int      @default(0)
@@ -243,6 +250,8 @@ model Player {
   @@index([cardType, ovr])
   @@index([registeredPosition, ovr])
   @@index([nationalityId, ovr])
+  // League filter on the card's own league (`leagueId IN (…)`).
+  @@index([leagueId])
   // Deterministic pagination: every list orderBy is [{sort}, {id}], so the default
   // Max OVR view, the OVR sort and the release-date (trending) window walk one
   // index with a unique tiebreaker. The single-column cardType/ovr indexes were
@@ -285,11 +294,30 @@ model Manager {
   boostId2 Int?
   booster1Stat String?
   booster2Stat String?
-  // One of the managers efootbase offers in its picker (69 in the 2026-10-18
-  // snapshot). Written by the seed from dump/efootbase/static/managers.json only.
+  // One of the managers efootbase offers in its picker (70 in the 2026-10-24
+  // snapshot, 69 in the 2026-10-18 one). Written by the seed from
+  // dump/efootbase/static/managers.json only.
   inPicker Boolean @default(false)
+  // 0-based position in that snapshot (the reference's drawer order inside a
+  // rating; manager.picker sorts rating DESC, pickerOrder ASC, id ASC); NULL for
+  // a manager outside the picker. Written with inPicker by the same UPDATE.
+  pickerOrder Int?
 
   @@index([name])
+}
+
+// ---- Catalogue metadata (openspec efootbase-data-refresh-1024) ----
+// Single row (id 1, inserted by migration 20261024000000_catalogue_data_refresh
+// with NULLs; a CHECK constraint, raw SQL Prisma does not model, keeps it the
+// only row). Written by the seed only, with typed queries.
+model CatalogueMeta {
+  id              Int       @id @default(1)
+  // When the seeded dump was taken (its manifest's `dumpedAt`) — the date of
+  // the community ratings ("Ratings as of …"). A seed whose manifest has no
+  // usable date keeps the stored value.
+  playersDumpedAt DateTime?
+  // When the last seed committed.
+  seededAt        DateTime?
 }
 
 // ---- Booster (efootbase APK efootball_boosters.json: standard + basic tiers) ----

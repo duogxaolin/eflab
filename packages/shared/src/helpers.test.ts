@@ -199,22 +199,23 @@ function assert(cond: unknown, msg: string): void {
 {
   for (const p of SORT_PRESETS) assert(typeof SORT_PRESET_LABELS[p] === "string", `SORT_PRESET_LABELS has ${p}`);
   assert(
-    JSON.stringify(SORT_PRESETS) === JSON.stringify(["new", "highest", "lowest"]) && DEFAULT_SORT_PRESET === "new",
-    "presets are New cards (default), High to low, Low to high",
+    JSON.stringify(SORT_PRESETS) === JSON.stringify(["new", "highest", "lowest", "top"]) && DEFAULT_SORT_PRESET === "new",
+    "presets are New cards (default), High to low, Low to high, Top rated (measured 2026-10-24, TOP_RATED)",
   );
   assert(
-    SORT_PRESET_LABELS.new === "New cards" && SORT_PRESET_LABELS.highest === "High to low" && SORT_PRESET_LABELS.lowest === "Low to high",
+    SORT_PRESET_LABELS.new === "New cards" && SORT_PRESET_LABELS.highest === "High to low" && SORT_PRESET_LABELS.lowest === "Low to high" && SORT_PRESET_LABELS.top === "Top rated",
     "preset labels",
   );
-  assert(!isSortPreset("trending") && !isSortPreset("top") && !isSortPreset("ovr"), "Trending / Top rated are no longer presets; presets are distinct from field sorts");
+  assert(!isSortPreset("trending") && isSortPreset("top") && !isSortPreset("ovr"), "Trending is no longer a preset, Top rated is one; presets are distinct from field sorts");
   // Legacy values (change efootbase-function-parity): accepted, read as the current presets.
-  assert(resolveLegacySort("trending") === "new" && resolveLegacySort("top") === "highest" && resolveLegacySort("speed") === "speed", "resolveLegacySort: trending → new, top → highest, others unchanged");
+  // `top` is Top rated itself since task 6.3 of efootbase-data-refresh-1024 (no longer High to low).
+  assert(resolveLegacySort("trending") === "new" && resolveLegacySort("top") === "top" && resolveLegacySort("speed") === "speed", "resolveLegacySort: trending → new, top stays Top rated, others unchanged");
   {
     const sortOf = (v: unknown) => {
       const r = playerListInput.safeParse({ sort: v });
       return r.success ? r.data.sort : "400";
     };
-    assert(sortOf("trending") === "new" && sortOf("top") === "highest", "player.list sort=trending / top are accepted and read as new / highest (no 400)");
+    assert(sortOf("trending") === "new" && sortOf("top") === "top", "player.list sort=trending is read as new, sort=top is Top rated (no 400)");
     assert(sortOf("highest") === "highest" && sortOf("lowest") === "lowest" && sortOf("name") === "name" && sortOf(undefined) === "ovr", "other sorts unchanged; the API default stays ovr");
     assert(sortOf("bogus") === "400" && sortOf("hasOwnProperty") === "400" && sortOf("toString") === "400", "an unknown sort is a 400 (no prototype key slips through)");
   }

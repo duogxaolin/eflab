@@ -275,8 +275,10 @@ export interface BuildResult {
 }
 
 /** One manager of efootbase's picker (manager.picker). `pills` are the one
- *  or two stats the manager raises by +1 (eFootLab stat names); 24 of the 69
- *  picker managers have a single pill on efootbase. */
+ *  or two stats the manager raises by +1 (eFootLab stat names); 24 of the 70
+ *  picker managers (2026-10-24 snapshot) have a single pill on efootbase. The
+ *  list comes in rating DESC, picker order (the reference's drawer order), id
+ *  ASC. */
 export interface PickerManagerDTO {
   id: string;
   name: string;
@@ -324,6 +326,13 @@ export interface FeaturedBundleDTO {
 export interface FeaturedListDTO {
   bundles: FeaturedBundleDTO[];
   newestCardRelease: string | null;
+}
+
+/** `catalogue.meta` (change efootbase-data-refresh-1024): when the seeded dump
+ *  was taken — the date of the stored community ratings ("Ratings as of …").
+ *  ISO-8601 UTC, or null while no seed has stored it. */
+export interface CatalogueMetaDTO {
+  playersDumpedAt: string | null;
 }
 
 // ---- Admin area + sync worker (the `admin` router; openspec admin-sync-worker) ----

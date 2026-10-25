@@ -115,27 +115,29 @@ export function SkillDetailClient({ slug, initialData, rarity }: { slug: string;
 
   return (
     <div>
-      <ol data-slot="breadcrumbs" aria-label="Breadcrumbs" className="breadcrumbs -ml-0.5 mb-3 list-none p-0">
-        <li className="breadcrumbs__item">
-          <Link className="breadcrumbs__link hit-44" href="/">
-            Home
-          </Link>
-          <span className="breadcrumbs__separator" aria-hidden>
-            ›
-          </span>
-        </li>
-        <li className="breadcrumbs__item">
-          <Link className="breadcrumbs__link hit-44" href="/wiki/skills">
-            Skills
-          </Link>
-          <span className="breadcrumbs__separator" aria-hidden>
-            ›
-          </span>
-        </li>
-        <li className="breadcrumbs__item" aria-current="page">
-          {label}
-        </li>
-      </ol>
+      <nav aria-label="Breadcrumb">
+        <ol data-slot="breadcrumbs" className="breadcrumbs -ml-0.5 mb-3 list-none p-0">
+          <li className="breadcrumbs__item">
+            <Link className="breadcrumbs__link hit-44" href="/">
+              Home
+            </Link>
+            <span className="breadcrumbs__separator" aria-hidden>
+              ›
+            </span>
+          </li>
+          <li className="breadcrumbs__item">
+            <Link className="breadcrumbs__link hit-44" href="/wiki/skills">
+              Skills
+            </Link>
+            <span className="breadcrumbs__separator" aria-hidden>
+              ›
+            </span>
+          </li>
+          <li className="breadcrumbs__item" aria-current="page">
+            {label}
+          </li>
+        </ol>
+      </nav>
 
       {/* Header card: text and artwork on the left; the numbers and the
           leader's face on the right from 1024 px (below the text before). */}
@@ -179,7 +181,14 @@ export function SkillDetailClient({ slug, initialData, rarity }: { slug: string;
           </dl>
           {leader && (
             <figure className="skill-hero__leader" data-testid="skill-leader-face" data-card-id={leader.id}>
-              <figcaption className="mb-1.5 text-xs text-[var(--color-text-secondary)]">Top card</figcaption>
+              {/* The face prints the card's level-1 overall, as every card
+                  tile; the leader is chosen — and the Top cards rows are
+                  labelled — by max overall, so the caption names it
+                  (browser QA 2026-10-25 (l): "87" on the face beside rows
+                  reading 102–103). */}
+              <figcaption className="mb-1.5 text-xs text-[var(--color-text-secondary)]">
+                Top card · <span data-testid="skill-leader-max-ovr">max overall {leader.maxOvr}</span>
+              </figcaption>
               <PlayerCard player={leader} priority />
             </figure>
           )}

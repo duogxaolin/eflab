@@ -8,7 +8,8 @@ import { Search, Shield } from "lucide-react";
 
 // "Select Manager" drawer of the Progression panel (change
 // efootbase-exact-model-managers; drawer look of change efootbase-ui-redesign).
-// Lists the 69 picker managers (manager.picker: rating DESC, then id ASC),
+// Lists the picker managers (70 since the 2026-10-24 snapshot; manager.picker:
+// rating DESC, then the reference's drawer order `pickerOrder`, then id ASC),
 // each 74 px row with its 44 × 44 portrait, a rating shield, the name and one
 // or two lime "+1" stat pills; the search matches the manager name or a
 // pill's stat name with the shared `labelSearchKey` (case, accents, hyphens /
@@ -149,7 +150,7 @@ export function ManagerPicker({
           })}
         </ul>
       )}
-      <p className="mt-3 text-xs text-[var(--color-text-secondary)]">Sorted by rating, then by id (the original order inside a rating is not stored).</p>
+      <p className="mt-3 text-xs text-[var(--color-text-secondary)]">Sorted by rating, highest first.</p>
     </Modal>
   );
 }

@@ -1,7 +1,8 @@
 import type { PlayerCardDTO } from "@eflab/shared";
 import { BODY_METRIC_ORDER, DERIVED_LABEL, PHYSIQUE_LABEL, PHYSIQUE_ORDER, physiqueTier, tierBgClass, tierTextClass } from "@/lib/card-display";
 
-// "Body Model" section (efootbase): the 11 physique values (1–10) and the 5
+// "Body Model" section (efootbase): the 11 physique values (stored 0–14 on the
+// 2026-10-24 data; the /players filter accepts 0–15) and the 5
 // derived body metrics. Both live in the Player table for every card; the
 // section renders them when the DTO carries them and otherwise says so —
 // it never shows a placeholder number.

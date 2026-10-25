@@ -57,7 +57,8 @@ export interface BoosterLike {
   stats: BoosterVector;
 }
 /** A selected manager as the engine sees it: its one or two pill stats
- *  (efootbase lists 24 of its 69 picker managers with a single pill). The
+ *  (efootbase lists 24 of its 70 picker managers with a single pill — 2026-10-24
+ *  snapshot). The
  *  rating is not an engine input — choosing a manager sets the proficiency
  *  level to the rating in the UI state. */
 export interface ManagerEffect {

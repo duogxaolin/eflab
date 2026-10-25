@@ -94,19 +94,21 @@ export function SkillsRail({ onSection }: { onSection?: (group: SkillGroup, e: M
 export function SkillsIntro() {
   return (
     <>
-      <ol data-slot="breadcrumbs" aria-label="Breadcrumbs" className="breadcrumbs -ml-0.5 mb-3 list-none p-0">
-        <li className="breadcrumbs__item">
-          <Link className="breadcrumbs__link hit-44" href="/">
-            Home
-          </Link>
-          <span className="breadcrumbs__separator" aria-hidden>
-            ›
-          </span>
-        </li>
-        <li className="breadcrumbs__item" aria-current="page">
-          Skills
-        </li>
-      </ol>
+      <nav aria-label="Breadcrumb">
+        <ol data-slot="breadcrumbs" className="breadcrumbs -ml-0.5 mb-3 list-none p-0">
+          <li className="breadcrumbs__item">
+            <Link className="breadcrumbs__link hit-44" href="/">
+              Home
+            </Link>
+            <span className="breadcrumbs__separator" aria-hidden>
+              ›
+            </span>
+          </li>
+          <li className="breadcrumbs__item" aria-current="page">
+            Skills
+          </li>
+        </ol>
+      </nav>
 
       <h1 className="efb-h1 text-[var(--color-text-primary)]">Skills</h1>
       <p className="efb-subtitle mt-2">

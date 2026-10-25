@@ -422,30 +422,102 @@ export const SEARCH_MAX_PAGE = 50;
 //   new      → releaseDate DESC (nulls last), id DESC
 //   highest  → maxOvr DESC, id DESC          (max overall rating)
 //   lowest   → maxOvr ASC, id ASC
-// The reference's Trending (a live popularity ranking) and Top rated (current
-// community ratings) are not offered: eFootLab holds neither. Their old
-// eFootLab values stay readable through LEGACY_SORT_PRESETS.
+//   top      → only while TOP_RATED (below) is set: ratingCount ≥ minVotes,
+//              avgRating DESC, then the measured tiebreak, then id DESC
+//              (measured 2026-10-24: ≥ 10 votes, avgRating DESC, id DESC)
+// The reference's Trending (a live popularity ranking) is not offered: eFootLab
+// holds none. Its old eFootLab value stays readable through LEGACY_SORT_PRESETS.
 // A preset ignores `order`; the explicit field sorts (SORT_FIELDS) keep it.
-export const SORT_PRESETS = ["new", "highest", "lowest"] as const;
-export type SortPreset = (typeof SORT_PRESETS)[number];
+
+/**
+ * Top rated (openspec efootbase-data-refresh-1024, design D7; catalogue-data-refresh
+ * "Top Rated Sort"): the reference lists the cards with at least `minVotes`
+ * community votes by average rating, descending, then by one tiebreak — the
+ * candidates D7 measures: more votes, the higher card id or the higher max
+ * overall — then by card id. Offered only when the survey determined K and the
+ * tiebreak on two checks; their values are set here (task 6.3).
+ */
+export interface TopRatedRule {
+  /** Smallest `ratingCount` a listed card has (K). */
+  minVotes: number;
+  /** The order after the average: `votes` = ratingCount DESC, `id` = card id DESC, `maxOvr` = max overall DESC. */
+  tiebreak: "votes" | "id" | "maxOvr";
+}
+/** The measured Top rated rule, or null while it is not determined: then Top
+ *  rated is hidden and `sort=top` keeps reading as High to low.
+ *  Measured 2026-10-24 (design D7 result: two loads of the reference read
+ *  against the dump of the same day): at least **10** votes (Standard 20 and
+ *  Selection 6 cards in both loads, the union 26, Icons 18 — 9 and 11 votes
+ *  each fail), average DESC (the exact stored value, not rounded), then the
+ *  higher card id (98 tied pairs; every other candidate fails). */
+export const TOP_RATED = { minVotes: 10, tiebreak: "id" } as TopRatedRule | null;
+
+/** One ORDER BY term of Top rated, all descending (a Prisma `orderBy` entry). */
+export type TopRatedOrderTerm =
+  | { avgRating: { sort: "desc"; nulls: "last" } }
+  | { ratingCount: "desc" }
+  | { maxOvr: "desc" }
+  | { id: "desc" };
+/** Top rated as a query (a Prisma `where` / `orderBy` pair, used by `player.list`):
+ *  the cards with `ratingCount ≥ minVotes` and an average, by the average DESC,
+ *  the rule's tiebreak and the card id DESC — a total order, so pages never
+ *  overlap. */
+export interface TopRatedQuery {
+  where: { ratingCount: { gte: number }; avgRating: { not: null } };
+  orderBy: TopRatedOrderTerm[];
+}
+export function topRatedQuery(rule: TopRatedRule): TopRatedQuery {
+  const tiebreak: TopRatedOrderTerm[] =
+    rule.tiebreak === "votes" ? [{ ratingCount: "desc" }] : rule.tiebreak === "maxOvr" ? [{ maxOvr: "desc" }] : [];
+  return {
+    where: { ratingCount: { gte: rule.minVotes }, avgRating: { not: null } },
+    orderBy: [{ avgRating: { sort: "desc", nulls: "last" } }, ...tiebreak, { id: "desc" }],
+  };
+}
+
+/** Every preset key, Top rated included (its label is needed once it is offered). */
+export const ALL_SORT_PRESETS = ["new", "highest", "lowest", "top"] as const;
+export type SortPreset = (typeof ALL_SORT_PRESETS)[number];
+/** The presets offered under a Top rated rule (`top` only when there is one). */
+export function sortPresetsFor(topRated: TopRatedRule | null): readonly SortPreset[] {
+  return topRated ? ALL_SORT_PRESETS : ALL_SORT_PRESETS.filter((p) => p !== "top");
+}
+/** The presets offered now (the sort segment, `player.list`, the URL reader). */
+export const SORT_PRESETS: readonly SortPreset[] = sortPresetsFor(TOP_RATED);
 export const DEFAULT_SORT_PRESET: SortPreset = "new";
 export const SORT_PRESET_LABELS: Readonly<Record<SortPreset, string>> = {
   new: "New cards",
   highest: "High to low",
   lowest: "Low to high",
+  top: "Top rated",
 };
 export const isSortPreset = (s: string): s is SortPreset => (SORT_PRESETS as readonly string[]).includes(s);
-/** Former preset values still accepted from old links and clients:
- *  `trending` (the old default) reads as New cards, `top` (max overall
- *  descending in eFootLab) as High to low, which now sorts by max overall. */
-export const LEGACY_SORT_PRESETS = { trending: "new", top: "highest" } as const satisfies Readonly<Record<string, SortPreset>>;
-export type LegacySortPreset = keyof typeof LEGACY_SORT_PRESETS;
-/** A sort value with a legacy preset replaced by its current one; any other value unchanged. */
-export function resolveLegacySort<S extends string>(sort: S): Exclude<S, LegacySortPreset> | SortPreset {
-  return (Object.prototype.hasOwnProperty.call(LEGACY_SORT_PRESETS, sort)
-    ? LEGACY_SORT_PRESETS[sort as LegacySortPreset]
-    : sort) as Exclude<S, LegacySortPreset> | SortPreset;
+/** Former preset values still accepted from old links and clients under a Top
+ *  rated rule: `trending` (the old default) reads as New cards; `top` (max overall
+ *  descending in eFootLab) reads as High to low while Top rated is not offered —
+ *  once it is, `top` is Top rated (the reference's meaning; an intentional change
+ *  for old eFootLab links). */
+export function legacySortPresetsFor(topRated: TopRatedRule | null): Readonly<Record<string, SortPreset>> {
+  return topRated ? { trending: "new" } : { trending: "new", top: "highest" };
 }
+export const LEGACY_SORT_PRESETS: Readonly<Record<string, SortPreset>> = legacySortPresetsFor(TOP_RATED);
+/** A sort value with a legacy preset replaced by its current one; any other value unchanged. */
+export function resolveLegacySort<S extends string>(sort: S): S | SortPreset {
+  return Object.prototype.hasOwnProperty.call(LEGACY_SORT_PRESETS, sort) ? LEGACY_SORT_PRESETS[sort]! : sort;
+}
+
+/**
+ * Community Rating filter (openspec efootbase-data-refresh-1024, catalogue-data-refresh
+ * "Community Rating Filter"): one slider from COMMUNITY_RATING_MIN ("All", no
+ * filter) to COMMUNITY_RATING_MAX; a value N ≥ 2 keeps the cards whose stored
+ * average community rating (`Player.avgRating`, from the dump) is at least N,
+ * with no minimum number of votes — a card without ratings never matches.
+ * `player.list` takes `ratingMin` 2–10; the URL writes `rating=N` (2–10).
+ */
+export const COMMUNITY_RATING_MIN = 1;
+export const COMMUNITY_RATING_MAX = 10;
+/** Smallest `ratingMin` / `rating=` that filters (1 = All is the default, omitted). */
+export const COMMUNITY_RATING_FILTER_MIN = 2;
 
 // The Nation picker's fixed first nations, in the reference's order (survey
 // 2026-10-23 S2 §6: the same ten on 2026-10-20 and 2026-10-23, not by card

@@ -22,7 +22,7 @@
 //
 // Card image cache version: R2 serves objects with `Cache-Control: public,
 // max-age=31536000, immutable`, and a re-dump overwrites changed card images
-// under the SAME key (2026-10-18: 5,312 cards). Browsers and edges would keep
+// under the SAME key (2026-10-18: 5,312 cards; 2026-10-24: 821). Browsers and edges would keep
 // the old bytes for a year, so every card URL carries `?v=<IMAGE_VERSION>`
 // (R2 ignores the query; the cache key changes). Bump it whenever card objects
 // are overwritten in place: edit DEFAULT_IMAGE_VERSION (committed default, takes
@@ -35,7 +35,7 @@ const R2_BASE =
   "https://pub-1a19c30950c04ef3964669ac4792f6f0.r2.dev";
 
 /** Committed card-image version (date of the last in-place overwrite on R2). */
-export const DEFAULT_IMAGE_VERSION = "20261019";
+export const DEFAULT_IMAGE_VERSION = "20261024";
 
 /** Effective card-image version: NEXT_PUBLIC_IMAGE_VERSION when non-empty, else the default. */
 export const IMAGE_VERSION =
