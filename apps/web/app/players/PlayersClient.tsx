@@ -303,7 +303,9 @@ export function PlayersClient() {
   const pastEnd = listData !== undefined && listData.items.length === 0 && listData.total > 0;
   // No card matches (settled, not an error): the empty state stands alone —
   // no "0 cards · page 1 of 1" and no pagination beside "No results found."
-  // (browser QA 2026-10-25 (h)); the count line still announces it.
+  // (browser QA 2026-10-25 (h)); the count line keeps "0 cards" for screen
+  // readers and the sentence is the empty state's only (change
+  // a11y-names-and-card-league D4).
   const noResults = !listQuery.isError && !listQuery.isPending && !listQuery.isPlaceholderData && listData !== undefined && listData.total === 0;
 
   // Scroll back to the top of the grid when the page changes (not on first render).
@@ -546,7 +548,10 @@ export function PlayersClient() {
             ) : listQuery.isPlaceholderData ? (
               "Updating…"
             ) : noResults ? (
-              <span className="sr-only">No results found.</span>
+              // The count only — the sentence "No results found." is the
+              // empty state's (below), so it is read once (change
+              // a11y-names-and-card-league D4).
+              <span className="sr-only">0 cards</span>
             ) : (
               `${total.toLocaleString("en-US")} ${total === 1 ? "card" : "cards"} · page ${state.page.toLocaleString("en-US")} of ${totalPages.toLocaleString("en-US")}`
             )}
@@ -567,20 +572,26 @@ export function PlayersClient() {
           </div>
         ) : listQuery.isPending || pastEnd ? (
           <CardGridSkeleton count={PLAYERS_PAGE_SIZE} className={`mt-1 ${PLAYERS_GRID}`} />
-        ) : players.length === 0 ? (
-          // The reference's empty state (survey S2 §7): the grid gives way to
-          // two lines; the rail and the chips stay, Reset is in both.
-          <div className="mt-2 space-y-1 rounded-[var(--radius-panel)] bg-[var(--color-panel)] px-6 py-12 text-center" data-testid="players-empty">
-            <p className="text-base font-semibold text-[var(--color-text-primary)]">No results found.</p>
-            <p className="text-sm text-[var(--color-text-secondary)]">Try resetting or changing your filter options!</p>
-          </div>
-        ) : (
+        ) : players.length > 0 ? (
           <div className={`mt-1 ${PLAYERS_GRID} ${listQuery.isPlaceholderData ? "opacity-60" : ""}`} aria-busy={listQuery.isPlaceholderData}>
             {players.map((p) => (
               <PlayerCard key={p.id} player={p} caption="styles" />
             ))}
           </div>
-        )}
+        ) : null}
+        {/* The reference's empty state (survey S2 §7): the grid gives way to
+            two lines; the rail and the chips stay, Reset is in both. Its live
+            region is always mounted (empty and room-less otherwise), so the
+            two lines are announced when they appear — the only place the
+            sentence "No results found." is (the count line says "0 cards"). */}
+        <div role="status">
+          {!listQuery.isError && !listQuery.isPending && !pastEnd && players.length === 0 && (
+            <div className="mt-2 space-y-1 rounded-[var(--radius-panel)] bg-[var(--color-panel)] px-6 py-12 text-center" data-testid="players-empty">
+              <p className="text-base font-semibold text-[var(--color-text-primary)]">No results found.</p>
+              <p className="text-sm text-[var(--color-text-secondary)]">Try resetting or changing your filter options!</p>
+            </div>
+          )}
+        </div>
 
         {!pastEnd && !noResults && <Pagination className="mt-4" page={state.page} totalPages={totalPages} onChange={(p) => update({ page: p })} />}
       </div>

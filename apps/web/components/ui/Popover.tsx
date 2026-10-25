@@ -26,11 +26,13 @@ import {
 // popover never stays open behind the focus (QA 2026-10-23 bug 6); its
 // visible controls are all tab stops. Placement and the 8 px viewport clamp
 // are shared with the tooltip (`floating.ts`); a popover taller than the
-// viewport scrolls inside; below lg it stays above the fixed bottom chrome
-// (tab bar, Progression dock and strip — `chromeFloor`).
+// viewport scrolls inside; below lg it stays above every piece of the fixed
+// bottom chrome (tab bar, Progression dock and strip — `chromeFloor`), also
+// when that chrome reaches the upper half of a landscape phone.
 // With `sheetBelow` a popover is shown as a bottom sheet on a narrow viewport
 // when it is taller than half of the area above that chrome (the stat-row
-// Adjust popover on phones).
+// Adjust popover on phones), and at any width when that area is lower than
+// MIN_FLOATING_AREA.
 // Content renders only while open.
 
 const FOCUSABLE =
@@ -54,7 +56,8 @@ export interface PopoverPanelProps {
   matchWidth?: boolean;
   /** Below this viewport width (px), show it as a bottom sheet when its
    *  anchored form is taller than half the viewport (decided once per
-   *  opening — `floating.ts`, "Sheet form"). Omitted: always anchored. */
+   *  opening — `floating.ts`, "Sheet form"); at any width when the bottom
+   *  chrome leaves less than MIN_FLOATING_AREA. Omitted: always anchored. */
   sheetBelow?: number;
   className?: string;
   children: ReactNode;

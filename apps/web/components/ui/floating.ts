@@ -16,11 +16,17 @@ import { useEffect, type RefObject } from "react";
 // Below lg the fixed bottom chrome (the tab bar, the player page's
 // Progression dock and its category strip — marked with FLOOR_ATTR) takes
 // the lower edge of the viewport: the available area ends FLOATING_GAP above
-// its top edge (`chromeFloor`), so no floating element covers it (browser QA
-// 2026-10-25 W3: a stat row's Adjust popover hid the strip's top 29 px at
-// 390 × 844). Chrome that holds the anchor is not a floor (the strip's own
-// popovers open above it anyway), and nothing is while the anchor sits in an
-// open modal <dialog> (the phone Progression sheet covers the chrome).
+// the top edge of the highest piece of it that is shown (`chromeFloor`), so
+// no floating element covers any of it (browser QA 2026-10-25 W3: a stat
+// row's Adjust popover hid the strip's top 29 px at 390 × 844). Every shown
+// fixed piece counts, wherever it sits and whatever holds the anchor (change
+// a11y-names-and-card-league D5): on a landscape phone the strip's top is in
+// the upper half of the viewport (568 × 320: strip 146, dock 192, tab bar
+// 250) — the former rule skipped such chrome, and chrome holding the anchor,
+// so a sheet-form popover stood on the dock over the strip; a popover of a
+// strip item or of the dock now opens above the strip. Nothing is a floor
+// while the anchor sits in an open modal <dialog> (the phone Progression
+// sheet covers the chrome).
 
 /** Gap between an anchor and its floating element. */
 export const FLOATING_GAP = 6;
@@ -47,24 +53,43 @@ export function visibleViewport(): { left: number; top: number; width: number; h
  *  the ProgressionDock's dock and strip). */
 export const FLOOR_ATTR = "data-floating-floor";
 
-/** The top edge of the shown bottom chrome a floating element placed against
- *  `anchor` must stay above, or Infinity: chrome holding the anchor, hidden
- *  chrome (from lg) and chrome in the upper half of the visible viewport are
- *  ignored, and so is all of it while the anchor is inside an open modal
- *  dialog (which covers the chrome). */
+/** The top edge of the highest shown, fixed bottom chrome a floating element
+ *  placed against `anchor` must stay above, or Infinity: every element marked
+ *  FLOOR_ATTR that is laid out (not `display: none` — the chrome is hidden
+ *  from lg), not `visibility: hidden` and `position: fixed` counts, wherever
+ *  it sits and whether or not it holds the anchor; none does while the
+ *  anchor is inside an open modal dialog (which covers the chrome). */
 export function chromeFloor(anchor: Element | null): number {
   if (typeof document === "undefined" || anchor?.closest("dialog[open]")) return Infinity;
-  const view = visibleViewport();
   let floor = Infinity;
   for (const el of document.querySelectorAll(`[${FLOOR_ATTR}]`)) {
-    if (anchor && el.contains(anchor)) continue;
     const r = el.getBoundingClientRect();
     if (r.width === 0 || r.height === 0) continue;
-    if (r.top < view.top + view.height / 2) continue;
+    const style = getComputedStyle(el);
+    if (style.position !== "fixed" || style.visibility === "hidden") continue;
     floor = Math.min(floor, r.top);
+  }
+  // A viewport so short that the chrome leaves no usable room above it (a
+  // landscape phone under ~250 px, a pinch-zoomed page): a floating element
+  // squeezed into that sliver is unreadable, so it covers the chrome as it
+  // did before the floor existed.
+  if (floor !== Infinity) {
+    const view = visibleViewport();
+    if (floor - FLOATING_GAP - view.top < MIN_USABLE_AREA) return Infinity;
   }
   return floor;
 }
+
+/** Smallest height (px) the area above the bottom chrome must leave for a
+ *  popover in its anchored form; below it a popover that opts into the sheet
+ *  form (`sheetBelow`) takes that form at any viewport width (design D5: a
+ *  short landscape viewport, where an anchored popover would be squeezed
+ *  next to its anchor). */
+export const MIN_FLOATING_AREA = 160;
+
+/** Below this much room (px) above the bottom chrome the floor is dropped
+ *  altogether (see chromeFloor): the sheet form cannot be usable either. */
+export const MIN_USABLE_AREA = 96;
 
 /** The lowest y (layout-viewport coordinates) a floating element placed
  *  against `anchor` may reach: the visible viewport's bottom or the top of
@@ -78,7 +103,8 @@ function bottomLimit(anchor: Element | null, view: ReturnType<typeof visibleView
 // sheet instead of next to its anchor when, on a viewport narrower than that
 // breakpoint, its anchored form is taller than half the visible area (the
 // visible viewport above the bottom chrome; the stat-row Adjust popover below
-// 640 px). The choice is made once per opening (`wantsSheet`, measured in the
+// 640 px) — or, at any width, when the bottom chrome leaves less than
+// MIN_FLOATING_AREA above it. The choice is made once per opening (`wantsSheet`, measured in the
 // anchored form right after showing) and marked with SHEET_ATTR; while it is
 // set, every placement pins the element to the bottom of the visible
 // viewport at its full width, at most 85 % of its height, scrolling inside —
@@ -96,10 +122,14 @@ const SHEET_MAX_SHARE = 0.85;
 
 /** True when a shown floating element, placed in its anchored form, is taller
  *  than half the visible area above the bottom chrome (`anchor`'s floor) and
- *  the viewport is narrower than `below`. */
+ *  the viewport is narrower than `below`, or when that chrome leaves less
+ *  than MIN_FLOATING_AREA of the visible viewport above it. */
 export function wantsSheet(floating: HTMLElement, below: number, anchor: Element | null = null): boolean {
   const view = visibleViewport();
-  const area = Math.min(view.top + view.height, chromeFloor(anchor) - FLOATING_GAP) - view.top;
+  const viewBottom = view.top + view.height;
+  const floor = chromeFloor(anchor) - FLOATING_GAP;
+  const area = Math.min(viewBottom, floor) - view.top;
+  if (floor < viewBottom && area < MIN_FLOATING_AREA) return true;
   return view.width < below && floating.getBoundingClientRect().height > area / 2;
 }
 

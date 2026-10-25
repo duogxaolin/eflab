@@ -72,11 +72,14 @@ export function SiteHeader() {
 
           {/* Right action controls */}
           <div className="efb-navbar__actions">
-            {/* Search trigger, lg and up: 208 × 32 with the ⌘K chip */}
+            {/* Search trigger, lg and up: 208 × 32 with the ⌘K chip. Named by
+                its visible text, "Search players" (WCAG 2.5.3 Label in Name —
+                an aria-label could not hold the chip's visible "K" without
+                reading it as a word); the shortcut is `aria-keyshortcuts`. */}
             <button
               type="button"
               onClick={openPalette}
-              aria-label="Search players (Command K)"
+              aria-keyshortcuts="Meta+K Control+K"
               aria-haspopup="dialog"
               className="efb-navbar-search-trigger hidden lg:flex"
             >
@@ -95,6 +98,7 @@ export function SiteHeader() {
               onClick={openPalette}
               className="button button--md button--icon-only button--ghost lg:hidden"
               aria-label="Search players"
+              aria-keyshortcuts="Meta+K Control+K"
               aria-haspopup="dialog"
               data-testid="mobile-search-button"
             >

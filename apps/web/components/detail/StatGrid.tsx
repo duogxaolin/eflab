@@ -217,9 +217,13 @@ function StatSection({ title, statKeys, values, boosterDeltas, managerDeltas, hi
                   // / aria-expanded from the Popover), not a toggle. The
                   // highlight is `data-hit` / `data-dim` (accent ring, dimmed
                   // others); screen readers get the categories from the
-                  // row's name and the open popover's heading.
-                  aria-label={`Adjust ${catNames.join(" and ")} — ${statLabel(st)} ${val}`}
+                  // row's name and the open popover's heading. Named by its
+                  // content (WCAG 2.5.3 Label in Name — change
+                  // a11y-names-and-card-league): the hidden action, then the
+                  // visible stat name, chips and value — "Adjust Dexterity:
+                  // Offensive Awareness +4 booster 89".
                 >
+                  <span className="sr-only">Adjust {catNames.join(" and ")}:</span>
                   {content}
                 </button>
               )}
@@ -337,10 +341,16 @@ export function CategoryRow({
                 className="efb-category-strip__item hit-44 motion-reduce:transition-none"
               >
                 <Icon className="size-4 shrink-0" aria-hidden />
+                {/* The spaces (not rendered in the flex row) keep the
+                    goalkeeper number and the value apart in the visible text
+                    ("1 0", contained in "Adjust Goalkeeper 1: 0" — Label in
+                    Name), never "10". */}
                 {suffix && (
-                  <span className="efb-category-strip__sub" aria-hidden>
-                    {suffix}
-                  </span>
+                  <>
+                    <span className="efb-category-strip__sub" aria-hidden>
+                      {suffix}
+                    </span>{" "}
+                  </>
                 )}
                 <span aria-hidden>{v}</span>
               </button>

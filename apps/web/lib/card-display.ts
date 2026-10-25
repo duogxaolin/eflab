@@ -1,5 +1,5 @@
 // Shared helpers for the web app: card-tier styling, position mapping, stat colors.
-import type { CardType, Position, BaseStat, PhysiqueField } from "@eflab/shared";
+import type { CardType, Position, BaseStat, PhysiqueField, PlayerCardDTO } from "@eflab/shared";
 import {
   POSITIONS,
   PLAYING_STYLES,
@@ -187,6 +187,22 @@ export const CONDITION_LABEL: Record<string, string> = {
 export function conditionLabel(letter: string | null | undefined): string {
   if (!letter) return "—";
   return CONDITION_LABEL[letter.toUpperCase()] ?? letter;
+}
+
+/** The league a card page names (change a11y-names-and-card-league, design
+ *  D1): the card's OWN league (`cardLeague`, `Player.leagueId` — the league
+ *  the `/players` League filter matches), else — only when the card stores
+ *  none — its team's league (`leagueName` / `leagueEmblemUrl`, id unknown),
+ *  else null. The single place that decides the fallback: the detail page's
+ *  league mark, its Card Info "League" row and the compare Overview. */
+export interface ShownLeague {
+  id: number | null;
+  name: string;
+  emblemUrl: string | null;
+}
+export function cardLeagueOf(card: Pick<PlayerCardDTO, "cardLeague" | "leagueName" | "leagueEmblemUrl">): ShownLeague | null {
+  if (card.cardLeague) return card.cardLeague;
+  return card.leagueName ? { id: null, name: card.leagueName, emblemUrl: card.leagueEmblemUrl } : null;
 }
 
 // Stronger-foot enum → label (Konami: 0 = Right, 1 = Left, 2 = Both).
