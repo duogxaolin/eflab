@@ -1,7 +1,6 @@
 "use client";
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
-import type { Route } from "next";
 import { useSearchParams } from "next/navigation";
 import { CalendarDays, ChevronDown, Circle, CircleCheck, Footprints, MoveVertical, Sparkles, Swords, Weight } from "lucide-react";
 import { trpc } from "@/lib/trpc";
@@ -1031,7 +1030,7 @@ export function PlayerDetailClient({
                   its default compare build (the `left` / `right` form of the
                   two-build compare; an old `?ids=` link still opens). */}
               <Link
-                href={`/compare?left=${p.id}` as Route}
+                href={`/compare?left=${p.id}`}
                 aria-label={`Compare ${p.name}`}
                 className="button button--sm button--ghost button--icon-only mb-1 shrink-0"
                 data-testid="overview-compare"

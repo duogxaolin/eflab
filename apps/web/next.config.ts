@@ -81,7 +81,17 @@ const config: NextConfig = {
   // git-ignored) run next to the served `.next` without touching it.
   distDir: process.env.NEXT_DIST_DIR || ".next",
   reactStrictMode: false,
+  // Typed links (change small-fixes-1027, design D2): `typedRoutes` makes Next
+  // generate `<distDir>/types/link.d.ts` (the `Link` / router / redirect href
+  // types); `strictRouteTypes` makes Next import it, with the page validator,
+  // from `next-env.d.ts`, which `next build`, `next typegen` and `next dev`
+  // rewrite for the distDir they write to, just before their own type check.
+  // So an unknown `<Link href>` fails `next build` (any distDir) and
+  // `pnpm typecheck` (`next typegen` first), always against types of the
+  // current routes — `tsconfig.json` keeps excluding `.next`. Types only: no
+  // runtime effect.
   typedRoutes: true,
+  experimental: { strictRouteTypes: true },
   // @eflab/api is imported type-only (AppRouter) and resolved through the
   // tsconfig path alias, so it does not need transpiling.
   transpilePackages: ["@eflab/shared"],

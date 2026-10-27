@@ -110,7 +110,7 @@ export function SkillDetailClient({ slug, initialData, rarity }: { slug: string;
   const total = skill.playerCount;
   const allCards = catalogue.data?.total;
   const share = allCards ? `${((total / allCards) * 100).toFixed(total / allCards < 0.1 ? 2 : 1)}%` : "—";
-  const showAllHref = skill.key ? (`/players?skill=${encodeURIComponent(skill.key)}` as Route) : undefined;
+  const showAllHref: Route | undefined = skill.key ? `/players?skill=${encodeURIComponent(skill.key)}` : undefined;
   const rows = holders.data?.rows ?? [];
 
   return (
