@@ -1,6 +1,6 @@
 # eFootLab (eflab)
 
-A fan-made eFootball player database: every card with real stats, side-by-side compare, the latest packs and the full skill list. Turborepo + pnpm monorepo — **Next.js 15 (App Router, Tailwind CSS 4)** web app, **Fastify 5 + tRPC v11** API with SuperJSON BigInt serialization, **Prisma 6 + PostgreSQL 16** storage.
+A fan-made eFootball player database: every card with real stats, side-by-side compare, the latest packs and the full skill list. Turborepo + pnpm monorepo — **Next.js 16 (App Router, Turbopack, Tailwind CSS 4)** web app, **Fastify 5 + tRPC v11** API with SuperJSON BigInt serialization, **Prisma 6 + PostgreSQL 16** storage.
 
 Not affiliated with Konami. Player data comes from public third-party dumps (efootbase as primary, eFHUB as secondary cross-fill); nothing is scraped at runtime.
 
@@ -10,7 +10,7 @@ Not affiliated with Konami. Player data comes from public third-party dumps (efo
 
 | Surface | Path | Stack |
 |---|---|---|
-| Web | `apps/web` | Next.js 15 App Router · Tailwind CSS 4 · `@trpc/react-query` · Lucide |
+| Web | `apps/web` | Next.js 16.4.3 App Router · Turbopack · Tailwind CSS 4 · `@trpc/react-query` · Lucide |
 | API | `apps/api` | Fastify 5 · `@trpc/server` v11 · SuperJSON |
 | DB | `packages/db` | Prisma 6 · PostgreSQL 16 · JSONL seeder + SQLite cross-fill |
 | Shared | `packages/shared` | Zod schemas · domain constants · pure helpers · progression math |

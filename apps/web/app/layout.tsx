@@ -6,7 +6,6 @@ import { Providers } from "./providers";
 import { SiteHeader } from "@/components/layout/SiteHeader";
 import { MobileBottomNav } from "@/components/layout/MobileBottomNav";
 import { SiteFooter } from "@/components/layout/SiteFooter";
-import { PageSlot } from "@/components/layout/PageSlot";
 import { SkipLink } from "@/components/layout/SkipLink";
 
 /** id of the page's `<main>` (the "Skip to content" target). */
@@ -72,8 +71,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
                 tabindex); no outline, scroll margin under the header —
                 `.efb-skip-target`. */}
             <main id={MAIN_ID} className="efb-skip-target flex-1 mx-auto w-full max-w-6xl px-4 py-8">
-              {/* Not `{children}` directly: see PageSlot (hydration #418). */}
-              <PageSlot>{children}</PageSlot>
+              {children}
             </main>
             <SiteFooter />
             <MobileBottomNav />
