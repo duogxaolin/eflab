@@ -1,5 +1,5 @@
 "use client";
-import type { Position } from "@eflab/shared";
+import { PITCH_GRID, type Position } from "@eflab/shared";
 import { statTierClass } from "@/lib/card-display";
 
 // Pitch Map of the player detail page. The 13 values are computed by the
@@ -22,10 +22,16 @@ import { statTierClass } from "@/lib/card-display";
 // box. Deviations, for contrast: the position label is dark on a full cell
 // and white on a half one (the reference's muted label reads ~1.6:1 on the
 // lime), and the registered position carries an inset 2 px ring.
+// The cells are placed from PITCH_GRID (@eflab/shared), the geometry the
+// Position Training rule reads its grid neighbours from (change
+// efootbase-s4-measure); while Position Training is on, a trained position
+// is drawn full (as the reference does) and its name says it is trained.
 export interface PitchMapProps {
   positionAptitudes: Record<string, number>;
   tiles: Record<Position, number>;
   registeredPosition: Position | string;
+  /** Positions Position Training scores at full proficiency (none by default). */
+  trainedPositions?: readonly Position[];
   className?: string;
 }
 
@@ -62,42 +68,29 @@ const RING: Record<Proficiency, string> = {
   none: "shadow-[inset_0_0_0_2px_var(--color-accent)]",
 };
 
-/** Grid placement: side cells span 2 / 3 / 2 of the seven rows. */
-const PLACE: Record<Position, string> = {
-  LWF: "col-start-1 row-start-1 row-span-2",
-  LMF: "col-start-1 row-start-3 row-span-3",
-  LB: "col-start-1 row-start-6 row-span-2",
-  CF: "col-start-2 row-start-1",
-  SS: "col-start-2 row-start-2",
-  AMF: "col-start-2 row-start-3",
-  CMF: "col-start-2 row-start-4",
-  DMF: "col-start-2 row-start-5",
-  CB: "col-start-2 row-start-6",
-  GK: "col-start-2 row-start-7",
-  RWF: "col-start-3 row-start-1 row-span-2",
-  RMF: "col-start-3 row-start-3 row-span-3",
-  RB: "col-start-3 row-start-6 row-span-2",
-};
-
 /** DOM (and reading) order: left side, centre top to bottom, right side. */
 const ORDER: readonly Position[] = ["LWF", "LMF", "LB", "CF", "SS", "AMF", "CMF", "DMF", "CB", "GK", "RWF", "RMF", "RB"];
-const SIDE = new Set<Position>(["LWF", "LMF", "LB", "RWF", "RMF", "RB"]);
 
-function PitchCell({ pos, proficiency, rating, registered }: { pos: Position; proficiency: Proficiency; rating: number; registered: boolean }) {
-  const stack = SIDE.has(pos);
+function PitchCell({ pos, proficiency, rating, registered, trained }: { pos: Position; proficiency: Proficiency; rating: number; registered: boolean; trained: boolean }) {
+  // Grid placement from the shared geometry: side cells span 2 / 3 / 2 of the
+  // seven rows (inline, as the placement is data, not a fixed class list).
+  const cell = PITCH_GRID[pos];
+  const stack = cell.col !== 2;
   // role="img": one accessible name per tile ("LWF, 104 OVR, fully
   // proficient" — WCAG 1.4.1, the proficiency is otherwise only the fill);
   // an aria-label on a plain <div> would be dropped.
   return (
     <div
       role="img"
-      aria-label={`${pos}, ${rating} OVR, ${SPOKEN[proficiency]}${registered ? ", registered position" : ""}`}
-      className={`flex min-h-0 min-w-0 items-center justify-center overflow-hidden rounded-md ${PLACE[pos]} ${FILL[proficiency]} ${
+      aria-label={`${pos}, ${rating} OVR, ${SPOKEN[proficiency]}${trained ? " through Position Training" : ""}${registered ? ", registered position" : ""}`}
+      className={`flex min-h-0 min-w-0 items-center justify-center overflow-hidden rounded-md ${FILL[proficiency]} ${
         registered ? RING[proficiency] : EDGE
       } ${stack ? "flex-col gap-1.5" : "flex-row gap-1.5"}`}
+      style={{ gridColumn: cell.col, gridRow: `${cell.row} / span ${cell.rowSpan}` }}
       data-testid={`pitch-${pos}`}
       data-proficiency={proficiency}
       data-registered={registered ? "true" : undefined}
+      data-trained={trained ? "true" : undefined}
     >
       <span aria-hidden className="text-xs font-medium leading-none">
         {pos}
@@ -119,7 +112,7 @@ const LEGEND: ReadonlyArray<[Proficiency, string]> = [
   ["full", "Full"],
 ];
 
-export function PitchMap({ positionAptitudes, tiles, registeredPosition, className = "" }: PitchMapProps) {
+export function PitchMap({ positionAptitudes, tiles, registeredPosition, trainedPositions = [], className = "" }: PitchMapProps) {
   return (
     <div className={`flex w-full min-w-0 flex-col items-center gap-3 ${className}`}>
       <div className="w-full rounded-xl bg-[var(--color-default)] p-4">
@@ -131,15 +124,19 @@ export function PitchMap({ positionAptitudes, tiles, registeredPosition, classNa
           className="mx-auto grid w-full max-w-[350px] grid-cols-[minmax(0,1fr)_minmax(0,2fr)_minmax(0,1fr)] grid-rows-7 gap-[3px]"
           style={{ aspectRatio: "350 / 320" }}
         >
-          {ORDER.map((pos) => (
-            <PitchCell
-              key={pos}
-              pos={pos}
-              proficiency={proficiencyOf(positionAptitudes[pos])}
-              rating={tiles[pos]}
-              registered={pos === registeredPosition}
-            />
-          ))}
+          {ORDER.map((pos) => {
+            const trained = trainedPositions.includes(pos);
+            return (
+              <PitchCell
+                key={pos}
+                pos={pos}
+                proficiency={trained ? "full" : proficiencyOf(positionAptitudes[pos])}
+                rating={tiles[pos]}
+                registered={pos === registeredPosition}
+                trained={trained}
+              />
+            );
+          })}
         </div>
       </div>
 

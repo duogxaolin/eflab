@@ -24,6 +24,12 @@
 //     enter as max(0, v − 25), height as max(0, h − 111 − 25), weak-foot
 //     accuracy as 59 × a / 3 + 40; overall = floor((Σ w·term + 499) / 1000)
 //     limited to 40..127. No per-card anchor, no fitted penalty.
+//   · match state (change efootbase-s4-measure, optional, off by default):
+//     the weak-foot chips take a flat amount off five stats after the band
+//     and the cut at 99 (never below 40), before the boosters — shown only,
+//     the overall never reads them; Position Training scores the positions
+//     the card trains at full proficiency in the tiles (the stats and the
+//     card face do not move).
 //
 // Costs are handled as integers in half-points to avoid float drift.
 import {
@@ -46,7 +52,8 @@ import {
   type OvrModel,
   type ProficiencyBand,
 } from "./ovrModel";
-import type { BuildConfig, BuildResult } from "./types";
+import { PITCH_NEIGHBOURS } from "./pitch";
+import type { BuildConfig, BuildResult, MatchState } from "./types";
 
 export type StatVector = Record<BaseStat, number>;
 export type TrainingAllocation = Record<TrainingCategory, number>;
@@ -398,6 +405,88 @@ export function bestAllocation(position: Position, budget: number, model: OvrMod
   return alloc;
 }
 
+// ---- Match state (change efootbase-s4-measure) ----
+
+/** Both match-state toggles off — the engine's default. */
+export const MATCH_STATE_OFF: Readonly<MatchState> = Object.freeze({ weakFoot: false, positionTraining: false });
+
+/** The five stats the weak-foot chips lower, in the chip table's order. */
+export const WEAK_FOOT_CHIP_STATS = ["ballControl", "lowPass", "loftedPass", "finishing", "curl"] as const satisfies readonly BaseStat[];
+export type WeakFootChipStat = (typeof WEAK_FOOT_CHIP_STATS)[number];
+
+/**
+ * Flat weak-foot chips by the card's stored weak-foot accuracy (0–3), as the
+ * reference's "Weak foot" toggle shows them (survey of 2026-10-27, outside the
+ * repository; numbers-only oracle `__fixtures__/weak-foot-oracle.json`). The
+ * same chip on values 41–91, so a table, not a rate. Readings behind each row:
+ *   · accuracy 2 — three cards (two RWF, one GK; Epic and Highlight; weak-foot
+ *     usage 0 and 1 give the same chips);
+ *   · accuracy 1 — two cards (LWF Trending, CF Standard);
+ *   · accuracy 0 — two cards (LWF Standard, CF Highlight; usage 0 and 1 alike).
+ * Accuracy 3 was read on one card only (0 / −3 / −3 / −3 / −3): not built —
+ * `weakFootChipsAvailable(3)` is false and its deltas are zero.
+ */
+export const WEAK_FOOT_CHIPS: Readonly<Record<number, Readonly<Record<WeakFootChipStat, number>>>> = {
+  0: { ballControl: 7, lowPass: 15, loftedPass: 15, finishing: 15, curl: 24 },
+  1: { ballControl: 4, lowPass: 11, loftedPass: 11, finishing: 11, curl: 17 },
+  2: { ballControl: 2, lowPass: 7, loftedPass: 7, finishing: 7, curl: 10 },
+};
+
+/** A weak-foot deduction never takes a stat below this (measured on 11 cells
+ *  of 4 cards), and never raises a stat already below it. */
+export const WEAK_FOOT_FLOOR = 40;
+
+/** True when the chips of this weak-foot accuracy were measured (0, 1, 2). */
+export function weakFootChipsAvailable(accuracy: number | null | undefined): boolean {
+  return typeof accuracy === "number" && Number.isInteger(accuracy) && Object.prototype.hasOwnProperty.call(WEAK_FOOT_CHIPS, accuracy);
+}
+
+/**
+ * Weak-foot deduction per stat for `s1` = the stats after training, the
+ * proficiency band and the cut at 99 (before the boosters and the manager):
+ * delta = min(0, max(40, s1 − chip) − s1) on the five chip stats, 0 elsewhere
+ * and for an accuracy without measured chips. Taking it before the boosters
+ * and the manager is eFootLab's inference: a flat chip and a booster commute
+ * except at the floor, and no reading floored a stat that also had a booster
+ * or a manager (match-state.test.ts pins this order with synthetic floor cases).
+ */
+export function weakFootDeltas(s1: Readonly<StatVector>, accuracy: number | null | undefined): StatVector {
+  const deltas = zeroStats();
+  if (!weakFootChipsAvailable(accuracy)) return deltas;
+  const chips = WEAK_FOOT_CHIPS[accuracy as number]!;
+  for (const s of WEAK_FOOT_CHIP_STATS) deltas[s] = Math.min(0, Math.max(WEAK_FOOT_FLOOR, s1[s] - chips[s]) - s1[s]);
+  return deltas;
+}
+
+/**
+ * The positions Position Training scores at full proficiency (the
+ * reference's rule as measured on seven outfield cards, 2026-10-23 and
+ * 2026-10-27; numbers-only oracle `__fixtures__/position-training-oracle.json`):
+ * every half-proficiency position plus every grid neighbour of the registered
+ * position (PITCH_NEIGHBOURS) that is neither a full-proficiency position nor
+ * GK. A card registered as GK trains none (one goalkeeper card read — the
+ * page disables its toggle). Registered RWF, LWF, CB and CF were measured;
+ * the other registrations rest on the same grid. POSITIONS order.
+ */
+export function trainedPositions(registered: Position, positionAptitudes: PositionAptitudes): Position[] {
+  if (registered === "GK") return [];
+  const neighbours = PITCH_NEIGHBOURS[registered] ?? [];
+  return POSITIONS.filter((p) => {
+    if (p === "GK") return false;
+    const apt = positionAptitudes[p];
+    if (apt === 0) return false;
+    return apt === 1 || neighbours.includes(p);
+  });
+}
+
+/** The aptitudes with every trained position at full (code 0). */
+export function trainedAptitudes(positionAptitudes: PositionAptitudes, trained: readonly Position[]): PositionAptitudes {
+  if (trained.length === 0) return positionAptitudes;
+  const out: Partial<Record<Position, number>> = { ...positionAptitudes };
+  for (const p of trained) out[p] = 0;
+  return out;
+}
+
 export interface SimulateInput {
   /** 26 base (level-1, unboosted) stats of the card. */
   base: StatVector;
@@ -415,14 +504,22 @@ export interface SimulateInput {
   /** The selected manager's pill stats, or null / undefined for none. The
    *  proficiency level is `config.managerProficiency` either way. */
   manager?: ManagerEffect | null;
+  /** The card's registered position — what Position Training trains from
+   *  (never the selected `config.position`). Without it Position Training
+   *  trains nothing. */
+  registeredPosition?: Position;
+  /** Weak-foot chips and Position Training (both off when omitted: the
+   *  result is then exactly the one without a match state). */
+  matchState?: MatchState | null;
 }
 
 /** Full simulation: training → Manager Proficiency bonus (band table) and the
- *  cut to 99 → active boosters → manager +1 → final stats, budget accounting,
- *  the exact overall at the configured position and all 13 position tiles. */
+ *  cut to 99 → (weak-foot chips, shown only) → active boosters → manager +1 →
+ *  final stats, budget accounting, the exact overall at the configured
+ *  position and all 13 position tiles (trained positions at full while
+ *  Position Training is on). */
 export function simulateBuild(input: SimulateInput): BuildResult {
-  const { base, levelCap, config, boosters, positionAptitudes, manager, height, weakFootAccuracy } = input;
-  const proficiency: PositionProficiency = positionAptitudes ? proficiencyFromAptitude(positionAptitudes[config.position]) : "full";
+  const { base, levelCap, config, boosters, positionAptitudes, manager, height, weakFootAccuracy, registeredPosition, matchState } = input;
   const maxLevel = Math.min(Math.max(1, Math.floor(config.maxLevel)), Math.max(1, Math.floor(levelCap)));
   const managerProficiency = clampManagerProficiency(config.managerProficiency);
   const pointsAvailable = trainingPointsAvailable(maxLevel);
@@ -440,9 +537,22 @@ export function simulateBuild(input: SimulateInput): BuildResult {
   const boosterDeltas = applyBoosters(boosters, config.boosters);
   const managerDeltas = applyManager(manager);
   const projectedStats = addStats(base, trainingDeltas, capDeltas, proficiencyDeltas, boosterDeltas, managerDeltas);
+  // Weak-foot chips: on the value after the band and the cut at 99 (s₁),
+  // before the boosters and the manager; shown only — the formula below
+  // reads projectedStats.
+  const weakFootDeltasOut = matchState?.weakFoot
+    ? weakFootDeltas(addStats(base, trainingDeltas, capDeltas, proficiencyDeltas), weakFootAccuracy)
+    : zeroStats();
+  const shownStats = addStats(projectedStats, weakFootDeltasOut);
   const body = { height, weakFootAccuracy };
   const aptitudes: PositionAptitudes = positionAptitudes ?? (Object.fromEntries(POSITIONS.map((p) => [p, 0])) as Record<Position, number>);
-  const tiles = positionTiles(projectedStats, body, aptitudes);
+  const untrainedTiles = positionTiles(projectedStats, body, aptitudes);
+  // Position Training: the trained positions count as full proficiency.
+  const trainedSet = matchState?.positionTraining && registeredPosition ? trainedPositions(registeredPosition, aptitudes) : [];
+  const effective = trainedAptitudes(aptitudes, trainedSet);
+  const tiles = trainedSet.length > 0 ? positionTiles(projectedStats, body, effective) : untrainedTiles;
+  // Without aptitudes every position counts as full (aptitudes = all 0).
+  const proficiency: PositionProficiency = proficiencyFromAptitude(effective[config.position]);
 
   return {
     config: { ...config, maxLevel, managerProficiency },
@@ -453,6 +563,10 @@ export function simulateBuild(input: SimulateInput): BuildResult {
     boosterDeltas,
     managerDeltas,
     projectedStats,
+    weakFootDeltas: weakFootDeltasOut,
+    shownStats,
+    trainedPositions: trainedSet,
+    untrainedTiles,
     pointsAvailable,
     pointsUsed,
     remainingPoints,

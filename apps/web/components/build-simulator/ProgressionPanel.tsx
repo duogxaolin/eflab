@@ -12,6 +12,8 @@ import {
   PROGRESSION_CATEGORY_LABELS,
   TRAINING_CATEGORIES,
   TRAINING_STATS,
+  WEAK_FOOT_CHIPS,
+  WEAK_FOOT_CHIP_STATS,
   allocationCost,
   allocationForMaxLevel,
   bestAllocation,
@@ -30,11 +32,15 @@ import {
   setCategoryPoints,
   statBreakdown,
   toDisplayPoints,
+  trainedPositions,
   trainingPointsAvailable,
+  weakFootChipsAvailable,
+  weakFootStars,
   type BaseStat,
   type BuildMode,
   type BuildResult,
   type BuildUrlState,
+  type MatchState,
   type PickerManagerDTO,
   type PlayerCardDTO,
   type Position,
@@ -281,6 +287,11 @@ export const progressionIds = (base: string) => ({
   levelNote: `${base}-level-note`,
   position: `${base}-position`,
   settingsTitle: `${base}-settings-title`,
+  /** The "Match state" group (Position Training, Weak foot) and the two
+   *  toggles' visible descriptions. */
+  matchTitle: `${base}-match-title`,
+  positionTrainingNote: `${base}-pt-note`,
+  weakFootNote: `${base}-wf-note`,
   /** The ten category rows (the phone sheet opens scrolled to them). */
   cats: `${base}-cats`,
   catLabel: (cat: TrainingCategory) => `${base}-cat-${cat}-label`,
@@ -765,6 +776,8 @@ export function ProgressionPanel({
   preview,
   embedded = false,
   notes,
+  match,
+  onMatchChange,
 }: {
   player: PlayerCardDTO;
   state: ProgressionState;
@@ -775,6 +788,10 @@ export function ProgressionPanel({
   onChange: ProgressionChange;
   /** Static explanatory copy (build-notes.ts, from the server page). */
   notes: BuildNotes;
+  /** The match state (Position Training, Weak foot) and its setter, for the
+   *  Build settings embedded in the phone sheet. */
+  match: MatchState;
+  onMatchChange: (next: MatchState) => void;
   /** Max Level notice of the last change (shown and announced). */
   notice?: BuildNotice | null;
   /** Base of the ids shared with the Build settings card. */
@@ -934,7 +951,9 @@ export function ProgressionPanel({
         </div>
       )}
 
-      {embedded && <BuildSettings player={player} state={state} result={result} refs={refs} onChange={onChange} idBase={idBase} notes={notes} embedded />}
+      {embedded && (
+        <BuildSettings player={player} state={state} result={result} refs={refs} onChange={onChange} idBase={idBase} notes={notes} match={match} onMatchChange={onMatchChange} embedded />
+      )}
 
       {/* Live region: points left, the overall and any notice. */}
       <p role="status" aria-live="polite" aria-atomic="true" className="sr-only" data-testid="progression-live">
@@ -952,18 +971,23 @@ const BREAKDOWN_ORDER: readonly BaseStat[] = [...ATTACKING_STATS, ...DEFENDING_S
 const signedPart = (v: number): string => (v > 0 ? `+${v}` : v < 0 ? `−${-v}` : "0");
 
 /** "Stat breakdown" (D6): one row per stat (26) with its base, training, the
- *  part cut at 99, the proficiency bonus, the boosters, the manager's +1 and
- *  the shown value — reachable by mouse, keyboard and touch inside "About
+ *  part cut at 99, the proficiency bonus, the weak-foot deduction (while Weak
+ *  foot is on — change efootbase-s4-measure), the boosters, the manager's +1
+ *  and the shown value — reachable by mouse, keyboard and touch inside "About
  *  this build" (the stat rows carry no `title`, the Adjust popover holds the
  *  controls only). Short visible column heads, full names for screen
  *  readers; the table scrolls inside its own box when the card is narrow. */
-function StatBreakdownTable({ result }: { result: BuildResult }) {
+type BreakdownColumn = [keyof Omit<ReturnType<typeof statBreakdown>[BaseStat], "stat">, string, string];
+function StatBreakdownTable({ result, weakFoot }: { result: BuildResult; weakFoot: boolean }) {
   const rows = statBreakdown(result);
-  const cols: Array<[keyof Omit<ReturnType<typeof statBreakdown>[BaseStat], "stat">, string, string]> = [
+  // The weak-foot column only while the toggle is on (zeros otherwise).
+  const wf: BreakdownColumn[] = weakFoot ? [["weakFoot", "WF", "Weak foot"]] : [];
+  const cols: BreakdownColumn[] = [
     ["base", "Base", "Base"],
     ["training", "Trn", "Training"],
     ["cut", "Cut", "Cut at 99"],
     ["proficiency", "Prof", "Proficiency bonus"],
+    ...wf,
     ["boosters", "Bst", "Boosters"],
     ["manager", "Mgr", "Manager"],
     ["shown", "Shown", "Shown value"],
@@ -1010,11 +1034,56 @@ function StatBreakdownTable({ result }: { result: BuildResult }) {
   );
 }
 
+/** One match-state toggle (Position Training, Weak foot): an `aria-pressed`
+ *  button named by its visible label, with a visible one-line description
+ *  (`aria-describedby`) — the reason when it is unavailable, then
+ *  `aria-disabled` and a press changes nothing (it stays focusable). */
+function MatchToggle({
+  label,
+  on,
+  disabled,
+  note,
+  noteId,
+  onToggle,
+  testId,
+}: {
+  label: string;
+  on: boolean;
+  disabled: boolean;
+  note: string;
+  noteId: string;
+  onToggle: () => void;
+  testId: string;
+}) {
+  return (
+    <div className="efb-match-toggle-wrap">
+      <button
+        type="button"
+        aria-pressed={on}
+        aria-disabled={disabled ? true : undefined}
+        aria-describedby={noteId}
+        onClick={() => {
+          if (!disabled) onToggle();
+        }}
+        className="efb-match-toggle hit-44"
+        data-testid={testId}
+      >
+        <span className="efb-match-toggle__switch" aria-hidden />
+        <span className="efb-match-toggle__label">{label}</span>
+      </button>
+      <p id={noteId} className="efb-match-toggle__note" data-testid={`${testId}-note`} data-disabled={disabled ? "true" : undefined}>
+        {note}
+      </p>
+    </div>
+  );
+}
+
 /** "Build settings": Max Level (a card with a level cap above 1) + Position,
- *  the overall at the position and the explanatory notes and the Stat
- *  breakdown behind "About this build". From lg a non-sticky card at the end
- *  of the left column, below the pinned Progression card's travel; inside
- *  the sheet it follows the categories (`embedded`). */
+ *  the overall at the position, the match state (Position Training, Weak
+ *  foot — change efootbase-s4-measure) and the explanatory notes and the
+ *  Stat breakdown behind "About this build". From lg a non-sticky card at the
+ *  end of the left column, below the pinned Progression card's travel;
+ *  inside the sheet it follows the categories (`embedded`). */
 export function BuildSettings({
   player,
   state,
@@ -1023,6 +1092,8 @@ export function BuildSettings({
   onChange,
   idBase,
   notes,
+  match,
+  onMatchChange,
   embedded = false,
 }: {
   player: PlayerCardDTO;
@@ -1033,6 +1104,10 @@ export function BuildSettings({
   idBase: string;
   /** Static explanatory copy (build-notes.ts, passed down from the server page). */
   notes: BuildNotes;
+  /** The match state (not part of the build: never in the URL, never a
+   *  "Custom build") and its setter. */
+  match: MatchState;
+  onMatchChange: (next: MatchState) => void;
   embedded?: boolean;
 }) {
   const ids = progressionIds(idBase);
@@ -1044,6 +1119,21 @@ export function BuildSettings({
   const mp = result.config.managerProficiency;
   const manager = refs.manager;
   const customBuild = useMemo(() => isCustomBuild(state, player), [state, player]);
+  // Match state: what each toggle would do on this card (also shown while off).
+  const registered = positionFromIndex(player.registeredPosition);
+  const ptAvailable = registered !== "GK";
+  const trainable = useMemo(() => (ptAvailable ? trainedPositions(registered, player.positionAptitudes) : []), [ptAvailable, registered, player.positionAptitudes]);
+  const wfAvailable = weakFootChipsAvailable(player.weakFootAccuracy);
+  const ptNote = !ptAvailable
+    ? notes.positionTrainingGoalkeeper
+    : trainable.length === 0
+      ? `Trains no position on this card: no position next to ${registered} can be trained.`
+      : `Trains ${trainable.join(", ")}: scored at full proficiency in the position tiles.`;
+  const wfChips = wfAvailable ? WEAK_FOOT_CHIPS[player.weakFootAccuracy]! : null;
+  const wfNote = !wfChips
+    ? notes.weakFootUnmeasured
+    : `Weak-foot accuracy ${weakFootStars(player.weakFootAccuracy)}★: ${WEAK_FOOT_CHIP_STATS.map((s) => `${statLabel(s)} −${wfChips[s]}`).join(", ")}; the overall does not change.`;
+  const trainedHere = result.trainedPositions.includes(state.position);
 
   // Max Level (level cap above 1) is edited through a draft string: typing
   // never commits (a half-typed "2" of "25" must not clamp the level and trim
@@ -1098,9 +1188,11 @@ export function BuildSettings({
         <select id={ids.position} value={state.position} onChange={(e) => onChange({ ...state, position: e.target.value as Position })} className="field field--sm">
           {POSITIONS.map((p) => {
             const prof = proficiencyFromAptitude(player.positionAptitudes[p]);
+            const trained = result.trainedPositions.includes(p);
             return (
-              <option key={p} value={p} data-proficiency={prof}>
+              <option key={p} value={p} data-proficiency={prof} data-trained={trained ? "true" : undefined}>
                 {p} · {PROFICIENCY_LABELS[prof]}
+                {trained ? " · trained" : ""}
               </option>
             );
           })}
@@ -1146,6 +1238,7 @@ export function BuildSettings({
         <div className="min-w-0">
           <div className="text-sm text-[var(--color-text-secondary)]">
             OVR at {state.position} · {PROFICIENCY_LABELS[proficiency]}
+            {trainedHere ? " (trained)" : ""}
           </div>
           <div className="text-xs text-[var(--color-text-dim)]">
             {customBuild ? "Custom build" : capped ? "Max-OVR build" : "Opening build"} · {manager ? `${manager.name} (${mp})` : `proficiency ${mp}`}
@@ -1154,6 +1247,33 @@ export function BuildSettings({
         <div className="efb-progression__overall" data-testid="progression-overall">
           {result.overall}
         </div>
+      </div>
+
+      {/* Match state (change efootbase-s4-measure): not part of the build —
+          a press never writes the URL or makes a "Custom build"; reset when
+          another card opens. */}
+      <div role="group" aria-labelledby={ids.matchTitle} className="efb-match-state" data-testid="match-state">
+        <div id={ids.matchTitle} className="efb-progression__field-label">
+          Match state
+        </div>
+        <MatchToggle
+          label="Position Training"
+          on={match.positionTraining}
+          disabled={!ptAvailable}
+          note={ptNote}
+          noteId={ids.positionTrainingNote}
+          onToggle={() => onMatchChange({ ...match, positionTraining: !match.positionTraining })}
+          testId="position-training"
+        />
+        <MatchToggle
+          label="Weak foot"
+          on={match.weakFoot}
+          disabled={!wfAvailable}
+          note={wfNote}
+          noteId={ids.weakFootNote}
+          onToggle={() => onMatchChange({ ...match, weakFoot: !match.weakFoot })}
+          testId="weak-foot-toggle"
+        />
       </div>
 
       {/* Explanatory notes, limits and the Stat breakdown behind a disclosure. */}
@@ -1193,7 +1313,9 @@ export function BuildSettings({
               </p>
             </>
           )}
-          <StatBreakdownTable result={result} />
+          <p data-testid="position-training-about">{notes.positionTraining}</p>
+          <p data-testid="weak-foot-about">{notes.weakFoot}</p>
+          <StatBreakdownTable result={result} weakFoot={match.weakFoot} />
           <p className="text-[var(--color-text-dim)]" data-testid="progression-limits">
             {notes.limits}
           </p>

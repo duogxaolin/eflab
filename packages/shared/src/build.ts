@@ -10,6 +10,7 @@
 // two cards unless its comment says otherwise.
 import { BASE_STATS, POSITIONS, TRAINING_CATEGORIES, type BaseStat, type CardType, type Position, type TrainingCategory } from "./constants";
 import {
+  MATCH_STATE_OFF,
   allocationCost,
   allocationCostHalf,
   bestAllocation,
@@ -26,7 +27,7 @@ import {
   type StatVector,
   type TrainingAllocation,
 } from "./progression";
-import type { BuildResult } from "./types";
+import type { BuildResult, MatchState } from "./types";
 
 /** What a card needs for its build rules — PlayerCardDTO satisfies it. */
 export interface BuildCard {
@@ -319,13 +320,17 @@ export interface SimulatedBuild {
  * mode (a Highlight card with a level cap of 1 trains up to
  * HIGHLIGHT_MAX_LEVEL). A mode without categories trains nothing. Every mode
  * applies the proficiency bonus (the reference's faces at level 1 include it);
- * a caller that wants none passes a level of 70–76 (compare).
+ * a caller that wants none passes a level of 70–76 (compare). The match state
+ * (`extras.matchState`, the detail page's Weak foot / Position Training
+ * toggles — change efootbase-s4-measure) is not part of the build: omitted,
+ * the result is the one without it; Position Training trains from the card's
+ * registered position.
  */
 export function simulateCardBuild(
   card: SimulatedCard,
   build: SimulatedBuild,
   position: Position,
-  extras: { manager: { rating: number; pills: readonly BaseStat[] } | null; second: BoosterLike | null },
+  extras: { manager: { rating: number; pills: readonly BaseStat[] } | null; second: BoosterLike | null; matchState?: MatchState | null },
 ): BuildResult {
   const mode = buildMode(card);
   const [, hi] = maxLevelRange(card);
@@ -347,18 +352,39 @@ export function simulateCardBuild(
     boosters,
     positionAptitudes: card.positionAptitudes,
     manager: extras.manager ? { stats: extras.manager.pills } : null,
+    registeredPosition: registeredPositionOf(card),
+    matchState: extras.matchState ?? null,
   });
+}
+
+/** The match state as the card page holds it: the two toggles and the card
+ *  they were set on (change efootbase-s4-measure, design D1). */
+export interface HeldMatchState extends MatchState {
+  cardId: string;
+}
+
+/** The match state that applies to `cardId`: the held one when it was set on
+ *  that card, else both toggles off (a state held for another card never
+ *  applies). It keeps ONE held state, so it cannot restore an earlier card's:
+ *  in a single component instance, toggles set on A, then card B, then A again
+ *  would bring A's toggles back — but Next remounts the card page when the
+ *  `[cardId]` segment changes, so a new card starts with nothing held
+ *  (browser-checked: off after Other Versions and after Back). */
+export function matchStateForCard(held: HeldMatchState | null | undefined, cardId: string): MatchState {
+  return held && held.cardId === cardId ? held : MATCH_STATE_OFF;
 }
 
 /** One stat of a build split into its parts (the "Stat breakdown" list of
  *  "About this build", D6): base + training + cut at 99 (≤ 0) + proficiency
- *  bonus + boosters + manager = shown. */
+ *  bonus + weak foot (≤ 0, change efootbase-s4-measure) + boosters + manager
+ *  = shown. */
 export interface StatBreakdownRow {
   stat: BaseStat;
   base: number;
   training: number;
   cut: number;
   proficiency: number;
+  weakFoot: number;
   boosters: number;
   manager: number;
   shown: number;
@@ -374,9 +400,10 @@ export function statBreakdown(result: BuildResult): Record<BaseStat, StatBreakdo
       training: result.trainingDeltas[stat],
       cut: result.capDeltas[stat],
       proficiency: result.proficiencyDeltas[stat],
+      weakFoot: result.weakFootDeltas[stat],
       boosters: result.boosterDeltas[stat],
       manager: result.managerDeltas[stat],
-      shown: result.projectedStats[stat],
+      shown: result.shownStats[stat],
     };
   }
   return out;

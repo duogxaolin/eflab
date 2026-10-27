@@ -23,8 +23,10 @@ import { Popover } from "@/components/ui/Popover";
 // Three-column stat grid of the player detail page (efootbase layout):
 // Attacking / Defending / Strength, one row per stat with the tier colour of
 // the value (five tiers, ≥ 100 magenta — reached only through boosters or the
-// manager, training stops at 99), a cyan "+N" chip for a booster bump and a
-// lime "+1" chip for the selected manager.
+// manager, training stops at 99), a cyan "+N" chip for a booster bump, a
+// lime "+1" chip for the selected manager and, while the Weak foot toggle is
+// on, an orange "−N" chip for the weak-foot deduction (change
+// efootbase-s4-measure).
 // When the build can spend training points, activating a row (click, Enter,
 // Space, tap) opens its Adjust popover (change efootbase-function-parity, D6;
 // the reference's stat rows are popover triggers named "Adjust Dexterity —
@@ -110,17 +112,24 @@ export function useCategoryPreview(): { preview: StatHighlight; bind: CategoryPr
   return { preview: hover ?? focus, bind, clear };
 }
 
+type DeltaKind = "booster" | "manager" | "weakFoot";
+const DELTA_CHIP: Record<DeltaKind, { cls: string; testId: string; spoken: string }> = {
+  booster: { cls: "efb-stat-row__boost--cyan", testId: "stat-delta", spoken: "booster" },
+  manager: { cls: "efb-stat-row__boost--lime", testId: "stat-manager-delta", spoken: "manager" },
+  // The weak-foot deduction (change efootbase-s4-measure): orange, "−N".
+  weakFoot: { cls: "efb-stat-row__boost--warn", testId: "stat-weak-foot-delta", spoken: "weak foot" },
+};
+
 /** "+N" chip for a stat raised by an active booster (cyan) or by the selected
- *  manager (lime, "+1"); what it is is said in screen-reader text. */
-export function DeltaChip({ delta, kind = "booster" }: { delta: number | undefined; kind?: "booster" | "manager" }) {
+ *  manager (lime, "+1"), "−N" for the weak-foot deduction (orange); what it
+ *  is is said in screen-reader text. */
+export function DeltaChip({ delta, kind = "booster" }: { delta: number | undefined; kind?: DeltaKind }) {
   if (!delta) return null;
+  const chip = DELTA_CHIP[kind];
   return (
-    <span
-      className={`efb-stat-row__boost ${kind === "manager" ? "efb-stat-row__boost--lime" : "efb-stat-row__boost--cyan"}`}
-      data-testid={kind === "manager" ? "stat-manager-delta" : "stat-delta"}
-    >
-      {delta > 0 ? `+${delta}` : delta}
-      <span className="sr-only"> {kind === "manager" ? "manager" : "booster"}</span>
+    <span className={`efb-stat-row__boost ${chip.cls}`} data-testid={chip.testId}>
+      {delta > 0 ? `+${delta}` : `−${-delta}`}
+      <span className="sr-only"> {chip.spoken}</span>
     </span>
   );
 }
@@ -131,6 +140,8 @@ interface GridProps {
   boosterDeltas?: Record<BaseStat, number>;
   /** +1 of the selected manager per stat (shown as the lime "+1" chip). */
   managerDeltas?: Record<BaseStat, number>;
+  /** Weak-foot deduction per stat (≤ 0; shown as the orange "−N" chip). */
+  weakFootDeltas?: Record<BaseStat, number>;
   /** Categories the grid highlights while no row popover is open. */
   highlight: ActiveCategories;
   /** The Adjust popover's content of a stat (`headingId` names it); omitted
@@ -149,18 +160,29 @@ interface SectionProps extends GridProps {
   idBase: string;
 }
 
-/** The right end of a row: the booster / manager chips, then the value pill. */
-function RowContent({ stat, val, boost, mgr, boosterDeltas, managerDeltas }: { stat: BaseStat; val: number; boost: number; mgr: number } & Pick<GridProps, "boosterDeltas" | "managerDeltas">) {
+/** The right end of a row: the booster / manager / weak-foot chips, then the
+ *  value pill. */
+function RowContent({
+  stat,
+  val,
+  boost,
+  mgr,
+  wf,
+  boosterDeltas,
+  managerDeltas,
+  weakFootDeltas,
+}: { stat: BaseStat; val: number; boost: number; mgr: number; wf: number } & Pick<GridProps, "boosterDeltas" | "managerDeltas" | "weakFootDeltas">) {
   return (
     <>
       <span className={`efb-stat-row__label ${statTierClass(val)}`} data-testid="stat-name">
         {statLabel(stat)}
       </span>
       <span className="efb-stat-row__end">
-        {(boost !== 0 || mgr !== 0) && (
+        {(boost !== 0 || mgr !== 0 || wf !== 0) && (
           <span className="efb-stat-row__chips">
             <DeltaChip delta={boosterDeltas?.[stat]} />
             <DeltaChip delta={managerDeltas?.[stat]} kind="manager" />
+            <DeltaChip delta={weakFootDeltas?.[stat]} kind="weakFoot" />
           </span>
         )}
         <span className={`efb-stat-row__value ${statTierBg(val)} ${statTierForeground(val)}`}>{val}</span>
@@ -169,7 +191,7 @@ function RowContent({ stat, val, boost, mgr, boosterDeltas, managerDeltas }: { s
   );
 }
 
-function StatSection({ title, statKeys, values, boosterDeltas, managerDeltas, highlight, renderAdjust, openStat, setOpen, idBase }: SectionProps) {
+function StatSection({ title, statKeys, values, boosterDeltas, managerDeltas, weakFootDeltas, highlight, renderAdjust, openStat, setOpen, idBase }: SectionProps) {
   // While a row's popover is open its categories are highlighted.
   const active: ActiveCategories = openStat && renderAdjust ? STAT_CATEGORIES[openStat] : highlight;
   return (
@@ -185,7 +207,10 @@ function StatSection({ title, statKeys, values, boosterDeltas, managerDeltas, hi
           const dim = active !== null && !hit;
           const boost = boosterDeltas?.[st] ?? 0;
           const mgr = managerDeltas?.[st] ?? 0;
-          const content = <RowContent stat={st} val={val} boost={boost} mgr={mgr} boosterDeltas={boosterDeltas} managerDeltas={managerDeltas} />;
+          const wf = weakFootDeltas?.[st] ?? 0;
+          const content = (
+            <RowContent stat={st} val={val} boost={boost} mgr={mgr} wf={wf} boosterDeltas={boosterDeltas} managerDeltas={managerDeltas} weakFootDeltas={weakFootDeltas} />
+          );
           if (!renderAdjust) {
             // Plain row: no role, nothing to open (the build cannot spend points).
             return (
@@ -369,10 +394,12 @@ export function KeyStats({
   statKeys,
   values,
   boosterDeltas,
+  weakFootDeltas,
 }: {
   statKeys: readonly BaseStat[];
   values: Record<BaseStat, number>;
   boosterDeltas?: Record<BaseStat, number>;
+  weakFootDeltas?: Record<BaseStat, number>;
 }) {
   return (
     <dl className="grid grid-cols-2 gap-1.5 pt-1">
@@ -384,6 +411,7 @@ export function KeyStats({
             <dd className={`mt-0.5 flex items-center gap-1.5 text-sm font-bold tabular-nums ${statTierClass(v)}`}>
               {v}
               <DeltaChip delta={boosterDeltas?.[st]} />
+              <DeltaChip delta={weakFootDeltas?.[st]} kind="weakFoot" />
             </dd>
           </div>
         );

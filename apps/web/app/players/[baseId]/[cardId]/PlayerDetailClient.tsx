@@ -13,6 +13,7 @@ import { conditionUrl } from "@/lib/r2-images";
 import { forgetRememberedManager, readRememberedManager, rememberManager } from "@/lib/remembered-manager";
 import {
   CARD_TYPE_LABELS,
+  MATCH_STATE_OFF,
   PLAYING_STYLE_DESCRIPTIONS,
   POSITIONS,
   TRENDING_BOOSTER_CYCLE,
@@ -24,6 +25,7 @@ import {
   encodeBuildQuery,
   formatFeetInches,
   isIdParam,
+  matchStateForCard,
   modeHasBuild,
   nextBoosterLevel,
   openingBuildState,
@@ -39,6 +41,8 @@ import {
   type BuildQueryLists,
   type BuildUrlState,
   type CardPreview,
+  type HeldMatchState,
+  type MatchState,
   type Position,
   type PlayerCardDTO,
   type SecondBoosterDTO,
@@ -140,6 +144,16 @@ import { POSITION_LABEL, boosterLabel, cardLeagueOf, conditionLabel, positionOf,
 // once — one tick after mount, when Next has patched the history — and a
 // polite message says so. The remembered manager (D3) is read after mount
 // and applied only to a plain URL, without writing it.
+//
+// Match state (change efootbase-s4-measure, design D1): the Build settings'
+// Position Training and Weak foot toggles are NOT part of the build — held
+// here with the card id they belong to (off for any other card, so they are
+// off again when another card opens), never written to the URL, never a
+// "Custom build", never stored. Weak foot changes the shown stats only
+// (`shownStats`, orange "−N" chips); Position Training changes the 13 tiles,
+// Best Fit, "At POS" and the panel overall at a trained position. The card
+// face, the "Build (N)" label and the stats heading read the untrained
+// overall (`untrainedTiles`), so neither toggle moves them.
 
 // Key stats shown on the attack / defence playing-style cards.
 const ATTACK_KEY_STATS: readonly BaseStat[] = ["offensiveAwareness", "finishing", "dribbling", "lowPass"];
@@ -491,6 +505,18 @@ export function PlayerDetailClient({
   const q = trpc.player.byId.useQuery({ baseId, cardId }, { initialData });
   const p = q.data ?? initialData;
 
+  // ---- Match state (D1: not the build; off for any other card) ----
+  const [matchHeld, setMatchHeld] = useState<HeldMatchState>(() => ({ ...MATCH_STATE_OFF, cardId }));
+  const match: MatchState = matchStateForCard(matchHeld, cardId);
+  const setMatch = useCallback(
+    (next: MatchState) => {
+      setMatchHeld({ weakFoot: next.weakFoot, positionTraining: next.positionTraining, cardId });
+      // A press shows the build's stats (the chips exist in that view only).
+      setStatView("build");
+    },
+    [cardId],
+  );
+
   // The list entries the build refers to, once loaded.
   const refManager = (build.managerId !== null && pickerQ.data?.find((m) => m.id === build.managerId)) || null;
   const refSecond = (build.secondBooster !== null && secondQ.data?.find((b) => b.slug === build.secondBooster)) || null;
@@ -498,7 +524,10 @@ export function PlayerDetailClient({
   const managerPending = build.managerId !== null && refManager === null;
 
   // Pure, client-side engine (packages/shared: progression.ts, build.ts).
-  const buildResult = useMemo(() => simulateCardBuild(p, build, build.position, { manager: refs.manager, second: refs.second }), [p, build, refs]);
+  const buildResult = useMemo(
+    () => simulateCardBuild(p, build, build.position, { manager: refs.manager, second: refs.second, matchState: match }),
+    [p, build, refs, match],
+  );
   const canSpend = canSpendPoints(mode, build);
   useEffect(() => {
     if (!canSpend) setAdjust(null);
@@ -551,14 +580,21 @@ export function PlayerDetailClient({
 
   const customBuild = hasBuild && isCustomBuild(build, p);
   const view: StatView = hasBuild ? statView : statView === "build" ? "max" : statView;
-  const stats = view === "build" ? buildResult.projectedStats : view === "max" ? p.maxStats : p.stats;
+  // The shown stats (with the weak-foot deduction while Weak foot is on).
+  const stats = view === "build" ? buildResult.shownStats : view === "max" ? p.maxStats : p.stats;
   const boosterDeltas = view === "build" ? buildResult.boosterDeltas : undefined;
   const managerDeltas = view === "build" ? buildResult.managerDeltas : undefined;
-  const buildOvr = buildResult.overall;
+  const weakFootDeltas = view === "build" && match.weakFoot ? buildResult.weakFootDeltas : undefined;
+  // The build's overall at the selected position at the card's own
+  // proficiency: Position Training never moves the face, the "Build (N)"
+  // label or the stats heading (the panel overall and the tiles follow it).
+  const buildOvr = buildResult.untrainedTiles[build.position];
   // Position tiles (exact formula): the build's when the card has one (the
-  // tile at the panel's position is the panel's overall), else the stats in
-  // the grid. Best Fit = the highest tile (registered position on a tie).
+  // tile at the panel's position is the panel's overall; trained positions at
+  // full while Position Training is on), else the stats in the grid. Best
+  // Fit = the highest tile (registered position on a tie).
   const tiles = hasBuild ? buildResult.tiles : positionTiles(stats, { height: p.height, weakFootAccuracy: p.weakFootAccuracy }, p.positionAptitudes);
+  const trained = hasBuild ? buildResult.trainedPositions : [];
   const bestPos = bestFitPosition(tiles, regPos);
   // The "At <POS>" tile reads the position the card face prints: the one
   // chosen in Build settings when the card has a build, else the registered
@@ -954,6 +990,8 @@ export function PlayerDetailClient({
                 onHighlight={onHighlight}
                 preview={categoryPreview.bind}
                 notes={notes}
+                match={match}
+                onMatchChange={setMatch}
               />
             </div>
           )
@@ -965,7 +1003,17 @@ export function PlayerDetailClient({
         </div>
         {hasBuild && desktop !== false && (
           <div className="hidden lg:block">
-            <BuildSettings player={p} state={build} result={buildResult} refs={refs} onChange={setBuild} idBase={progressionIdBase} notes={notes} />
+            <BuildSettings
+              player={p}
+              state={build}
+              result={buildResult}
+              refs={refs}
+              onChange={setBuild}
+              idBase={progressionIdBase}
+              notes={notes}
+              match={match}
+              onMatchChange={setMatch}
+            />
           </div>
         )}
         </div>
@@ -1125,6 +1173,7 @@ export function PlayerDetailClient({
               values={stats}
               boosterDeltas={boosterDeltas}
               managerDeltas={managerDeltas}
+              weakFootDeltas={weakFootDeltas}
               highlight={activeCats}
               renderAdjust={canSpend ? (stat, headingId) => renderAdjust(STAT_CATEGORIES[stat], headingId) : undefined}
               onAdjust={reportAdjust}
@@ -1219,10 +1268,11 @@ export function PlayerDetailClient({
                   reference's 382 × 352 at 1440), then the legend and the note
                   under it, outside the box. */}
               <div className="flex min-w-0 flex-col items-center gap-3">
-                <PitchMap positionAptitudes={p.positionAptitudes} tiles={tiles} registeredPosition={regPos} />
+                <PitchMap positionAptitudes={p.positionAptitudes} tiles={tiles} registeredPosition={regPos} trainedPositions={trained} />
                 <p className="w-full text-xs leading-relaxed text-[var(--color-text-secondary)]" data-testid="pitch-note">
                   Overall at each position, computed with the game&apos;s overall formula from the {tilesSource}.
                   {hasBuild ? "" : " The formula matched every measured tile on the five surveyed cards; other cards are checked in bulk only, not tile by tile."}
+                  {trained.length > 0 ? ` Position Training is on: ${trained.join(", ")} scored at full proficiency.` : ""}
                 </p>
               </div>
 
@@ -1236,7 +1286,7 @@ export function PlayerDetailClient({
                     <span className="ml-auto text-xs text-[var(--color-text-secondary)]">Attack</span>
                   </div>
                   {atkDesc && <p className="text-sm text-[var(--color-text-secondary)]">{atkDesc}</p>}
-                  <KeyStats statKeys={ATTACK_KEY_STATS} values={stats} boosterDeltas={boosterDeltas} />
+                  <KeyStats statKeys={ATTACK_KEY_STATS} values={stats} boosterDeltas={boosterDeltas} weakFootDeltas={weakFootDeltas} />
                 </div>
 
                 {/* Defence playing style — from the defensive data */}
@@ -1252,7 +1302,7 @@ export function PlayerDetailClient({
                   ) : (
                     defDesc && <p className="text-sm text-[var(--color-text-secondary)]">{defDesc}</p>
                   )}
-                  <KeyStats statKeys={DEFENCE_KEY_STATS} values={stats} boosterDeltas={boosterDeltas} />
+                  <KeyStats statKeys={DEFENCE_KEY_STATS} values={stats} boosterDeltas={boosterDeltas} weakFootDeltas={weakFootDeltas} />
                 </div>
 
                 {/* Compatible positions (aptitude data) */}
@@ -1426,6 +1476,8 @@ export function PlayerDetailClient({
               highlight={highlight}
               onHighlight={onHighlight}
               notes={notes}
+              match={match}
+              onMatchChange={setMatch}
               embedded
             />
           </DeferredModal>
