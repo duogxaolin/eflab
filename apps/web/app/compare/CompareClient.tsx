@@ -8,21 +8,26 @@ import { QueryErrorState } from "@/lib/query-state";
 import {
   COMPARE_NO_MANAGER_PROFICIENCY,
   COMPARE_SIDES,
+  RADAR_AXES,
+  RADAR_RINGS,
+  RADAR_SCALE_MAX,
   appendCompareSideBuild,
   appendRawCompareSide,
+  compareRadarAxes,
   compareSideDefault,
   decodeCompareSide,
   defaultMaxLevel,
   emptyAllocation,
   isIdParam,
   parseCompareCards,
+  radarFraction,
   registeredPositionOf,
   simulateCardBuild,
-  type BaseStat,
   type BuildResult,
   type CompareSide,
   type PickerManagerDTO,
   type PlayerCardDTO,
+  type RadarAxis,
 } from "@eflab/shared";
 import { Plus, ArrowLeftRight, Link as LinkIcon, Check } from "lucide-react";
 import { CompareSlot, type SlotBuild } from "./CompareSlot";
@@ -57,8 +62,10 @@ import { CompareTable } from "./CompareTable";
 // Slots never close up: Remove empties only its slot (focus goes to that
 // slot's "Add Player"), the next pick fills the slot the picker was opened
 // for, the same card may sit in both slots (two builds of one card), and Swap
-// exchanges the cards with their builds. The radar is unchanged (its build
-// axes are pending): it draws each slot card's base stats.
+// exchanges the cards with their builds. The radar draws each side's build
+// (change efootbase-s4-measure, spec "Compare Radar From The Build"): the six
+// axes of `compareRadarAxes` over the stats the side's build shows, on a
+// 0–115 scale — it follows Max OVR, Reset, a manager and Swap at once.
 
 // Side colours: left = accent (lime), right = cyan — every panel.
 const SIDE_A = "var(--color-accent)";
@@ -69,59 +76,105 @@ const COMPARE_BATCH = 4;
 /** Card data per side: kept 5 minutes (Swap, Remove and duplicates reuse it). */
 const CARD_STALE_MS = 5 * 60_000;
 
-/** Hexagonal radar chart comparing SHT, PAS, STR, DEF, SPD, DRI. */
-function CompareRadar({ p1, p2 }: { p1?: PlayerCardDTO; p2?: PlayerCardDTO }) {
+/** One side of the radar: the card's name and its build (null while the card
+ *  or its build is loading — no polygon then). */
+interface RadarSide {
+  name: string;
+  result: BuildResult;
+}
+
+/** Axis angles, clockwise from the top in RADAR_AXES order (SHT, PAS, STR,
+ *  DEF, SPD, DRI). */
+const RADAR_ANGLE: Record<RadarAxis, number> = {
+  SHT: -Math.PI / 2,
+  PAS: -Math.PI / 6,
+  STR: Math.PI / 6,
+  DEF: Math.PI / 2,
+  SPD: (5 * Math.PI) / 6,
+  DRI: (-5 * Math.PI) / 6,
+};
+
+/** "Left: <name>, SHT 73, PAS 81, …" — one side of the text alternative. */
+const radarSideText = (label: string, side: RadarSide, axes: Record<RadarAxis, number>) =>
+  `${label}: ${side.name}, ${RADAR_AXES.map((a) => `${a} ${axes[a]}`).join(", ")}`;
+
+/** Hexagonal radar of the two builds (spec "Compare Radar From The Build"):
+ *  each polygon is `compareRadarAxes` of the side's shown stats, drawn at
+ *  min(value, 115) / 115 of the outer radius with no minimum; rings at 30 /
+ *  60 / 90 / 115. A text alternative states both sides' six values. */
+function CompareRadar({ left, right }: { left: RadarSide | null; right: RadarSide | null }) {
   const size = 260;
   const center = size / 2;
   const radius = 80;
-  const axes = [
-    { label: "SHT", angle: -Math.PI / 2, stat: "finishing" },
-    { label: "PAS", angle: -Math.PI / 6, stat: "lowPass" },
-    { label: "STR", angle: Math.PI / 6, stat: "physicalContact" },
-    { label: "DEF", angle: Math.PI / 2, stat: "defensiveAwareness" },
-    { label: "SPD", angle: (5 * Math.PI) / 6, stat: "speed" },
-    { label: "DRI", angle: (-5 * Math.PI) / 6, stat: "dribbling" },
-  ] as const;
+  const leftAxes = left ? compareRadarAxes(left.result.shownStats) : null;
+  const rightAxes = right ? compareRadarAxes(right.result.shownStats) : null;
 
-  const polygon = (player: PlayerCardDTO) =>
-    axes
-      .map((a) => {
-        const val = player.stats[a.stat as BaseStat] ?? 40;
-        const norm = Math.max(0.2, Math.min(1, val / 100));
-        const r = radius * norm;
-        return `${center + r * Math.cos(a.angle)},${center + r * Math.sin(a.angle)}`;
-      })
-      .join(" ");
+  const point = (axis: RadarAxis, fraction: number) => {
+    const r = radius * fraction;
+    return `${center + r * Math.cos(RADAR_ANGLE[axis])},${center + r * Math.sin(RADAR_ANGLE[axis])}`;
+  };
+  const polygon = (axes: Record<RadarAxis, number>) => RADAR_AXES.map((a) => point(a, radarFraction(axes[a]))).join(" ");
+  const parts = [left && leftAxes ? radarSideText("Left", left, leftAxes) : "", right && rightAxes ? radarSideText("Right", right, rightAxes) : ""].filter(Boolean);
+  // A non-empty name in every state (an empty compare included).
+  const name = parts.length > 0 ? `Stat radar, 0 to ${RADAR_SCALE_MAX}. ${parts.join(". ")}.` : "Stat radar, no players selected";
 
   return (
-    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="h-auto max-w-full overflow-visible" role="img" aria-label="Stat radar">
-      {[0.25, 0.5, 0.75, 1].map((scale) => (
+    <svg
+      width={size}
+      height={size}
+      viewBox={`0 0 ${size} ${size}`}
+      className="h-auto max-w-full overflow-visible"
+      role="img"
+      aria-label={name}
+      data-testid="compare-radar"
+    >
+      {RADAR_RINGS.map((ring) => (
         <polygon
-          key={scale}
-          points={axes.map((a) => `${center + radius * scale * Math.cos(a.angle)},${center + radius * scale * Math.sin(a.angle)}`).join(" ")}
+          key={ring}
+          points={RADAR_AXES.map((a) => point(a, radarFraction(ring))).join(" ")}
           fill="none"
           stroke="rgba(255, 255, 255, 0.1)"
           strokeWidth="1"
+          data-ring={ring}
         />
       ))}
-      {axes.map((a) => (
-        <g key={a.label}>
-          <line x1={center} y1={center} x2={center + radius * Math.cos(a.angle)} y2={center + radius * Math.sin(a.angle)} stroke="rgba(255, 255, 255, 0.12)" strokeWidth="1" />
-          {/* Axis labels 12 px muted (Inter, as the rest of the page). */}
-          <text
-            x={center + (radius + 18) * Math.cos(a.angle)}
-            y={center + (radius + 18) * Math.sin(a.angle)}
-            textAnchor="middle"
-            dominantBaseline="central"
-            fontSize="12"
-            style={{ fill: "var(--color-text-secondary)" }}
-          >
-            {a.label}
-          </text>
-        </g>
-      ))}
-      {p1 && <polygon points={polygon(p1)} strokeWidth="2" style={{ fill: `color-mix(in srgb, ${SIDE_A} 25%, transparent)`, stroke: SIDE_A }} />}
-      {p2 && <polygon points={polygon(p2)} strokeWidth="2" style={{ fill: `color-mix(in srgb, ${SIDE_B} 25%, transparent)`, stroke: SIDE_B }} />}
+      {RADAR_AXES.map((axis) => {
+        const angle = RADAR_ANGLE[axis];
+        return (
+          <g key={axis}>
+            <line x1={center} y1={center} x2={center + radius * Math.cos(angle)} y2={center + radius * Math.sin(angle)} stroke="rgba(255, 255, 255, 0.12)" strokeWidth="1" />
+            {/* Axis labels 12 px muted (Inter, as the rest of the page). */}
+            <text
+              x={center + (radius + 18) * Math.cos(angle)}
+              y={center + (radius + 18) * Math.sin(angle)}
+              textAnchor="middle"
+              dominantBaseline="central"
+              fontSize="12"
+              style={{ fill: "var(--color-text-secondary)" }}
+            >
+              {axis}
+            </text>
+          </g>
+        );
+      })}
+      {leftAxes && (
+        <polygon
+          points={polygon(leftAxes)}
+          strokeWidth="2"
+          style={{ fill: `color-mix(in srgb, ${SIDE_A} 25%, transparent)`, stroke: SIDE_A }}
+          data-side="left"
+          data-axes={RADAR_AXES.map((a) => leftAxes[a]).join(",")}
+        />
+      )}
+      {rightAxes && (
+        <polygon
+          points={polygon(rightAxes)}
+          strokeWidth="2"
+          style={{ fill: `color-mix(in srgb, ${SIDE_B} 25%, transparent)`, stroke: SIDE_B }}
+          data-side="right"
+          data-axes={RADAR_AXES.map((a) => rightAxes[a]).join(",")}
+        />
+      )}
     </svg>
   );
 }
@@ -703,7 +756,10 @@ export function CompareClient() {
           {renderSlot("left")}
         </div>
         <div className="efb-compare-console__radar">
-          <CompareRadar p1={leftCard} p2={rightCard} />
+          <CompareRadar
+            left={leftCard && leftResult ? { name: leftCard.name, result: leftResult } : null}
+            right={rightCard && rightResult ? { name: rightCard.name, result: rightResult } : null}
+          />
         </div>
         <div ref={(el) => void (slotRefs.current.right = el)} tabIndex={-1} className="efb-compare-console__slot outline-none" data-slot-side="right">
           {renderSlot("right")}

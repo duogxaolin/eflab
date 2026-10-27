@@ -179,8 +179,9 @@ export function CompareTable({ left, right }: { left: CompareColumn; right: Comp
   }, [skillsQ.data]);
   const L = left.card;
   const R = right.card;
-  const lStats = left.result.projectedStats;
-  const rStats = right.result.projectedStats;
+  // The stats each build shows (= projectedStats: compare has no match state).
+  const lStats = left.result.shownStats;
+  const rStats = right.result.shownStats;
   const lLeague = cardLeagueOf(L);
   const rLeague = cardLeagueOf(R);
 
