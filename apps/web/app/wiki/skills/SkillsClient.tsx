@@ -1,6 +1,5 @@
 "use client";
 import { useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
-import type { Route } from "next";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { ListChecks, Search, Sparkles, X, Zap, type LucideIcon } from "lucide-react";
@@ -214,7 +213,7 @@ export function SkillsClient() {
     if (group !== ALL) sp.set("group", group);
     if (q) sp.set("q", q);
     const qs = sp.toString();
-    router.replace((qs ? `/wiki/skills?${qs}` : "/wiki/skills") as Route, { scroll: false });
+    router.replace(qs ? `/wiki/skills?${qs}` : "/wiki/skills", { scroll: false });
   };
 
   useEffect(() => {

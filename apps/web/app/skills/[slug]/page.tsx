@@ -19,7 +19,10 @@ export const dynamic = "force-dynamic";
 type Params = { slug: string };
 type SearchParams = Record<string, string | string[] | undefined>;
 
-export default async function OldSkillUrl({ params, searchParams }: { params: Promise<Params>; searchParams: Promise<SearchParams> }) {
+// `Promise<never>`: every path ends in notFound() or permanentRedirect(),
+// both of which throw; the page validator of `strictRouteTypes` (change
+// small-fixes-1027) refuses the inferred `Promise<void>` as a page result.
+export default async function OldSkillUrl({ params, searchParams }: { params: Promise<Params>; searchParams: Promise<SearchParams> }): Promise<never> {
   const { slug } = await params;
   if (!isSkillSlug(slug)) notFound();
   const skill = await fetchSkill(slug);

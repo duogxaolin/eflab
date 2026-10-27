@@ -1,7 +1,6 @@
 "use client";
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
-import type { Route } from "next";
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import { trpc } from "@/lib/trpc";
@@ -260,7 +259,7 @@ export function PlayersClient() {
   // this can run on the first render, before Next has patched the history.
   useEffect(() => {
     const cleaned = withoutDefaultPage(new URLSearchParams(urlQs));
-    if (cleaned !== null) router.replace((cleaned ? `/players?${cleaned}` : "/players") as Route, { scroll: false });
+    if (cleaned !== null) router.replace(cleaned ? `/players?${cleaned}` : "/players", { scroll: false });
   }, [router, urlQs]);
 
   // Search box: local text mirrors the URL and is debounced into it (500 ms).

@@ -3,13 +3,15 @@
 // line and — for a check — the check result in one line. Used by the dashboard
 // and the run history (openspec change admin-sync-worker).
 import Link from "next/link";
-import type { Route } from "next";
 import type { SyncRunSummaryDTO } from "@eflab/shared";
 import { StatusBadge } from "./admin-ui";
 import { KIND_LABELS, TRIGGER_LABELS, checkSummary, formatDuration, formatUtcDateTime, runDurationMs } from "./run-display";
 
-export function runHref(id: number): Route {
-  return `/admin/runs/${id}` as Route;
+/** A run's page. A template-literal type, not `Route`: the bare `Route`
+ *  admits static paths only, while `Link` / the router accept this one as a
+ *  match of the dynamic route `/admin/runs/[id]`. */
+export function runHref(id: number): `/admin/runs/${number}` {
+  return `/admin/runs/${id}`;
 }
 
 export function RunSummary({

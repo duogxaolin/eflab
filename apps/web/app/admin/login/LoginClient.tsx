@@ -19,7 +19,7 @@ function signInError(error: unknown): string {
   return adminErrorMessage(error);
 }
 
-export function LoginClient({ next }: { next: string }) {
+export function LoginClient({ next }: { next: Route }) {
   return (
     <AdminTRPCProvider>
       <LoginForm next={next} />
@@ -27,7 +27,7 @@ export function LoginClient({ next }: { next: string }) {
   );
 }
 
-function LoginForm({ next }: { next: string }) {
+function LoginForm({ next }: { next: Route }) {
   const router = useRouter();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -39,7 +39,7 @@ function LoginForm({ next }: { next: string }) {
   const signIn = adminTrpc.admin.signIn.useMutation({
     onSuccess: () => {
       setPassword("");
-      router.replace(next as Route);
+      router.replace(next);
     },
     onError: (e) => {
       setPassword("");

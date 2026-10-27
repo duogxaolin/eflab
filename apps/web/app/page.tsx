@@ -43,7 +43,7 @@ const HOME_PACKS = 3;
 /** Pages the home list loads at once (the reference: 1 + 2 right after it). */
 const HOME_EAGER_PAGES = 2;
 
-const playersSearchHref = (text: string) => `/players?search=${encodeURIComponent(text)}` as Route;
+const playersSearchHref = (text: string): Route => `/players?search=${encodeURIComponent(text)}`;
 
 /** True when the keyboard event comes from a place where typing is expected. */
 function isTypingTarget(target: EventTarget | null): boolean {

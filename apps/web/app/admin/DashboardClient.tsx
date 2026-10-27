@@ -11,7 +11,6 @@
 // queued / running, 412 blocked, 403 CSRF); the buttons mirror those rules
 // from the data they have and show why they are unusable.
 import Link from "next/link";
-import type { Route } from "next";
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { Activity, AlertTriangle, ImageOff, Play, RefreshCw, Server, ShieldAlert, Zap } from "lucide-react";
 import type { SyncConfigDTO, SyncConfigUpdateInput, SyncDashboardDTO, SyncKind } from "@eflab/shared";
@@ -268,7 +267,7 @@ function NewestCardPanel({ data }: { data: SyncDashboardDTO }) {
       {card ? (
         <div className="space-y-1.5" data-testid="newest-card">
           <Link
-            href={`/players/${card.baseId}/${card.id}` as Route}
+            href={`/players/${card.baseId}/${card.id}`}
             className="block text-sm font-semibold text-white hover:text-[var(--color-accent)] [overflow-wrap:anywhere]"
           >
             {card.name}
