@@ -255,6 +255,17 @@ export interface BuildConfig {
   managerProficiency?: number;
 }
 
+/** Match state of the detail page (change efootbase-s4-measure, design D1):
+ *  two toggles that are NOT part of the build — never in the URL, never a
+ *  "Custom build", reset when another card opens. `weakFoot` shows the flat
+ *  weak-foot deductions on five stats (the overall does not read them);
+ *  `positionTraining` scores the positions the card trains at full
+ *  proficiency in the tiles. Both off by default. */
+export interface MatchState {
+  weakFoot: boolean;
+  positionTraining: boolean;
+}
+
 // Computed build result returned by the simulator.
 export interface BuildResult {
   /** The config as applied (maxLevel clamped to the card's level cap,
@@ -274,20 +285,38 @@ export interface BuildResult {
   managerDeltas: Record<BaseStat, number>;
   /** min(99, base + training + proficiency bonus) + active boosters +
    *  manager (= base + every delta above); only the boosters and the
-   *  manager's +1 may take a stat above 99. */
+   *  manager's +1 may take a stat above 99. The stats the overall formula
+   *  reads (tiles, overall, card face) — never the weak-foot deduction. */
   projectedStats: Record<BaseStat, number>;
+  /** Weak-foot deduction per stat (0 or negative; zeros unless the match
+   *  state's `weakFoot` is on and the card's accuracy was measured): taken
+   *  after the proficiency band and the cut at 99, before the boosters and
+   *  the manager, never below 40 and never raising a stat. */
+  weakFootDeltas: Record<BaseStat, number>;
+  /** The stats shown: projectedStats + weakFootDeltas (= projectedStats when
+   *  the weak-foot toggle is off). */
+  shownStats: Record<BaseStat, number>;
+  /** Positions scored at full proficiency by Position Training (POSITIONS
+   *  order; empty unless the match state's `positionTraining` is on). */
+  trainedPositions: Position[];
+  /** The 13 tiles at the card's own proficiencies (= `tiles` while Position
+   *  Training is off); the card face reads them, so training never moves it. */
+  untrainedTiles: Record<Position, number>;
   /** Training points at the selected max level (`maxLevel − 1`). */
   pointsAvailable: number;
   /** Cost of the allocation in points (multiples of 0.5). */
   pointsUsed: number;
   remainingPoints: number;
   withinBudget: boolean;
-  /** Overall at `config.position` by the exact formula (= tiles[position]). */
+  /** Overall at `config.position` by the exact formula (= tiles[position];
+   *  a trained position counts as full while Position Training is on). */
   overall: number;
   /** Proficiency of the card at `config.position` ("full" when no aptitudes
-   *  were given); it scales the stats inside the formula. */
+   *  were given, or at a trained position); it scales the stats inside the
+   *  formula. */
   proficiency: PositionProficiency;
-  /** The exact overall at all 13 positions for the projected stats. */
+  /** The exact overall at all 13 positions for the projected stats (trained
+   *  positions at full proficiency while Position Training is on). */
   tiles: Record<Position, number>;
 }
 

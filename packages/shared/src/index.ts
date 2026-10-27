@@ -3,6 +3,8 @@ export * from "./types";
 export * from "./schemas";
 export * from "./progression";
 export * from "./ovrModel";
+export * from "./pitch";
+export * from "./radar";
 export * from "./helpers";
 export * from "./build";
 export * from "./build-url";

@@ -23,7 +23,7 @@
     "build": "tsc -p tsconfig.json --noEmit",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "tsc -p tsconfig.json --noEmit",
-    "test": "tsx src/progression.test.ts && tsx src/helpers.test.ts && tsx src/build.test.ts && tsx src/players-url.test.ts && tsx src/sync.test.ts",
+    "test": "tsx src/progression.test.ts && tsx src/helpers.test.ts && tsx src/build.test.ts && tsx src/players-url.test.ts && tsx src/sync.test.ts && tsx src/radar.test.ts && tsx src/match-state.test.ts",
     "clean": "rm -rf dist .turbo"
   },
   "dependencies": {
