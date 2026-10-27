@@ -63,20 +63,6 @@ function buildUtcStamp(): string {
 const GIT_SHA = process.env.NEXT_PUBLIC_GIT_SHA || gitShortSha();
 const BUILD_UTC = process.env.NEXT_PUBLIC_BUILD_UTC || (GIT_SHA ? buildUtcStamp() : undefined);
 
-// ---------------------------------------------------------------------------
-// Image hosts: the optimiser may only fetch from the R2 public host. The
-// default mirrors the code fallback in lib/r2-images.ts (kept in sync by hand;
-// NEXT_PUBLIC_R2_PUBLIC_BASE overrides both). efimg.com is not listed because
-// no component renders an efimg URL (the efimg fallback helper was deleted in
-// change remove-dead-surface); add it here if that changes.
-// ---------------------------------------------------------------------------
-const DEFAULT_R2_PUBLIC_BASE = "https://pub-1a19c30950c04ef3964669ac4792f6f0.r2.dev";
-function r2Host(): { protocol: "https" | "http"; hostname: string } {
-  const base = process.env.NEXT_PUBLIC_R2_PUBLIC_BASE || DEFAULT_R2_PUBLIC_BASE;
-  const url = new URL(base);
-  return { protocol: url.protocol === "http:" ? "http" : "https", hostname: url.hostname };
-}
-
 const SECURITY_HEADERS = [
   { key: "X-Frame-Options", value: "DENY" },
   { key: "Content-Security-Policy", value: "frame-ancestors 'none'" },
@@ -99,9 +85,14 @@ const config: NextConfig = {
   // @eflab/api is imported type-only (AppRouter) and resolved through the
   // tsconfig path alias, so it does not need transpiling.
   transpilePackages: ["@eflab/shared"],
-  images: {
-    remotePatterns: [{ ...r2Host(), pathname: "/**" }],
-  },
+  // Image optimiser off (change next-16-upgrade): nothing uses next/image —
+  // card faces, flags and emblems are plain <img> straight from the R2 host
+  // (lib/r2-images.ts) — so /_next/image answers 404 for every URL instead of
+  // proxying the image host.
+  images: { unoptimized: true },
+  // `next dev` would otherwise write an AGENTS.md into apps/web when it runs
+  // under a coding agent.
+  agentRules: false,
   outputFileTracingRoot: REPO_ROOT,
   env: {
     NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000",
