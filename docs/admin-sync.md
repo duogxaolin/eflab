@@ -306,4 +306,4 @@ COMMIT;
 
 ## Public bundle
 
-The admin pages are their own client entries and import the shared code by subpath (see the comment at the top of `apps/web/lib/admin-trpc.tsx`). No admin code is duplicated into public pages. Still, splitting the shared chunks adds **about 1 KB gzip to the public pages' First Load JS**. Re-measure the public pages' first-load JS after changing admin imports.
+The admin pages are their own client entries and import the shared code by subpath (see the comment at the top of `apps/web/lib/admin-trpc.tsx`). No admin code is duplicated into public pages. Still, splitting the shared chunks adds **about 1 KB gzip to the public pages' First Load JS** (measured 2026-10-20 with the "First Load JS" column of a Next 15 / webpack build). Next 16 prints no such column: after changing admin imports, re-measure the public pages with the bundle metric of change `next-16-upgrade` (gzip bytes of the JS a route loads in a fresh browser at 1440 px — definition in `CLAUDE.md` → "Next.js 16").

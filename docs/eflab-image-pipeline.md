@@ -56,11 +56,13 @@ emblemUrl(teamId) → `${EFIMG_BASE}/symbol/Emblem/e_${String(teamId).padStart(6
 2. `next/image` trigger optimizer proxy → chậm hơn GET thẳng.
 3. `next.config` đã có `remotePatterns: [{ protocol: "https", hostname: "**" }]}` → cho phép mọi host (không cần config riêng cho efimg.com).
 
+> 2026-10-27 (change `next-16-upgrade`): điểm 3 là snapshot lịch sử. Image optimiser đã **tắt** — `next.config.ts` đặt `images.unoptimized: true` và không còn `remotePatterns`; `/_next/image` trả 404 cho mọi URL, kể cả ảnh card trên R2. Card vẫn là raw `<img>` từ R2 — xem `CLAUDE.md` "Image pipeline".
+
 ## Verification (2026-10-06)
 
 - API `player.list` (tRPC GET, batch + superjson wrap) trả 20 player với `id`, `nationalityId` đúng.
 - `curl` GET (kèm `User-Agent`) tới 20 URL card: **20/20 PNG hợp lệ** (~110KB mỗi cái).
-- Playwright (dùng `playwright-core` từ `/Users/duogxaolin/.dev-browser/node_modules/playwright-core` vì repo chưa cài playwright) screenshot `/players`: **20/20 card render trong DOM**.
+- Playwright (dùng `playwright-core` từ `playwright-core` (dev-browser install) vì repo chưa cài playwright) screenshot `/players`: **20/20 card render trong DOM**.
 - Flag: **18/20** OK. Egypt (CountryID 58, Salah) và Korea (CountryID 16, Son) 404 → fallback ẩn gracefully (flag chỉ trang trí, `onError` không có nhưng ảnh broken cũng không vỡ layout vì `object-cover` + ring).
 
 ## Magnitude (test đã có sẵn)
@@ -84,7 +86,7 @@ emblemUrl(teamId) → `${EFIMG_BASE}/symbol/Emblem/e_${String(teamId).padStart(6
 
 - 2 flag 404 (Egypt 58, Korea 16) — gap CDN efhub, không phải bug. Có thể map sang `flagcdn.com` làm source phụ nhưng là polish, out of scope hiện tại.
 - ~25% emblem đội ảo 404 — chưa dùng emblem trong UI nên chưa xử lý; khi dùng thì cần `onError` hide.
-- Repo chưa cài `playwright` — phải dùng `playwright-core` từ `/Users/duogxaolin/.dev-browser/node_modules/playwright-core` khi cần screenshot test.
+- Repo chưa cài `playwright` — phải dùng `playwright-core` từ `playwright-core` (dev-browser install) khi cần screenshot test.
 
 ## Out of scope
 

@@ -102,11 +102,15 @@ Google sign-in SHALL link to an existing account by email only when Google repor
 - **THEN** the accounts are not merged and the user sees an error on an existing page.
 
 ### Requirement: Restricted Image Hosts and Security Headers
-The web app SHALL only allow the image optimiser to fetch from configured hosts, SHALL send baseline security headers (frame-ancestors/X-Frame-Options, nosniff, referrer policy), and SHALL use an absolute tracing root.
+The web app SHALL NOT expose the Next image optimiser (nothing uses `next/image`; cards are plain `<img>` from the image host): `images.unoptimized` is set and `/_next/image` answers a 4xx error for every URL, including one on the configured image host; it SHALL send baseline security headers (frame-ancestors/X-Frame-Options, nosniff, referrer policy), and SHALL use an absolute tracing root.
 
 #### Scenario: Arbitrary host
 - **WHEN** `/_next/image?url=https://example.com/x.png` is requested
 - **THEN** the response is a 4xx error.
+
+#### Scenario: Optimiser disabled
+- **WHEN** `/_next/image?url=<an R2 card image URL>&w=256&q=75` is requested
+- **THEN** the response is a 4xx error, and no page of the app loads an image through `/_next/image`.
 
 ### Requirement: Documented Environment Loading
 The repository SHALL document and implement where `NEXT_PUBLIC_*` variables are read by the web app, so that changing the documented variable changes the built application, and documentation SHALL NOT claim a one-variable domain swap while absolute URLs are stored in the database.
