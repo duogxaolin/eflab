@@ -318,6 +318,13 @@ model CatalogueMeta {
   playersDumpedAt DateTime?
   // When the last seed committed.
   seededAt        DateTime?
+  // The card-image cache version the web app puts in every card URL (`?v=`;
+  // change auto-image-version, design D1): 8–14 digits (CHECK
+  // "CatalogueMeta_image_version_format", raw SQL), NULL = nothing stored —
+  // every consumer then uses its committed fallback. Raised by the sync worker
+  // in the transaction that records a run that replaced card images on R2
+  // (`nextImageVersion` in @eflab/shared); the seed never names this column.
+  imageVersion    String?
 }
 
 // ---- Booster (efootbase APK efootball_boosters.json: standard + basic tiers) ----

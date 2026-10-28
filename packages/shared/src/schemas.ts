@@ -25,6 +25,7 @@ import {
   resolveLegacySort,
 } from "./constants";
 import { SYNC_INTERVAL_MAX_MINUTES, SYNC_INTERVAL_MIN_MINUTES, SYNC_KINDS } from "./sync";
+import { IMAGE_VERSION_RE } from "./image-version";
 
 // BigInt-friendly id transformer. SuperJSON handles bigint at the wire layer, but Zod
 // parses the request (strings) so we coerce. Bounded to a Postgres int8
@@ -302,6 +303,13 @@ export const syncRunStatsSchema = z
     imagesChecked: z.boolean(),
     /** What the admin API sends instead of `imagesPendingIds`: their number. */
     imagesPending: count,
+    /**
+     * The card-image version this run raised the stored value to (change
+     * auto-image-version, design D4): written by the worker's final transaction
+     * (or the stale-run recovery) only when the run replaced card images on R2;
+     * absent on every other run. Format = the stored version's.
+     */
+    imageVersionRaisedTo: z.string().regex(IMAGE_VERSION_RE),
   })
   .partial()
   .strict();

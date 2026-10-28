@@ -11,4 +11,5 @@ export * from "./build-url";
 export * from "./compare-url";
 export * from "./players-url";
 export * from "./sync";
+export * from "./image-version";
 export { superjson, default } from "./superjson";

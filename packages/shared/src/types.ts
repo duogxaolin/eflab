@@ -380,6 +380,13 @@ export interface FeaturedListDTO {
  *  ISO-8601 UTC, or null while no seed has stored it. */
 export interface CatalogueMetaDTO {
   playersDumpedAt: string | null;
+  /**
+   * The stored card-image cache version (change auto-image-version, design
+   * D5): 8–14 digits, or null when nothing is stored or the stored value is
+   * malformed — the web app then falls back to its build-time / committed
+   * version (`resolveImageVersion`).
+   */
+  imageVersion: string | null;
 }
 
 // ---- Admin area + sync worker (the `admin` router; openspec admin-sync-worker) ----
@@ -501,6 +508,16 @@ export interface SyncDashboardDTO {
   newestCardReleaseAt: string | null;
   /** The card with that release date (highest id on a tie), or null in an empty catalogue. */
   newestCard: { id: string; baseId: string; name: string; releaseAt: string } | null;
-  /** Latest finished run that overwrote card images (raise the image version). */
-  overwrittenImages: { runId: number; count: number; finishedAt: string | null } | null;
+  /**
+   * The card-image cache version (change auto-image-version, design D5 / D7;
+   * information, never a warning): the stored value — null when nothing is
+   * stored, the web app then uses its fallback — and the latest finished run
+   * that replaced card images on R2 (its overwritten count, finish time and the
+   * version it raised the stored value to, null for a run from before the raise
+   * existed), or null when no run replaced any.
+   */
+  imageVersion: {
+    current: string | null;
+    lastReplacingRun: { runId: number; count: number; finishedAt: string | null; raisedTo: string | null } | null;
+  };
 }

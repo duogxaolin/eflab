@@ -29,7 +29,7 @@
     "admin:create": "tsx --env-file-if-exists=../../.env src/admin-cli.ts create",
     "admin:set-password": "tsx --env-file-if-exists=../../.env src/admin-cli.ts set-password",
     "admin:disable": "tsx --env-file-if-exists=../../.env src/admin-cli.ts disable",
-    "test": "tsx src/admin-auth.test.ts && tsx src/efootbase-map.test.ts && tsx src/boosters.test.ts"
+    "test": "tsx src/admin-auth.test.ts && tsx src/efootbase-map.test.ts && tsx src/boosters.test.ts && tsx src/catalogue-meta.test.ts"
   },
   "dependencies": {
     "@eflab/config": "workspace:*",
