@@ -19,13 +19,14 @@
 // Run: pnpm --filter @eflab/worker test
 
 import { spawn } from "node:child_process";
-import { lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join, relative, sep } from "node:path";
 import { createHash } from "node:crypto";
-import { DUMP_SCRIPT } from "../src/env.js";
+import { DUMP_SCRIPT, REPO_ROOT } from "../src/env.js";
+import { readResultsFile } from "../src/scripts.js";
 import { fakeImage } from "./harness/fake-efootbase.js";
 import { EFOOTBASE_CDN_BASE, PESDB_IMAGE_BASE } from "../src/efootbase.js";
 
@@ -122,6 +123,23 @@ const source = await startServer((path, res) => {
   if (path.startsWith("/cdn/403/")) {
     res.writeHead(403, { "Content-Type": "text/plain" });
     return res.end("Forbidden");
+  }
+  // admin-sync-live-progress: an image the source does not have, and one that keeps failing
+  if (path.startsWith("/cdn/404/")) {
+    res.writeHead(404, { "Content-Type": "text/plain" });
+    return res.end("Not Found — secret-looking body text");
+  }
+  if (path.startsWith("/cdn/500/")) {
+    res.writeHead(500, { "Content-Type": "text/plain" });
+    return res.end("Internal error body");
+  }
+  // fix round (W2): a slow image, so the script can be stopped part-way through its image step
+  if (path.startsWith("/cdn/slow/")) {
+    setTimeout(() => {
+      res.writeHead(200, { "Content-Type": "image/webp" });
+      res.end(fakeImage(`SLOW:${path}`));
+    }, 150);
+    return;
   }
   // W2: bodies by card id (also with a weak ETag), and bucket objects with a matching / weak ETag
   if (path.startsWith("/cdn/byid/")) {
@@ -395,6 +413,235 @@ try {
     // S2: an API challenge page behind a BOM / whitespace is a block (exit 2), not a parse failure
     const bomApi = await runPy(["--key-from-env", "--api-base", `${source.origin}/bomapi`, "--data-parts", "meta", "--no-images", "--out", join(sandbox, "bomapi")], testEnv);
     assert(bomApi.code === 2 && /BLOCKED/.test(bomApi.out), `S2: an API answer "\\ufeff  <!DOCTYPE html…" → BLOCKED, exit 2 (exit ${bomApi.code})`);
+  }
+
+  // ---- admin-sync-live-progress: --progress-every / --results-file (opt-in; off = unchanged output) ----
+  {
+    const rows = [card(81, `${cdn}/cards/81.webp`), card(82, `${cdn}/404/82.webp`), card(83, `${cdn}/500/83.webp`), card(84, `${cdn}/text/84.webp`), card(85, `${cdn}/cards/85.webp`)];
+    const plain = await runImages("flags-off", rows, ["--workers", "1"]);
+    assert(plain.code === 0 && !/PROGRESS/.test(plain.out) && !readdirSync(plain.dir).some((n) => n.endsWith(".jsonl") && n !== "players.jsonl"), "without the flags: no PROGRESS line, no results file");
+    const rf = join(sandbox, "dump-results.jsonl");
+    const flagged = await runImages("flags-on", rows, ["--workers", "1", "--progress-every", "2", "--results-file", rf]);
+    const prog = flagged.out.split("\n").filter((l) => l.startsWith("PROGRESS"));
+    assert(flagged.code === 0 && prog.join("|") === "PROGRESS 0/5|PROGRESS 2/5|PROGRESS 4/5|PROGRESS 5/5", `--progress-every 2: numbers-only lines at the start, every 2 images and the last (${prog.join(" | ")})`);
+    // timings and Python's set order (hash seed) differ between any two runs
+    const strip = (s: string, dir: string) =>
+      s
+        .split("\n")
+        .filter((l) => !l.startsWith("PROGRESS"))
+        .join("\n")
+        .split(dir)
+        .join("<OUT>")
+        .replace(/\(\d+\/s\)/g, "(N/s)")
+        .replace(/"durationSeconds": [\d.]+/g, '"durationSeconds": N')
+        .replace(/image types: \{.*\}/g, "image types: {…}");
+    assert(strip(flagged.out, flagged.dir) === strip(plain.out, plain.dir), "with the flags: the output minus the PROGRESS lines is the unflagged output");
+    const recs = readFileSync(rf, "utf8").trim().split("\n").map((l) => JSON.parse(l) as { path: string; outcome: string });
+    const by = Object.fromEntries(recs.map((r) => [r.path, r.outcome]));
+    assert(
+      by["cards/81_dynamic.webp"] === "ok" && by["cards/82_dynamic.webp"] === "http_404" && by["cards/83_dynamic.webp"] === "http_500" && by["cards/84_dynamic.webp"] === "bad_signature" && recs.length === 5,
+      `--results-file: one record per image — ok, http_404, http_500, bad_signature (${JSON.stringify(by)})`,
+    );
+    const raw = readFileSync(rf, "utf8");
+    assert(recs.every((r) => Object.keys(r).join() === "path,outcome") && !raw.includes("127.0.0.1") && !raw.includes("body") && (lstatSync(rf).mode & 0o777) === 0o600, "--results-file: {path, outcome} only (no URL, no body), mode 0600");
+    const inRepo = join(REPO_ROOT, "apps", "worker", "test", "eflab-synctest-results.jsonl");
+    const r1 = await runPy(["--key-from-env", "--no-data", "--out", flagged.dir, "--results-file", inRepo], testEnv);
+    const r2 = await runPy(["--key-from-env", "--no-data", "--out", flagged.dir, "--results-file", "relative-results.jsonl"], testEnv);
+    const r3 = await runPy(["--key-from-env", "--no-data", "--out", flagged.dir, "--results-file", rf], testEnv);
+    const r4 = await runPy(["--key-from-env", "--no-data", "--out", flagged.dir, "--progress-every", "0"], testEnv);
+    assert(r1.code === 1 && /outside the repository/.test(r1.out) && !existsSync(inRepo), "--results-file inside the repository tree → refused before any request, no file");
+    assert(r2.code === 1 && /absolute/.test(r2.out) && r3.code === 1 && /must not exist/.test(r3.out) && r4.code === 1 && /at least 1/.test(r4.out), "--results-file relative / already existing and --progress-every 0 → refused");
+  }
+
+  // ---- fix round (verify W2): the real script stopped part-way through its image step ----
+  // 20 cards, one worker: a 404, a 500 (retried), then 18 images served in 150 ms each. The signal is
+  // sent once "PROGRESS N/20" is read (unbuffered output), or — without the flags — once N images are stored.
+  {
+    const rows = [card(91, `${cdn}/404/91.webp`), card(92, `${cdn}/500/92.webp`), ...Array.from({ length: 18 }, (_, i) => card(93 + i, `${cdn}/slow/${93 + i}.webp`))];
+    const stopAt = (name: string, extra: string[], at: number, sig: NodeJS.Signals, byFiles = false): Promise<{ code: number | null; signal: NodeJS.Signals | null; out: string; err: string; sentAt: number | null; dir: string }> => {
+      const dir = join(sandbox, name);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "players.jsonl"), rows.map((p) => JSON.stringify(p)).join("\n") + "\n");
+      return new Promise((res) => {
+        // -u: unbuffered like the worker's PYTHONUNBUFFERED=1 (which -I would ignore)
+        const c = spawn("python3", ["-I", "-u", DUMP_SCRIPT, "--key-from-env", "--no-data", "--out", dir, "--allow-host", `127.0.0.1:${source.port}`, "--workers", "1", ...extra], {
+          shell: false,
+          env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", PYTHONIOENCODING: "utf-8", ...testEnv },
+        });
+        let out = "";
+        let err = "";
+        let sentAt: number | null = null;
+        const fire = (n: number) => {
+          if (sentAt === null && n >= at) {
+            sentAt = n;
+            c.kill(sig);
+          }
+        };
+        c.stdout.on("data", (b: Buffer) => {
+          out += b.toString("utf8");
+          if (!byFiles) fire(Math.max(-1, ...[...out.matchAll(/^PROGRESS (\d+)\/20$/gm)].map((m) => Number(m[1]))));
+        });
+        c.stderr.on("data", (b: Buffer) => (err += b.toString("utf8")));
+        const poll = byFiles ? setInterval(() => fire(existsSync(join(dir, "images", "cards")) ? readdirSync(join(dir, "images", "cards")).filter((n) => n.endsWith(".webp")).length : 0), 20) : null;
+        c.on("close", (code, signal) => {
+          if (poll) clearInterval(poll);
+          res({ code, signal, out, err, sentAt, dir });
+        });
+      });
+    };
+    const textOf = (f: string) => (existsSync(f) ? readFileSync(f, "utf8") : "");
+    const stored = (dir: string) => (existsSync(join(dir, "images", "cards")) ? readdirSync(join(dir, "images", "cards")).filter((n) => n.endsWith(".webp")).map((n) => `cards/${n}`).sort() : []);
+
+    const rfTerm = join(sandbox, "term-dump-results.jsonl");
+    const term = await stopAt("term-flags", ["--progress-every", "1", "--results-file", rfTerm], 8, "SIGTERM");
+    const termText = textOf(rfTerm);
+    const termRecs = termText.split("\n").filter(Boolean).map((l) => JSON.parse(l) as { path: string; outcome: string });
+    const okPaths = termRecs.filter((r) => r.outcome === "ok").map((r) => r.path).sort();
+    const lastProg = Math.max(...[...term.out.matchAll(/^PROGRESS (\d+)\/20$/gm)].map((m) => Number(m[1])));
+    assert(
+      // sentAt = the PROGRESS count seen when signalled (≥ 8; more if read late): one worker → sentAt or sentAt + 1 lines
+      term.code === 143 && term.signal === null && termText.endsWith("\n") && term.sentAt !== null && term.sentAt >= 8 && termRecs.length >= term.sentAt && termRecs.length <= term.sentAt + 1 && lastProg === termRecs.length && /stopped by SIGTERM after \d+ of 20 images/.test(term.err) && !existsSync(join(term.dir, "manifest.json")),
+      `SIGTERM after ${term.sentAt} images (with the flags): exit ${term.code ?? term.signal}, ${termRecs.length} lines (the running fetch drained) = the last PROGRESS line, "stopped by SIGTERM", no manifest.json (as an error exit)`,
+    );
+    const failedList = textOf(join(term.dir, "images_failed.txt"));
+    assert(
+      termRecs.find((r) => r.path === "cards/91_dynamic.webp")?.outcome === "http_404" && termRecs.find((r) => r.path === "cards/92_dynamic.webp")?.outcome === "http_500" && failedList === "cards/92_dynamic.webp\n",
+      `…the failures are in it (91 http_404, 92 http_500) and images_failed.txt lists the 500 but not the 404 (${JSON.stringify(failedList)})`,
+    );
+    const newList = textOf(join(term.dir, "images_new.txt")).split("\n").filter(Boolean).sort();
+    assert(
+      JSON.stringify(newList) === JSON.stringify(okPaths) && JSON.stringify(stored(term.dir)) === JSON.stringify(okPaths) && okPaths.length === termRecs.length - 2,
+      `…images_new.txt is written on the stop and equals the ok lines and the files stored (${okPaths.length})`,
+    );
+    const termRead = readResultsFile(rfTerm, "path");
+    assert(termRead.present && termRead.records.length === termRecs.length && termRead.skipped === 0, `…and the worker's reader takes every line (${termRead.records.length}, ${termRead.skipped} skipped)`);
+
+    const rfKill = join(sandbox, "kill-dump-results.jsonl");
+    const kill = await stopAt("kill-flags", ["--progress-every", "1", "--results-file", rfKill], 5, "SIGKILL");
+    const killLines = textOf(rfKill).split("\n").filter(Boolean);
+    const killOk = killLines.filter((l) => {
+      try {
+        return (JSON.parse(l) as { outcome: string }).outcome === "ok";
+      } catch {
+        return false;
+      }
+    }).length;
+    const killWhole = killLines.every((l) => {
+      try {
+        JSON.parse(l);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+    const killStored = stored(kill.dir).length;
+    assert(
+      kill.signal === "SIGKILL" && textOf(rfKill).endsWith("\n") && killWhole && killLines.length >= 5 && killStored - killOk >= 0 && killStored - killOk <= 1,
+      `SIGKILL after ${kill.sentAt} images: ${killLines.length} whole lines survive (${killOk} ok of ${killStored} files stored — at most the in-flight one lost, no torn line)`,
+    );
+
+    // third re-verify W1: a SIGTERM that lands while concurrent.futures holds every future's lock (the stock
+    // lock loop made slow: all locks taken, a marker, 300 ms) must not deadlock — exit 143 within 20 s
+    {
+      const lockWrapper = [
+        "import runpy, sys, time, concurrent.futures._base as b",
+        "def enter(self):",
+        "    for f in self.futures:",
+        "        f._condition.acquire()",
+        "    sys.stderr.write('LOCKLOOP\\n'); sys.stderr.flush()",
+        "    time.sleep(0.3)",
+        "b._AcquireFutures.__enter__ = enter",
+        "s = sys.argv[1]; sys.argv = sys.argv[1:]",
+        "runpy.run_path(s, run_name='__main__')",
+      ].join("\n");
+      const dir = join(sandbox, "lock-window");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "players.jsonl"), rows.map((p) => JSON.stringify(p)).join("\n") + "\n");
+      const rfLock = join(sandbox, "lock-dump-results.jsonl");
+      const lock = await new Promise<{ code: number | null; signal: NodeJS.Signals | null; out: string; err: string; hung: boolean; sent: boolean }>((res) => {
+        const c = spawn("python3", ["-I", "-u", "-c", lockWrapper, DUMP_SCRIPT, "--key-from-env", "--no-data", "--out", dir, "--allow-host", `127.0.0.1:${source.port}`, "--workers", "1", "--progress-every", "1", "--results-file", rfLock], {
+          shell: false,
+          env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", PYTHONIOENCODING: "utf-8", ...testEnv },
+        });
+        let out = "";
+        let err = "";
+        let sent = false;
+        let hung = false;
+        c.stdout.on("data", (b: Buffer) => (out += b.toString("utf8")));
+        c.stderr.on("data", (b: Buffer) => {
+          err += b.toString("utf8");
+          // the first marker (every lock held; as_completed() or wait() entering its lock loop): the signal lands
+          // inside the window — a handler that raised there would leave the locks held and hang the pool
+          if (!sent && b.toString("utf8").includes("LOCKLOOP")) {
+            sent = true;
+            c.kill("SIGTERM");
+          }
+        });
+        const guard = setTimeout(() => {
+          hung = true;
+          c.kill("SIGKILL");
+        }, 20_000);
+        c.on("close", (code, signal) => {
+          clearTimeout(guard);
+          res({ code, signal, out, err, hung, sent });
+        });
+      });
+      const lockLines = textOf(rfLock).split("\n").filter(Boolean);
+      const lockWhole = textOf(rfLock).endsWith("\n") && lockLines.every((l) => {
+        try {
+          JSON.parse(l);
+          return true;
+        } catch {
+          return false;
+        }
+      });
+      const lockProg = Math.max(...[...lock.out.matchAll(/^PROGRESS (\d+)\/20$/gm)].map((m) => Number(m[1])));
+      assert(
+        lock.sent && !lock.hung && lock.code === 143 && lockWhole && lockLines.length === lockProg && existsSync(join(dir, "images_new.txt")) && !existsSync(join(dir, "manifest.json")),
+        `SIGTERM while every future's lock is held (inside concurrent.futures' lock loop): exit ${lock.hung ? "— HUNG, killed after 20 s" : lock.code ?? lock.signal}, ${lockLines.length} whole lines = the last PROGRESS line, lists written, no manifest (no deadlock)`,
+      );
+    }
+
+    // third re-verify S3 (dump side): a SIGTERM right after the image step's handler is installed (before any
+    // fetch) — exit 143, "stopped by SIGTERM after 0 of 20 images", the (empty) lists written, no manifest
+    {
+      const earlyWrapper = [
+        "import os, runpy, signal, sys",
+        "_orig = signal.signal",
+        "def patched(sig, handler):",
+        "    prev = _orig(sig, handler)",
+        "    if sig == signal.SIGTERM and callable(handler):",
+        "        os.kill(os.getpid(), signal.SIGTERM)",
+        "    return prev",
+        "signal.signal = patched",
+        "s = sys.argv[1]; sys.argv = sys.argv[1:]",
+        "runpy.run_path(s, run_name='__main__')",
+      ].join("\n");
+      const dir = join(sandbox, "early-term");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "players.jsonl"), rows.map((p) => JSON.stringify(p)).join("\n") + "\n");
+      const rfEarly = join(sandbox, "early-dump-results.jsonl");
+      const early = await new Promise<{ code: number | null; out: string }>((res) => {
+        const c = spawn("python3", ["-I", "-c", earlyWrapper, DUMP_SCRIPT, "--key-from-env", "--no-data", "--out", dir, "--allow-host", `127.0.0.1:${source.port}`, "--workers", "1", "--progress-every", "1", "--results-file", rfEarly], {
+          shell: false,
+          env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", PYTHONIOENCODING: "utf-8", ...testEnv },
+        });
+        let out = "";
+        c.stdout.on("data", (b: Buffer) => (out += b.toString("utf8")));
+        c.stderr.on("data", (b: Buffer) => (out += b.toString("utf8")));
+        c.on("close", (code) => res({ code, out }));
+      });
+      assert(
+        early.code === 143 && /stopped by SIGTERM after 0 of 20 images/.test(early.out) && textOf(rfEarly) === "" && stored(dir).length === 0 && textOf(join(dir, "images_new.txt")) === "" && existsSync(join(dir, "images_new.txt")) && !existsSync(join(dir, "manifest.json")),
+        `SIGTERM between the image step's handler and the first fetch: exit ${early.code}, "stopped by SIGTERM after 0 of 20 images", nothing fetched, the empty lists written, no manifest`,
+      );
+    }
+
+    const plainTerm = await stopAt("term-plain", [], 4, "SIGTERM", true);
+    assert(
+      plainTerm.code === null && plainTerm.signal === "SIGTERM" && !/stopped by SIGTERM/.test(plainTerm.err) && !existsSync(join(plainTerm.dir, "manifest.json")) && !existsSync(join(plainTerm.dir, "images_new.txt")),
+      `without the flags a SIGTERM ends the script as before (killed by the signal after ${plainTerm.sentAt} stored images: no handler, no list, no manifest)`,
+    );
   }
 
   // ---- the allow-list, evaluated offline (no request) ----

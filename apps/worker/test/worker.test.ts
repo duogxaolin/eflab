@@ -15,7 +15,7 @@
 // Run: pnpm --filter @eflab/worker test   (part of `pnpm test:unit`)
 
 import { spawn } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
 import { REDACTION_MASK, SYNC_BLOCK_HOURS, SYNC_STALE_RUN_MS, makeRedactor, type SyncRunStats } from "@eflab/shared";
@@ -46,8 +46,9 @@ import { runSeed, uploadArgv } from "../src/scripts.js";
 // via the namespace so this file also runs (and fails meaningfully) against code without the marker
 const SEED_COMMITTED_LINE = (scriptsModule as { SEED_COMMITTED_LINE?: RegExp }).SEED_COMMITTED_LINE ?? /(?!)/;
 import { checkRowId, checkSourceImages } from "../src/catalogue.js";
+import { buildSyncRunItems, fitSyncRunItems, jsonbTextBytes, syncRunItemsSchema, syncRunProgressSchema } from "@eflab/shared/sync-records";
 import { startFakeSource, generateRows, type FakeSource } from "./harness/fake-efootbase.js";
-import { setupScratchDb } from "./harness/scratch-db.js";
+import { executeScratchSql, setupScratchDb } from "./harness/scratch-db.js";
 import { TEST_SECRETS, guardFetch, workerTestEnv } from "./harness/test-env.js";
 
 process.env.NODE_ENV = "test";
@@ -227,6 +228,50 @@ const fetchGuard = guardFetch();
   assert(a.args.slice(-3).join(" ") === "--prefix /x/images --no-resume", "real upload: --prefix <dir> --no-resume");
   const stand = loadWorkerEnv(workerTestEnv({ databaseUrl: "postgresql://u:p@127.0.0.1:5433/eflab_synctest", apiBase: "http://127.0.0.1:9/api", uploadDest: "/nonexistent" }));
   assert(!uploadArgv(stand, "/x").args.includes("--env"), "stand-in upload: no --env argument");
+  // admin-sync-live-progress: the opt-in flags go before --prefix (the call still ends "--prefix <dir> --no-resume")
+  const live = uploadArgv(real, "/x/images", { resultsFile: "/tmp/eflab-sync-1-abc/upload_results.jsonl", progressEvery: 50 });
+  assert(
+    live.args.slice(-3).join(" ") === "--prefix /x/images --no-resume" && live.args.join(" ").includes("--progress-every 50 --results-file /tmp/eflab-sync-1-abc/upload_results.jsonl --prefix"),
+    `real upload with progress / results: ${live.args.slice(1).join(" ")}`,
+  );
+  const ok = (l: string) => scriptsModule.parseProgressLine(l);
+  assert(
+    JSON.stringify(ok("PROGRESS 500/1200")) === '{"done":500,"total":1200}' && JSON.stringify(ok("  PROGRESS 0/7 ")) === '{"done":0,"total":7}' &&
+      ok("PROGRESS 5/3") === null && ok("PROGRESS 1/2 extra") === null && ok("progress 1/2") === null && ok(`PROGRESS ${REDACTION_MASK}/2`) === null && ok("PROGRESS -1/2") === null,
+    "progress lines: `PROGRESS <done>/<total>` with numbers only (done ≤ total); anything else is an ordinary log line",
+  );
+  assert(scriptsModule.DUMP_PROGRESS_EVERY === 20 && scriptsModule.UPLOAD_PROGRESS_EVERY === 50, "the worker passes N = 20 (dump image step) and 50 (upload) — design D3");
+  {
+    // re-verify W2: an image child killed before it wrote its lists (SIGKILL after the 10-s grace, e.g. a hung
+    // fetch) — the record falls back to the complete files on disk (no .part, no link) and keeps the
+    // results-file lines, a torn last line dropped alone
+    const dir = mkdtempSync(join(tmpdir(), "eflab-synctest-fallback-"));
+    try {
+      mkdirSync(join(dir, "images", "cards"), { recursive: true });
+      mkdirSync(join(dir, "images", "emblems", "team"), { recursive: true });
+      for (const f of ["cards/101_dynamic.webp", "cards/102_dynamic.webp", "cards/101_transparent.webp", "emblems/team/abc.png"]) writeFileSync(join(dir, "images", f), "x");
+      writeFileSync(join(dir, "images", "cards", "103_dynamic.webp.part"), "half");
+      symlinkSync(join(dir, "images", "cards", "101_dynamic.webp"), join(dir, "images", "cards", "104_dynamic.webp"));
+      const rf = join(dir, "image_results.jsonl");
+      writeFileSync(rf, '{"path": "cards/101_dynamic.webp", "outcome": "ok"}\n{"path": "cards/105_dynamic.webp", "outcome": "http_404"}\n{"path": "cards/102_dyn');
+      const rank = new Map([[102, 0], [101, 1]]);
+      const items = scriptsModule.imageItems(dir, rf, rank);
+      let recorded: unknown = null;
+      const logs: string[] = [];
+      const fakeCtx = { recordItems: (r: unknown) => (recorded = r), log: (l: string) => logs.push(l) } as unknown as Parameters<typeof scriptsModule.recordStoppedStep>[0];
+      const found = { newIds: [102, 101] };
+      scriptsModule.recordStoppedStep(fakeCtx, found, rank, { imageDir: dir, imageResults: rf }, "the image step");
+      const rec = syncRunItemsSchema.safeParse(recorded);
+      assert(
+        JSON.stringify(items.downloaded) === JSON.stringify(["cards/102_dynamic.webp", "cards/101_dynamic.webp", "cards/101_transparent.webp", "emblems/team/abc.png"]) &&
+          JSON.stringify(items.failed) === JSON.stringify([{ path: "cards/105_dynamic.webp", reason: "http_404" }]),
+        `no images_new.txt: downloaded = the complete files on disk, newest first (no .part, no link) — ${(items.downloaded ?? []).join(", ")}; failures from the whole results lines (${JSON.stringify(items.failed)})`,
+      );
+      assert(rec.success && rec.data.images.downloaded.total === 4 && rec.data.cards.new.total === 2 && rec.data.images.failed.total === 1 && logs.some((l) => /ended early — the record keeps what it had done: 4 images downloaded, 1 not stored/.test(l)), `recordStoppedStep with that directory: the record lists the 4 files and the 404 (${logs.join(" | ")})`);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
   const probe = await new Promise<{ code: number | null; out: string }>((res) => {
     const empty = mkdtempSync(join(tmpdir(), "eflab-synctest-upload-"));
     // Dry run with no R2_* in the environment: with --env /dev/null it must stop at "missing env"
@@ -495,12 +540,21 @@ if ("skip" in scratch) {
     {
       await reset();
       const now = Date.now();
-      const stale = await prisma.syncRun.create({ data: { kind: "FULL", trigger: "SCHEDULE", status: "RUNNING", queuedAt: new Date(now - 3600_000), startedAt: new Date(now - 3600_000), heartbeatAt: new Date(now - SYNC_STALE_RUN_MS - 60_000) } });
+      // admin-sync-live-progress: a stale run had live progress and its pre-write items record
+      const staleItems = buildSyncRunItems({ newIds: [990_000_000_001], downloaded: ["cards/990000000001_dynamic.webp"] });
+      const staleProgress = { phase: "Seeding", done: 0, total: null, counters: { cardsNew: 1 }, updatedAt: new Date(now - SYNC_STALE_RUN_MS - 60_000).toISOString() };
+      const stale = await prisma.syncRun.create({ data: { kind: "FULL", trigger: "SCHEDULE", status: "RUNNING", queuedAt: new Date(now - 3600_000), startedAt: new Date(now - 3600_000), heartbeatAt: new Date(now - SYNC_STALE_RUN_MS - 60_000), progress: staleProgress, items: staleItems } });
       const check = await queue("CHECK");
       const r = await runner.tick(deps());
       const s = await prisma.syncRun.findUniqueOrThrow({ where: { id: stale.id } });
       const c = await prisma.syncRun.findUniqueOrThrow({ where: { id: check.id } });
       assert(r.recovered.includes(stale.id) && s.status === "FAILED" && s.error === "worker restarted" && s.finishedAt !== null, "stale RUNNING run (heartbeat 11 min old) → FAILED 'worker restarted'");
+      const kept = s.items as typeof staleItems | null; // jsonb reorders keys: compare the lists
+      assert(
+        s.progress === null && kept?.cards.new.ids.join() === "990000000001" && kept.images.downloaded.paths.join() === "cards/990000000001_dynamic.webp" && kept.images.downloaded.total === 1,
+        "stale recovery clears the live progress and keeps the items record (\"Worker dies after the commit\")",
+      );
+      assert(c.progress === null && c.items === null, "a finished check carries no progress and no items record");
       assert(c.status === "OK", "after the recovery the queue continues (the queued check ran)");
 
       await reset();
@@ -549,6 +603,9 @@ if ("skip" in scratch) {
       const aRow = await prisma.syncRun.findUniqueOrThrow({ where: { id: a.id } });
       const sent = claimed[0]!.claimed!.startedAt.getTime();
       assert(aRow.startedAt?.getTime() === sent && aRow.heartbeatAt?.getTime() === sent, "the claim's conditional UPDATE stores startedAt / heartbeatAt exactly (UTC session; other zones: the CR1 block)");
+      const claimedProgress = aRow.progress as { phase?: string; done?: number; total?: number | null; updatedAt?: string } | null;
+      assert(claimedProgress?.phase === "Asking the source" && claimedProgress.done === 0 && claimedProgress.total === null && claimedProgress.updatedAt === new Date(sent).toISOString(),
+        `the claim writes the first progress of the kind (${JSON.stringify(claimedProgress)})`);
       const bRow = await prisma.syncRun.findUniqueOrThrow({ where: { id: b.id } });
       assert(bRow.status === "QUEUED", "the other run stays QUEUED");
     }
@@ -719,6 +776,7 @@ if ("skip" in scratch) {
       const row = await prisma.syncRun.findUniqueOrThrow({ where: { id: run.id } });
       assert(row.status === "OK" && row.error === null, `cancel during a committing write → recorded as the real outcome OK, not CANCELLED (got ${row.status})`);
       assert(/after the database write had committed/.test(row.logTail), "…with a note in the log tail");
+      assert(row.progress === null, "\"Cancel after commit unchanged\": the run ends OK and carries no live progress");
 
       // (b) A write never starts once the run was aborted.
       await reset();
@@ -777,6 +835,49 @@ if ("skip" in scratch) {
       await prisma.syncRun.updateMany({ where: { id: other.id, status: "QUEUED" }, data: { status: "CANCELLED", finishedAt: new Date() } });
     }
 
+    // ---- admin-sync-live-progress: progress rides on the heartbeat; a late write after the run left RUNNING changes nothing ----
+    {
+      await reset();
+      let release!: () => void;
+      const gate = new Promise<void>((r) => (release = r));
+      let lateSet = false;
+      const handlers: RunHandlers = {
+        ...defaultHandlers,
+        INCREMENTAL: async (ctx) => {
+          ctx.stats.cardsNew = 40;
+          (ctx.stats as Record<string, unknown>).imagesPendingIds = [1, 2, 3];
+          ctx.setProgress({ phase: "Downloading images", done: 45, total: 120 });
+          ctx.setProgress({ phase: "Seeding" }); // not a phase of an incremental run: ignored (logged)
+          await gate;
+          ctx.setProgress({ phase: "Uploading images", done: 3, total: 9 });
+          lateSet = true;
+          await sleep(800); // several heartbeat periods, the run no longer RUNNING
+          return { status: "OK" };
+        },
+      };
+      const run = await queue("INCREMENTAL");
+      const t0 = Date.now();
+      const p = runner.tick(deps({ handlers, runHeartbeatMs: 100, cancelPollMs: 50 }));
+      let mid: unknown = null;
+      for (let i = 0; i < 100; i++) {
+        mid = (await prisma.syncRun.findUniqueOrThrow({ where: { id: run.id }, select: { progress: true } })).progress;
+        if ((mid as { phase?: string } | null)?.phase === "Downloading images") break;
+        await sleep(30);
+      }
+      const parsed = syncRunProgressSchema.safeParse(mid);
+      assert(
+        parsed.success && parsed.data.done === 45 && parsed.data.total === 120 && parsed.data.counters.cardsNew === 40 && !("imagesPendingIds" in parsed.data.counters) && Date.now() - t0 < 3_000,
+        `the heartbeat writes the progress: phase, 45 of 120, the counters so far (never a list) within one period (${JSON.stringify(mid)})`,
+      );
+      // The run leaves RUNNING behind the worker's back (what stale recovery does): FAILED, progress cleared.
+      await prisma.$executeRaw`UPDATE "SyncRun" SET status = 'FAILED', error = 'ended elsewhere', progress = NULL WHERE id = ${run.id}`;
+      release();
+      await p;
+      const end = await prisma.syncRun.findUniqueOrThrow({ where: { id: run.id } });
+      assert(lateSet && end.status === "FAILED" && end.error === "ended elsewhere" && end.progress === null,
+        `"Progress after the run left running": the late writes changed no row (status ${end.status}, progress ${JSON.stringify(end.progress)})`);
+    }
+
     // ---- 5.2 redaction of every configured secret in stored logs and errors ----
     {
       await reset();
@@ -808,7 +909,7 @@ if ("skip" in scratch) {
       const run = await queue("INCREMENTAL");
       await runner.tick(deps({ handlers }));
       const row = await prisma.syncRun.findUniqueOrThrow({ where: { id: run.id } });
-      const stored = `${row.logTail}\n${row.error}\n${JSON.stringify(row.stats)}`;
+      const stored = `${row.logTail}\n${row.error}\n${JSON.stringify(row.stats)}\n${JSON.stringify(row.progress)}\n${JSON.stringify(row.items)}`;
       const leaked = Object.entries(TEST_SECRETS).filter(([, v]) => stored.includes(v)).map(([k]) => k);
       assert(leaked.length === 0, `redaction: no secret value in the stored log, error or stats (leaked: ${leaked.join(", ") || "none"})`);
       assert(row.logTail.includes(`key=${REDACTION_MASK}`) && row.logTail.includes(`stderr key ${REDACTION_MASK}`), "redaction: the child's key line is stored masked (stdout and stderr)");
@@ -864,6 +965,56 @@ if ("skip" in scratch) {
       const deps2 = deps({ handlers, now: at });
       const due = await runner.queueDueRuns(deps2);
       assert(due.length === 0, "scheduler: a queued full run → no scheduled run");
+    }
+
+    // ---- verify S1: migration 20261028000000_admin_sync_live_progress on this scratch database ----
+    {
+      const sql = readFileSync(join(DB_PACKAGE_DIR, "prisma/migrations/20261028000000_admin_sync_live_progress/migration.sql"), "utf8");
+      const interval = async () => (await prisma.syncConfig.findUniqueOrThrow({ where: { id: 1 } })).incrementalIntervalMin;
+      const dflt = (await prisma.$queryRaw<Array<{ d: string | null }>>`SELECT column_default AS d FROM information_schema.columns WHERE table_name = 'SyncConfig' AND column_name = 'incrementalIntervalMin'`)[0]?.d;
+      const checks = async () => Number((await prisma.$queryRaw<Array<{ n: bigint }>>`SELECT count(*) AS n FROM pg_constraint WHERE conname = 'SyncRun_items_size'`)[0]!.n);
+      await prisma.syncConfig.update({ where: { id: 1 }, data: { incrementalIntervalMin: 360 } });
+      const r360 = await executeScratchSql(scratch.url, sql);
+      const after360 = await interval();
+      await prisma.syncConfig.update({ where: { id: 1 }, data: { incrementalIntervalMin: 180 } });
+      const r180 = await executeScratchSql(scratch.url, sql);
+      const after180 = await interval();
+      const again = await executeScratchSql(scratch.url, sql);
+      assert(dflt === "60", `migration: the column default is 60 (${dflt})`);
+      assert(r360.code === 0 && after360 === 60, `migration: a row still at the old default 360 is moved to 60 (${after360})`);
+      assert(r180.code === 0 && after180 === 180 && again.code === 0 && (await interval()) === 180 && (await checks()) === 1, `migration: a customised 180 is kept, applied once more nothing changes, one CHECK (${after180}, checks ${await checks()})`);
+      // the CHECK at its bound: records of exactly 524,288 and 524,289 bytes of jsonb text (our count = Postgres')
+      const recordOfSize = (target: number) => {
+        const path = (i: number, nameLen = 180) => `emblems/team/${String(i).padStart(6, "0")}${"a".repeat(nameLen - 6)}.png`;
+        const downloaded = Array.from({ length: 2_000 }, (_, i) => path(i));
+        const uploaded: string[] = [];
+        const size = () => jsonbTextBytes(buildSyncRunItems({ downloaded, uploaded }));
+        while (size() + path(0).length + 4 <= target) uploaded.push(path(10_000 + uploaded.length));
+        let d = target - size();
+        if (d > 0 && d < 22) {
+          // too little room for one more path (≥ 18 characters + quotes + separator): shorten the last one first
+          const last = uploaded.length - 1;
+          uploaded[last] = path(10_000 + last, 180 - (22 - d));
+          d = target - size();
+        }
+        if (d > 0) uploaded.push(`emblems/team/${"b".repeat(d - 4 - "emblems/team/".length - ".png".length)}.png`);
+        return buildSyncRunItems({ downloaded, uploaded });
+      };
+      const atBound = recordOfSize(524_288);
+      const overBound = recordOfSize(524_289);
+      const insert = async (items: unknown) => {
+        try {
+          const r = await prisma.syncRun.create({ data: { kind: "CHECK", trigger: "MANUAL", status: "CANCELLED", items: items as object }, select: { id: true } });
+          return (await prisma.$queryRaw<Array<{ n: number }>>`SELECT octet_length(items::text)::int AS n FROM "SyncRun" WHERE id = ${r.id}`)[0]!.n;
+        } catch (e) {
+          return /SyncRun_items_size/.test(String((e as Error).message)) ? "refused" : `error ${String((e as Error).message).slice(0, 120)}`;
+        }
+      };
+      assert(jsonbTextBytes(atBound) === 524_288 && jsonbTextBytes(overBound) === 524_289 && syncRunItemsSchema.safeParse(atBound).success, "two valid records of 524,288 and 524,289 bytes of jsonb text (our count)");
+      const stored = await insert(atBound);
+      const refused = await insert(overBound);
+      assert(stored === 524_288 && refused === "refused", `the CHECK accepts 524,288 bytes (stored octet_length ${stored}) and refuses 524,289 (${refused})`);
+      assert(jsonbTextBytes(fitSyncRunItems(overBound)) <= 524_288, "…and the worker's fit brings the larger one under the bound before any write");
     }
 
     assert(fetchGuard.refused.length === 0, "no request left the machine (fetch guard)");

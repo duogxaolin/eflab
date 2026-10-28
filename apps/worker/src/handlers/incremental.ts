@@ -39,6 +39,17 @@
 //     PlayerSkill links (skipDuplicates). Nothing is ever deleted; Pack /
 //     PackCard / FeaturedBundle / Skill / Manager are never written.
 //
+// Progress and the items record (openspec change admin-sync-live-progress):
+// phases "Reading pages" (pages, validation, comparison) → "Comparing images"
+// (the image child starting) → "Downloading images" (done / total from its
+// PROGRESS lines) → "Uploading images" (the upload's PROGRESS lines) → "Writing
+// the catalogue". The record (new / changed card ids newest first, the image
+// lists and the per-image failure classes of the image step and the upload) is
+// kept with `ctx.recordItems` after the comparison and again after the upload,
+// and written by the pre-write checkpoint — before the transaction, so a worker
+// dying after the commit loses nothing — and by the final update. The image
+// lists and both results files are read before the working directory goes.
+//
 // Limits (documented): a card edited at the source after its release is not
 // seen (time_added does not move — the weekly full run catches it); a skill flag
 // the source dropped from a re-seen card stays linked until the next full run;
@@ -61,6 +72,7 @@ import {
 } from "@eflab/db/efootbase-map";
 import { makeUpserter } from "@eflab/db/upsert";
 import { incrementalWatermark, newestReleaseAfter } from "@eflab/shared";
+import { buildSyncRunItems, type SyncItemsInput } from "@eflab/shared/sync-records";
 import { assertLoopbackUrl } from "../efootbase.js";
 import { CATALOGUE_WRITE_TX_MAX_WAIT_MS, CATALOGUE_WRITE_TX_TIMEOUT_MS } from "../limits.js";
 import {
@@ -82,16 +94,21 @@ import type { RunContext, RunHandler, RunOutcome } from "../runner.js";
 import {
   count,
   fail,
+  imageItems,
   imageStepOutcome,
   makeRunDir,
+  newestFirstFailures,
+  newestFirstPaths,
   readLines,
   readManifest,
   recordOwedImages,
+  recordStoppedStep,
   removeRunDir,
   runDumpScript,
   runUpload,
   stopToOutcome,
   uploadPreflight,
+  uploadResultsFile,
 } from "../scripts.js";
 
 /** Players per upsert statement (= the seed's batch size). */
@@ -143,6 +160,7 @@ async function incremental(ctx: RunContext): Promise<RunOutcome> {
   ctx.log(`working directory ${work}`);
   try {
     // ---- 2. newest-first pages + metadata ----
+    ctx.setProgress({ phase: "Reading pages" });
     const dataDir = join(work, "data");
     mkdirSync(dataDir, { mode: 0o700 });
     await runDumpScript(
@@ -252,6 +270,10 @@ async function incremental(ctx: RunContext): Promise<RunOutcome> {
     ctx.stats.imagesOverwritten = 0;
     ctx.stats.imagesFailed = 0;
     ctx.log(`cards: ${newIds.length} new, ${changed} changed, ${unchanged} unchanged; new lookup rows: ${newCountries.size} countries, ${newTeams.size} teams, ${newLeagues.size} leagues`);
+    // The rows come newest first (time_added DESC): that order is the record's "newest first".
+    const rank = new Map<number, number>(rows.map((r, i) => [r.id, i]));
+    const found: SyncItemsInput = { newIds, changedIds };
+    ctx.recordItems(buildSyncRunItems(found));
 
     const boosterUpsert = makeUpserter("Booster", "Booster", new Set());
     const storedBoosters = await db.booster.findMany({ where: { id: { in: [...boosterRows.keys()] } } });
@@ -303,10 +325,23 @@ async function incremental(ctx: RunContext): Promise<RunOutcome> {
       const idsFile = join(imgDir, "only_ids.json");
       // New, rewritten and owed cards, each compared with the bucket first (CR2): only a missing or differing image is downloaded.
       writeFileSync(idsFile, JSON.stringify(imageIds));
-      await runDumpScript(ctx, ["--out", imgDir, "--no-data", "--only-ids", idsFile, "--etag-vs-bucket", env.r2PublicBase], "images");
+      ctx.setProgress({ phase: "Comparing images" });
+      const imageResults = join(work, "image_results.jsonl");
+      try {
+        await runDumpScript(ctx, ["--out", imgDir, "--no-data", "--only-ids", idsFile, "--etag-vs-bucket", env.r2PublicBase], "images", {
+          resultsFile: imageResults,
+          onProgress: (done, total) => ctx.setProgress({ phase: "Downloading images", done, total }),
+        });
+      } catch (e) {
+        // blocked / failed / cancelled / time limit / worker stop: keep what the step fetched (verify W2), then the original error
+        recordStoppedStep(ctx, found, rank, { imageDir: imgDir, imageResults }, "the image step");
+        throw e;
+      }
       const im = readManifest(imgDir);
       const st = (im.imageStats ?? {}) as Record<string, unknown>;
       const step = imageStepOutcome(imgDir);
+      Object.assign(found, imageItems(imgDir, imageResults, rank));
+      ctx.recordItems(buildSyncRunItems(found));
       ctx.stats.requests = (ctx.stats.requests ?? 0) + count(im, "cdnRequests");
       ctx.stats.imagesDownloaded = count(st, "ok");
       ctx.stats.imagesOverwritten = step.overwritten;
@@ -322,11 +357,21 @@ async function incremental(ctx: RunContext): Promise<RunOutcome> {
       for (const id of step.failedIds) owed.add(id);
       if (step.failedRels.length > 0) ctx.log(`failed or skipped images: ${readLines(join(imgDir, "image_errors.log")).slice(0, 3).join("; ")}`);
       if (ctx.stats.imagesDownloaded > 0) {
-        const up = await runUpload(ctx, join(imgDir, "images"));
+        ctx.setProgress({ phase: "Uploading images" });
+        let up: Awaited<ReturnType<typeof runUpload>>;
+        try {
+          up = await runUpload(ctx, join(imgDir, "images"), work, (done, total) => ctx.setProgress({ phase: "Uploading images", done, total }));
+        } catch (e) {
+          recordStoppedStep(ctx, found, rank, { uploadResults: uploadResultsFile(work) }, "the upload");
+          throw e;
+        }
         ctx.stats.imagesUploaded = up.ok;
         ctx.stats.imagesFailed += up.errors;
-        // which files failed is not known: every downloaded card is compared again next time (an uploaded one then reads "same")
+        // every downloaded card is compared again next time when an upload failed (an uploaded one then reads "same")
         if (up.errors > 0) for (const id of step.downloadedIds) owed.add(id);
+        found.uploaded = newestFirstPaths(up.uploaded, rank);
+        found.uploadFailed = newestFirstFailures(up.uploadFailed, rank);
+        ctx.recordItems(buildSyncRunItems(found));
       }
       if (ctx.stats.imagesOverwritten > 0) {
         ctx.log(`${ctx.stats.imagesOverwritten} card images were overwritten in the bucket — raise the web build's image version (DEFAULT_IMAGE_VERSION) and rebuild the web app so visitors see them`);
@@ -334,7 +379,8 @@ async function incremental(ctx: RunContext): Promise<RunOutcome> {
     }
     recordOwedImages(ctx, owed);
     // Recorded on the run row BEFORE the write: a worker dying after the commit can then never lose an
-    // owed image (the card would read unchanged afterwards); it also stops here if the row cannot be updated (S4).
+    // owed image (the card would read unchanged afterwards) nor the items record (admin-sync-live-progress);
+    // it also stops here if the row cannot be updated (S4).
     await ctx.checkpoint();
     if (!needWrite) {
       ctx.watermarkAfter = dbNewest;
@@ -355,6 +401,7 @@ async function incremental(ctx: RunContext): Promise<RunOutcome> {
       if (ctx.signal.aborted) throw new Error(`stopped ${step} (run aborted) — the write was rolled back, nothing was committed`);
     };
     guard("before the database write");
+    ctx.setProgress({ phase: "Writing the catalogue" });
     await ctx.writeCatalogue("incremental catalogue write", () => db.$transaction(
       async (tx) => {
         guard("at the start of the database write");

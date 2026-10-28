@@ -16,6 +16,18 @@
 //
 // Kind handlers are pluggable (`RunHandler`): CHECK in handlers/check.ts,
 // INCREMENTAL in handlers/incremental.ts, FULL in handlers/full.ts.
+//
+// Live progress and the downloaded-items record (openspec change
+// admin-sync-live-progress, design D2 / D4): handlers report their phase and
+// done / total with `ctx.setProgress` and what they fetched with
+// `ctx.recordItems` (both in memory only). The runner writes the progress —
+// phase, done / total, the whitelisted counters of `ctx.stats` so far, the time
+// — in the claim and in every run heartbeat UPDATE, which is guarded by
+// `status = 'RUNNING'` (a late write after the run ended changes no row); it
+// writes the items record (shortened to fit 512 KB) at `ctx.checkpoint()` and in
+// the final transaction, which also clears the progress. Stale recovery clears
+// the progress and keeps the items. Nothing here changes the order of a run's
+// steps or the cancel-versus-commit rules below.
 
 import { Prisma, type PrismaClientType } from "@eflab/db";
 import {
@@ -33,6 +45,17 @@ import {
   type SyncStatus,
   type SyncTrigger,
 } from "@eflab/shared";
+import {
+  firstPhase,
+  fitSyncRunItems,
+  isPhaseOfKind,
+  progressCounters,
+  syncRunItemsSchema,
+  syncRunProgressSchema,
+  type SyncPhase,
+  type SyncRunItems,
+  type SyncRunProgress,
+} from "@eflab/shared/sync-records";
 import { CHILD_KILL_GRACE_MS, runChild, type ChildResult } from "./child.js";
 import type { WorkerEnv } from "./env.js";
 import { CANCEL_POLL_MS, CATALOGUE_WRITE_WAIT_MS, RUN_HEARTBEAT_MS, SYNC_TIME_LIMITS_MS, WORKER_TICK_MS } from "./limits.js";
@@ -87,8 +110,17 @@ export interface RunContext {
   writeCatalogue<T>(what: string, fn: () => Promise<T>, opts?: { waitMs?: number }): Promise<T>;
   /** Records that catalogue rows were committed (inside a `writeCatalogue` that may still go on, e.g. the seed child). */
   markCommitted(what: string): void;
-  /** Writes the current statistics (validated) and log tail to the RUNNING row now — e.g. pending image ids before a write. */
+  /** Writes the current statistics (validated), log tail, progress and items record to the RUNNING row now — e.g. pending image ids before a write. */
   checkpoint(): Promise<void>;
+  /**
+   * The run's current phase (one of its kind's names) and, when known, how many
+   * units are done of how many (`total` null = unknown). Kept in memory; the
+   * runner writes it with the next heartbeat together with the counters of
+   * `stats` known so far. `done` / `total` default to 0 / null.
+   */
+  setProgress(p: { phase: SyncPhase; done?: number; total?: number | null }): void;
+  /** What the run fetched so far (replaces the previous record; written at `checkpoint()` and at the end). */
+  recordItems(items: SyncRunItems): void;
   /** Runs a child process bound to the run's signal, redactor and log. `onLine`
    *  also receives every (already redacted) line, e.g. to keep the last lines. */
   runChild(
@@ -150,10 +182,11 @@ export async function recoverStaleRuns(deps: WorkerDeps): Promise<number[]> {
   const recovered: number[] = [];
   for (const r of running) {
     if (!isStaleRun(r, now)) continue;
-    // Conditional on the heartbeat we read: a run that just wrote one is left alone.
+    // Conditional on the heartbeat we read: a run that just wrote one is left alone. The live progress
+    // goes with the run; its items record stays (written before its catalogue write — admin-sync-live-progress).
     const res = await deps.db.syncRun.updateMany({
       where: { id: r.id, status: "RUNNING", heartbeatAt: r.heartbeatAt },
-      data: { status: "FAILED", error: "worker restarted", finishedAt: now },
+      data: { status: "FAILED", error: "worker restarted", finishedAt: now, progress: Prisma.DbNull },
     });
     if (res.count === 1) {
       recovered.push(r.id);
@@ -244,14 +277,17 @@ export type ClaimResult = { claimed: ClaimedRun } | { claimed: null; reason: "em
  * "gone" when the row was no longer claimable, "busy" when the partial unique
  * index refused a second RUNNING run.
  */
-export async function tryClaim(deps: WorkerDeps, id: number, startedAt: Date): Promise<"claimed" | "gone" | "busy"> {
+export async function tryClaim(deps: WorkerDeps, id: number, startedAt: Date, kind?: SyncKind): Promise<"claimed" | "gone" | "busy"> {
   try {
     // Typed, not raw SQL (verify finding CR1): a raw Date parameter is a timestamptz that Postgres
     // converts into these `timestamp(3)` columns with the SESSION TimeZone — under America/New_York
     // startedAt was stored 4 h early (back-to-back incrementals, a FULL re-queued in its own window).
+    // The claim is the run's first heartbeat: with the kind known it also writes the first progress
+    // (the kind's first phase, nothing done yet, total unknown — admin-sync-live-progress).
+    const progress = kind ? syncRunProgressSchema.safeParse({ phase: firstPhase(kind), done: 0, total: null, counters: {}, updatedAt: startedAt.toISOString() }) : null;
     const res = await deps.db.syncRun.updateMany({
       where: { id, status: "QUEUED", cancelRequested: false },
-      data: { status: "RUNNING", startedAt, heartbeatAt: startedAt },
+      data: { status: "RUNNING", startedAt, heartbeatAt: startedAt, ...(progress?.success ? { progress: progress.data as Prisma.InputJsonObject } : {}) },
     });
     return res.count === 1 ? "claimed" : "gone";
   } catch (e) {
@@ -276,7 +312,7 @@ export async function claimNextRun(deps: WorkerDeps): Promise<ClaimResult> {
     });
     if (!next) return { claimed: null, reason: "empty" };
     const startedAt = nowOf(deps);
-    const r = await tryClaim(deps, next.id, startedAt);
+    const r = await tryClaim(deps, next.id, startedAt, next.kind);
     if (r === "claimed") return { claimed: { ...next, startedAt } };
     if (r === "busy") return { claimed: null, reason: "busy" };
     // Cancelled or taken between the read and the update → look again.
@@ -315,6 +351,29 @@ export async function executeRun(deps: WorkerDeps, run: ClaimedRun): Promise<Exe
   /** Catalogue writes in flight (writeCatalogue) with how long the runner may wait for each, and the ones that committed. */
   const writes = new Map<Promise<unknown>, number>();
   const committed: string[] = [];
+  // Live progress (memory; written with each heartbeat) and the items record (written at checkpoints and the end).
+  let phase: { phase: SyncPhase; done: number; total: number | null } = { phase: firstPhase(run.kind), done: 0, total: null };
+  let items: SyncRunItems | null = null;
+  let progressWarned = false;
+  /** The progress snapshot to store now (validated, strict), or undefined when it does not validate (then left as it is). */
+  const progressJson = (): Prisma.InputJsonObject | undefined => {
+    const p: SyncRunProgress = { ...phase, counters: progressCounters(ctx.stats as Record<string, unknown>), updatedAt: nowOf(deps).toISOString() };
+    const parsed = syncRunProgressSchema.safeParse(p);
+    if (parsed.success) return parsed.data as Prisma.InputJsonObject;
+    if (!progressWarned) {
+      progressWarned = true;
+      ctx.log(`internal error: run progress did not validate (${parsed.error.issues.map((i) => i.path.join(".") || i.message).join(", ")}) — not written`);
+    }
+    return undefined;
+  };
+  /** The items record to store (shortened to fit 512 KB, validated), or undefined when there is none / it does not validate. */
+  const itemsJson = (): Prisma.InputJsonObject | undefined => {
+    if (items === null) return undefined;
+    const parsed = syncRunItemsSchema.safeParse(fitSyncRunItems(items));
+    if (parsed.success) return parsed.data as Prisma.InputJsonObject;
+    ctx.log(`internal error: the downloaded-items record did not validate (${parsed.error.issues.map((i) => i.path.join(".") || i.message).slice(0, 5).join(", ")}) — not written`);
+    return undefined;
+  };
 
   const ctx: RunContext = {
     run,
@@ -344,9 +403,27 @@ export async function executeRun(deps: WorkerDeps, run: ClaimedRun): Promise<Exe
     checkpoint: async () => {
       const parsed = syncRunStatsSchema.safeParse(ctx.stats);
       if (!parsed.success) throw new Error(`internal error: run statistics did not validate at a checkpoint (${parsed.error.issues.map((i) => i.path.join(".")).join(", ")})`);
-      const res = await db.syncRun.updateMany({ where: { id: run.id, status: "RUNNING" }, data: { stats: parsed.data as Prisma.InputJsonObject, logTail: tail.toString() } });
+      const prog = progressJson();
+      const rec = itemsJson();
+      const res = await db.syncRun.updateMany({
+        where: { id: run.id, status: "RUNNING" },
+        data: { stats: parsed.data as Prisma.InputJsonObject, logTail: tail.toString(), ...(prog ? { progress: prog } : {}), ...(rec ? { items: rec } : {}) },
+      });
       // third verify S4: nothing may go on (e.g. the seed) when the state could not be recorded
       if (res.count !== 1) throw new Error(`checkpoint: run ${run.id} is no longer RUNNING (${res.count} rows updated) — stopped before the next step`);
+    },
+    setProgress: (p) => {
+      if (!isPhaseOfKind(run.kind, p.phase)) {
+        ctx.log(`internal error: "${p.phase}" is not a phase of a ${run.kind} run — progress unchanged`);
+        return;
+      }
+      const total = p.total === undefined || p.total === null || !Number.isInteger(p.total) || p.total < 0 ? null : p.total;
+      let done = p.done !== undefined && Number.isInteger(p.done) && p.done > 0 ? p.done : 0;
+      if (total !== null && done > total) done = total;
+      phase = { phase: p.phase, done, total };
+    },
+    recordItems: (next) => {
+      items = next;
     },
     runChild: (command, args, opts) => {
       const label = opts.label ?? command.split("/").pop() ?? command;
@@ -388,9 +465,11 @@ export async function executeRun(deps: WorkerDeps, run: ClaimedRun): Promise<Exe
       if (Date.now() - lastBeat >= heartbeatMs) {
         lastBeat = Date.now();
         const at = nowOf(deps);
+        // The progress goes in the same guarded UPDATE: once the run is no longer RUNNING it changes nothing.
+        const prog = progressJson();
         await db.$transaction([
           db.syncConfig.update({ where: { id: 1 }, data: { workerHeartbeatAt: at } }),
-          db.syncRun.updateMany({ where: { id: run.id, status: "RUNNING" }, data: { heartbeatAt: at, logTail: tail.toString() } }),
+          db.syncRun.updateMany({ where: { id: run.id, status: "RUNNING" }, data: { heartbeatAt: at, logTail: tail.toString(), ...(prog ? { progress: prog } : {}) } }),
         ]);
       }
     } catch (e) {
@@ -522,6 +601,8 @@ export async function executeRun(deps: WorkerDeps, run: ClaimedRun): Promise<Exe
   ctx.log(`run ${run.id} ended ${status}${error ? `: ${error}` : ""}`);
 
   const statsJson = (stats.success ? stats.data : {}) as Prisma.InputJsonObject;
+  // Validated (and possibly logged) before the log tail is taken for the final write.
+  const finalItems = itemsJson();
   await db.$transaction(async (tx) => {
     await tx.syncRun.updateMany({
       where: { id: run.id, status: "RUNNING" },
@@ -534,6 +615,9 @@ export async function executeRun(deps: WorkerDeps, run: ClaimedRun): Promise<Exe
         stats: statsJson,
         watermarkBefore: ctx.watermarkBefore,
         watermarkAfter: ctx.watermarkAfter,
+        // an ended run carries no live progress; its items record is rewritten with the final lists
+        progress: Prisma.DbNull,
+        ...(finalItems ? { items: finalItems } : {}),
       },
     });
     if (blockedUntil) {

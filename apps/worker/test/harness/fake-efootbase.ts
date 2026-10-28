@@ -63,6 +63,12 @@ export interface FakeSource {
   setCdnMode(mode: "ok" | "403"): void;
   /** true: GET / HEAD of this CDN path answer 500 (a persistent image error); false: normal again. */
   setBrokenImage(path: string, broken: boolean): void;
+  /** true: GET / HEAD of this CDN path answer 404 (the source has no such image); false: normal again. */
+  setMissingImage(path: string, missing: boolean): void;
+  /** Every /cdn answer waits this long (ms) first — holds a run in its image step (0 = off). */
+  setCdnDelayMs(ms: number): void;
+  /** The next `n` /cdn downloads (GETs) are answered normally, every later /cdn request gets 403 (a CDN block in the middle of an image step); null = off. */
+  setCdnBlockAfter(n: number | null): void;
   /** Replace what /api/teams answers on page 1. */
   setTeams(teams: Array<Record<string, unknown>>): void;
   /** Replace the bytes served for one CDN path (e.g. "cards/1_dynamic.webp") — a changed image. */
@@ -226,22 +232,37 @@ export async function startFakeSource(opts: FakeSourceOptions): Promise<FakeSour
   const imageBytes = (path: string) => images.get(path) ?? fakeImage(`fake-image:${path}`);
   /** Paths answered 500 (a persistent image error at the source). */
   const brokenImages = new Set<string>();
+  /** Paths answered 404 (the source has no such image). */
+  const missingImages = new Set<string>();
+  let cdnDelayMs = 0;
+  let cdnCount = 0;
+  let cdnBlockFrom: number | null = null;
 
   const server = createServer((req, res) => {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
     requests.push({ method: req.method ?? "GET", path: url.pathname, query: url.searchParams, headers: req.headers });
 
     if (url.pathname.startsWith("/cdn/")) {
-      if (cdnMode === "403") return send(res, 403, "Forbidden", "text/plain");
-      const path = url.pathname.slice("/cdn/".length);
-      if (brokenImages.has(path)) return send(res, 500, "Internal Server Error", "text/plain");
-      const bytes = imageBytes(path);
-      const etag = `"${createHash("md5").update(bytes).digest("hex")}"`;
-      const type = path.endsWith(".png") ? "image/png" : "image/webp";
-      if (req.method === "HEAD") {
-        res.writeHead(200, { "Content-Type": type, "Content-Length": bytes.byteLength, ETag: etag });
-        res.end();
-      } else send(res, 200, bytes, type, { ETag: etag });
+      // the mid-step block counts downloads (GETs); a HEAD is refused once the block has started
+      if (req.method !== "HEAD") cdnCount++;
+      const blockedNow = cdnBlockFrom !== null && (req.method === "HEAD" ? cdnCount + 1 >= cdnBlockFrom : cdnCount >= cdnBlockFrom);
+      const cdnAnswer = () => {
+        if (cdnMode === "403" || blockedNow) return send(res, 403, "Forbidden", "text/plain");
+        const path = url.pathname.slice("/cdn/".length);
+        if (brokenImages.has(path)) return send(res, 500, "Internal Server Error", "text/plain");
+        if (missingImages.has(path)) return send(res, 404, "Not Found", "text/plain");
+        const bytes = imageBytes(path);
+        const etag = `"${createHash("md5").update(bytes).digest("hex")}"`;
+        const type = path.endsWith(".png") ? "image/png" : "image/webp";
+        if (req.method === "HEAD") {
+          res.writeHead(200, { "Content-Type": type, "Content-Length": bytes.byteLength, ETag: etag });
+          res.end();
+        } else send(res, 200, bytes, type, { ETag: etag });
+      };
+      if (cdnDelayMs > 0) {
+        const t = setTimeout(cdnAnswer, cdnDelayMs);
+        res.on("close", () => clearTimeout(t));
+      } else cdnAnswer();
       return;
     }
     if (!url.pathname.startsWith("/api/")) return send(res, 404, "not found", "text/plain");
@@ -292,6 +313,9 @@ export async function startFakeSource(opts: FakeSourceOptions): Promise<FakeSour
     setCdnMode: (m) => (cdnMode = m),
     setTeams: (t) => (teams = t),
     setBrokenImage: (p, broken) => (broken ? brokenImages.add(p) : brokenImages.delete(p)),
+    setMissingImage: (p, missing) => (missing ? missingImages.add(p) : missingImages.delete(p)),
+    setCdnDelayMs: (ms) => (cdnDelayMs = Math.max(0, ms)),
+    setCdnBlockAfter: (n) => (cdnBlockFrom = n === null ? null : cdnCount + n + 1),
     setImage: (p, b) => images.set(p, b),
     imageBytes,
     close: () =>
