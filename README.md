@@ -81,7 +81,7 @@ The single root `.env` is read by the API and the db scripts (`tsx --env-file-if
 
 ```bash
 pnpm db:generate   # prisma generate
-pnpm db:migrate    # needs DATABASE_URL exported in the shell — prisma migrate deploy: 20261017000000_baseline (+ pg_trgm/unaccent), 20261017000100_parity_fixes, 20261018000000_remove_dead_surface, 20261019000000_efootbase_static_data, 20261019230000_admin_sync_worker, 20261024000000_catalogue_data_refresh — it does not read the root .env, so DATABASE_URL must be in the environment
+pnpm db:migrate    # needs DATABASE_URL exported in the shell — prisma migrate deploy: 20261017000000_baseline (+ pg_trgm/unaccent), 20261017000100_parity_fixes, 20261018000000_remove_dead_surface, 20261019000000_efootbase_static_data, 20261019230000_admin_sync_worker, 20261024000000_catalogue_data_refresh, 20261028000000_admin_sync_live_progress — it does not read the root .env, so DATABASE_URL must be in the environment
 pnpm db:refresh    # db:seed (efootbase dump → Postgres, upsert in one transaction) then db:crossfill (eFHUB SQLite)
 python3 -I scripts/verify-seed.py --after-crossfill   # optional: assert the DB matches the dump (flag: right after db:refresh)
 ```
@@ -162,9 +162,9 @@ The catalogue can stay current without manual dumps:
 
 - **The worker** (`pnpm worker:start`, `apps/worker`) checks efootbase on a schedule and runs one job at a time from a queue kept in Postgres:
   - an API check (one request);
-  - an incremental sync (cards newer than the newest one stored, minus 7 days, with their images);
+  - an incremental sync (cards newer than the newest one stored, minus 7 days, with their images) — every hour by default (15 minutes to 24 hours);
   - a weekly full sync (the whole dump, the existing seed, changed images).
-- **The private admin pages** (`/admin`) show the worker's state, the schedule form, buttons to queue a check / incremental / full sync or cancel one, and the run history with statistics and log tail.
+- **The private admin pages** (`/admin`) show the worker's state, the schedule form with interval presets, buttons to queue a check / incremental / full sync or cancel one (with a link to the queued run), the live progress of a running run (phase, progress bar, counters so far), and the run history with statistics, what each run downloaded (new and changed cards, image files, failures by class) and the log tail.
 - **Admin accounts** are separate from visitor accounts and are created only from the command line:
 
   ```bash
@@ -230,6 +230,7 @@ Card image URLs carry a cache version (`cards/{id}_dynamic.webp?v=20261024` sinc
   - overwritten card images need an image-version bump and a web rebuild by hand;
   - changed-image detection assumes R2's ETag is the content MD5, which is not yet verified;
   - a block from efootbase pauses everything for 6 hours;
+  - the worker runs only while its host is awake: on macOS a sleeping Mac makes no run (a missed hourly run happens once on wake, a missed weekly full window is not caught up);
   - web and API must be the same site for the admin cookie;
   - behind a reverse proxy the per-address sign-in limit is shared by all clients until Fastify's `trustProxy` is configured in code.
 - The eFootball fonts in `apps/web/public/fonts/` have an unknown licence.

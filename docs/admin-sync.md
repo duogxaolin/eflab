@@ -1,6 +1,8 @@
 # Admin area and sync worker — operations
 
 > Written 2026-10-20 (openspec change `admin-sync-worker`). Describes the code on branch `admin-sync-worker`: `apps/worker`, the `admin` tRPC router, the `/admin` pages, `packages/db/src/{admin-auth,admin-cli,efootbase-map,upsert}.ts` and the sync flags of `scripts/efootbase_dump.py`. Variable **names** only — no value of any secret belongs in this repository (it is public).
+>
+> Updated 2026-10-28 (openspec change `admin-sync-live-progress`): incremental runs **every 60 minutes** by default, interval presets, the **live progress** of a running run, the **record of what a run downloaded**, the opt-in `--progress-every` / `--results-file` flags of both scripts, migration `20261028000000_admin_sync_live_progress` and an **hourly service on macOS** (see "Hourly automatic runs on macOS").
 
 ## What it is
 
@@ -36,7 +38,7 @@ The worker loads the root `.env` with `tsx --env-file-if-exists`. **A variable t
 
 - Node ≥ 22 and the repository with `pnpm install` done (the worker runs from source through `tsx`).
 - `python3` with **`boto3`** (`pip install boto3`) — `r2_upload.py` needs it. A run that would upload checks `import boto3` and the three R2 credentials **before** its first request, and fails naming what is missing. `SYNC_PYTHON` selects another interpreter (an absolute path is safest under a service manager).
-- The local Postgres (`docker compose up -d`) with all migrations applied (`pnpm db:migrate` — it does not read the root `.env`, so `DATABASE_URL` must be in the environment; since 2026-10-24 that includes `20261024000000_catalogue_data_refresh`, whose columns the seed and the incremental run write).
+- The local Postgres (`docker compose up -d`) with all migrations applied (`pnpm db:migrate` — it does not read the root `.env`, so `DATABASE_URL` must be in the environment; since 2026-10-24 that includes `20261024000000_catalogue_data_refresh`, whose columns the seed and the incremental run write, and since 2026-10-28 `20261028000000_admin_sync_live_progress`, whose `SyncRun.progress` / `SyncRun.items` the worker writes and the admin API reads).
 - For full runs: the static efootbase snapshot directory (`skills.json` **and** `skill-icons/`, see `docs/efootbase-static-snapshot.md`) and at least **2 GB free** in the temporary directory (`os.tmpdir()`, i.e. `TMPDIR`, which is also passed to the children).
 
 ## Environment variables (names and meaning)
@@ -119,7 +121,7 @@ WantedBy=multi-user.target
 
 ### launchd (macOS)
 
-`~/Library/LaunchAgents/com.eflab.worker.plist`:
+`~/Library/LaunchAgents/com.eflab.worker.plist` (the hourly setup around it: "Hourly automatic runs on macOS" below):
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -139,16 +141,21 @@ WantedBy=multi-user.target
     <key>NODE_ENV</key><string>production</string>
     <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
   </dict>
+  <key>RunAtLoad</key><true/>
+  <!-- restart after a crash or a non-zero exit, not after a clean stop -->
   <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+  <!-- at most one restart every 30 s (a broken env file must not spin) -->
+  <key>ThrottleInterval</key><integer>30</integer>
   <key>ExitTimeOut</key><integer>4500</integer> <!-- 75 min: a running seed is waited for -->
 
-  <key>StandardOutPath</key><string>/tmp/eflab-worker.log</string>
-  <key>StandardErrorPath</key><string>/tmp/eflab-worker.log</string>
+  <!-- launchd does not expand "~": write the full path of your home folder -->
+  <key>StandardOutPath</key><string>/path/to/home/Library/Logs/eflab-worker.log</string>
+  <key>StandardErrorPath</key><string>/path/to/home/Library/Logs/eflab-worker.log</string>
 </dict>
 </plist>
 ```
 
-`launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.eflab.worker.plist`; stop with `launchctl bootout gui/$(id -u)/com.eflab.worker`. Keep secrets out of the plist itself.
+`launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.eflab.worker.plist`; stop with `launchctl bootout gui/$(id -u)/com.eflab.worker`. Keep secrets out of the plist itself. (Before 2026-10-28 this example wrote its log to `/tmp`, which macOS empties; `~/Library/Logs` survives restarts and shows in Console.app.)
 
 ### pm2
 
@@ -173,13 +180,33 @@ pm2 passes the environment of the shell that runs `pm2 start` to the process. Lo
 
 The worker's console shows one line per tick event and run (`[worker] …`). The same text is stored, masked, in each run's log tail on `/admin/runs/[id]`.
 
+### Hourly automatic runs on macOS
+
+The worker is a long-running process, not a job a timer starts: launchd keeps it running, and the worker's own schedule (the `SyncConfig` row, the dashboard's Schedule form) decides when a run happens — an incremental run every **60 minutes** by default, a full run once in the weekly window. Cron would only start the process; it must not be used to start runs.
+
+1. **The secret file, outside the repository.** `mkdir -p ~/.config/eflab && chmod 700 ~/.config/eflab`, then create `~/.config/eflab/worker.env` with `umask 077` (mode `0600`) holding `KEY=value` lines for `EFBASE_API_KEY`, `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`, `R2_PUBLIC_BASE` (and `DATABASE_URL` unless the root `.env` holds it). Build it without printing it — for example `(umask 077; grep -E '^(EFBASE_API_KEY|R2_[A-Z_]+)=' /path/to/eflab/.env > ~/.config/eflab/worker.env)` — and never `cat` it into a log or a chat. The file is sourced by `/bin/sh`: a value with spaces or `$` must be quoted. Never put it in the repository or in the plist.
+2. **The schedule before the first load.** The worker's first tick queues a due run. After migration `20261028000000_admin_sync_live_progress` the interval is 60 (a row still at the old default 360 was moved to 60; any other value was kept): check it on `/admin` → Schedule (the "1 hour" preset is pressed), or untick "Run the schedule" to go step by step.
+3. **The job.** Write the plist above (replace `/path/to/eflab` and `/path/to/home`), `plutil -lint ~/Library/LaunchAgents/com.eflab.worker.plist`, then `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.eflab.worker.plist`. `launchctl print gui/$(id -u)/com.eflab.worker` shows its state, pid and last exit; within 30 s the dashboard shows the worker online. `RunAtLoad` starts it at login, `KeepAlive` (`SuccessfulExit` false) restarts it after a crash, `ThrottleInterval` keeps a broken start from spinning, `ExitTimeOut` 75 min lets a running seed finish on a stop.
+4. **Watch the first run.** On `/admin` the queued / running run shows its phase, progress bar and counters; "Open run #N" (also linked after "Run now") shows the same plus, at the end, what it downloaded. The console log is `~/Library/Logs/eflab-worker.log` (`tail -f`); it holds the worker's own lines, masked like the run log tails, and grows by a few lines per run — rotate it by hand if it gets large.
+5. **After pulling new code**: `launchctl kickstart -k gui/$(id -u)/com.eflab.worker` (SIGTERM, then a restart; a run in progress ends FAILED "worker stopped", a running seed is waited for). Apply new migrations (`pnpm db:migrate`, worker stopped) before it.
+
+**While the Mac sleeps nothing runs.** The process is suspended with the system: no heartbeat (the dashboard reads the worker offline after 2 minutes) and no request.
+
+- **Hourly runs**: on wake the next tick compares wall-clock times; when the last incremental or full run started more than the interval ago, **one** incremental run is queued at once — one run, not one per missed hour.
+- **The weekly full window** (default Sunday 03:00–04:00 UTC) that the Mac sleeps through entirely is **missed for that week**, not caught up: queue a full sync by hand, or keep the Mac awake at that hour.
+- **A run in progress** freezes with the process and goes on after the wake. Requests in flight may time out: a failed image is counted and owed (the next run compares it again), a failed data page fails the run. The catalogue stays consistent either way (one transaction, images before it).
+- **Postgres** must come back too: the `eflab-postgres` container restarts with Docker / OrbStack (OrbStack → Settings → "Start at login"). While the database is unreachable each tick logs "tick failed" and the worker carries on once it is back.
+- To keep a desktop Mac running the schedule, prevent automatic sleep (System Settings → Energy) — an owner's choice, not set by this repository.
+
+Cost of the hourly default: an incremental run that finds nothing new makes about 3 API requests (`/meta` and one or two newest-first pages) and no image request — about 72 requests a day. The politeness rules are unchanged: a 403 / 429 / challenge stops the run and blocks the source for 6 hours.
+
 ## First-run checklist
 
 1. **Back up**: `pg_dump -Fc` of the live database to a file outside the repository (record the path).
 2. **Migrate**: `pnpm db:migrate` (with `DATABASE_URL` in the environment — the command does not read the root `.env`) adds migration `20261019230000_admin_sync_worker` — four tables, three enums, the indexes and the single `SyncConfig` row. No existing table changes. `pnpm db:generate` afterwards.
 3. **Create the admin**: `pnpm admin:create <name>` at the hidden prompt.
 4. **Start the API and the web**, sign in at `/admin/login`.
-5. **Decide about the schedule before the worker's first tick.** It is enabled by default (incremental every 360 min, full on Sunday 03:00 UTC). A first worker with no run history therefore **queues a scheduled incremental run on its first tick**, and a full run instead if it starts inside the full window. To go step by step, untick "enabled" in the dashboard's Schedule form and save first: manual runs still work.
+5. **Decide about the schedule before the worker's first tick.** It is enabled by default (incremental every 60 min since migration `20261028000000_admin_sync_live_progress` — 360 before —, full on Sunday 03:00 UTC). A first worker with no run history therefore **queues a scheduled incremental run on its first tick**, and a full run instead if it starts inside the full window. To go step by step, untick "enabled" in the dashboard's Schedule form and save first: manual runs still work.
 6. **Start the worker** (`pnpm worker:start` or the service). Within 30 s the dashboard shows it online.
 7. **Run a check** ("Check API"). Confirm that the run is OK, with the HTTP status, the response time and the newest release time compared with the database. If the run is BLOCKED, wait out the 6 h; never work around it.
 8. **Run one incremental sync by hand.** Read its statistics and log tail. When images were uploaded, open a new card on the site.
@@ -203,7 +230,7 @@ The worker's console shows one line per tick event and run (`[worker] …`). The
 
 ## Schedule (defaults) and queue semantics
 
-- **Defaults** (the migration's row): enabled, incremental every **360 min** (allowed 15–1440), full sync on weekday **0 = Sunday** at **03:00 UTC** (weekday 0–6, hour 0–23). Invalid values are a 400 and a database CHECK constraint backs them. All times are UTC. **The database's TimeZone setting does not matter** (second verify CR1): every stored time is written through typed Prisma queries (or `jsonb_to_recordset(… timestamp(3))`, where Postgres ignores the `Z`), never as a raw `Date` parameter, which Postgres would convert with the session TimeZone — a raw one once stored claim times 4 h early under America/New_York (back-to-back incrementals, a full run re-queued in its own window) and 7 h late under Asia/Ho_Chi_Minh (the schedule stalled). The worker suites run under both zones.
+- **Defaults** (the migration's row): enabled, incremental every **60 min** (allowed 15–1440; 360 until migration `20261028000000_admin_sync_live_progress`, which moved a row still holding 360 to 60 and kept any other value), full sync on weekday **0 = Sunday** at **03:00 UTC** (weekday 0–6, hour 0–23). The Schedule form has presets beside the minutes field — 15 min, 30 min, 1 hour, 3 hours, 6 hours, 12 hours, 24 hours — that fill it (the preset of the current value is pressed); Save stores it as before. Invalid values are a 400 and a database CHECK constraint backs them. All times are UTC. **The database's TimeZone setting does not matter** (second verify CR1): every stored time is written through typed Prisma queries (or `jsonb_to_recordset(… timestamp(3))`, where Postgres ignores the `Z`), never as a raw `Date` parameter, which Postgres would convert with the session TimeZone — a raw one once stored claim times 4 h early under America/New_York (back-to-back incrementals, a full run re-queued in its own window) and 7 h late under Asia/Ho_Chi_Minh (the schedule stalled). The worker suites run under both zones.
 - **Incremental due**: enabled, not blocked, nothing of the sync group queued or running, and the latest incremental **or** full run started at least the interval ago (or none exists). "Started" means `startedAt`, or `queuedAt` for a run cancelled while still queued, so a cancel is not undone on the next tick.
 - **Full due**: inside the one-hour window (weekday at `fullHourUtc`:00 UTC) when no full run started since the window opened. A due full run takes the place of a due incremental one. A worker that is offline for the whole hour misses that week's full run; it is not caught up later.
 - **Checks** are never scheduled, only queued by hand.
@@ -221,6 +248,26 @@ The worker's console shows one line per tick event and run (`[worker] …`). The
 - **A third-party image host never blocks the source** (third verify W1): when `pesdb.net` (which serves some `transparent` renders) answers 403 / 429 or a challenge page, only that host's remaining images are skipped for the current run; the run goes on, ends OK, counts them as failed and records their cards as owed (pending) — the next run fetches them again. "blocked until" is not touched.
 - **A failed image never stops a run** (W1): an image that cannot be fetched, stored or uploaded is counted ("Images failed") and its card recorded as owed ("Images left to check", `stats.imagesPendingIds`, bounded at 200,000); the rows are written and the run ends OK. Every incremental / full run takes over what the runs since the last completed image step still owe: the incremental run compares those among its own (recent) cards and keeps the rest owed, the full run compares all of them. A failed emblem has no card id; only the next full run repairs it (it compares every emblem with the bucket), not the next incremental run. The owed ids are written to the run row before the database write (incremental) or before the seed (full), so a worker dying after the commit loses none. The dashboard and the run history show "N images failed or skipped · N cards' images left to check" on such an OK run. This replaces the earlier behaviour (an image error failed the run; any image host's refusal blocked the source for 6 h). A manual `efootbase_dump.py` run is affected the same way: a pesdb.net refusal no longer stops it (exit 0, the skipped files listed in `images_failed.txt`).
 - **Worker online**: the dashboard shows the worker online while its heartbeat is younger than **2 minutes** (written every 30 s while idle and every 10 s during a run). When offline, it says so and that queued runs wait.
+
+## Live progress and what a run downloaded (change admin-sync-live-progress)
+
+Two columns on `SyncRun` (migration `20261028000000_admin_sync_live_progress`), both written by the worker only:
+
+- **`progress`** (jsonb, NULL when the run is not running) — `{ phase, done, total | null, counters, updatedAt }`, strict shape `syncRunProgressSchema` (`packages/shared/src/sync-records.ts`). Phases per kind: check "Asking the source"; incremental "Reading pages", "Comparing images", "Downloading images", "Uploading images", "Writing the catalogue"; full "Dumping", "Comparing rows", "Seeding", "Comparing images", "Downloading images", "Uploading images". `counters` are the statistics known so far (cards new / changed, images downloaded / uploaded / overwritten / failed, requests) — never a list. The worker writes it with the claim and in its 10-second run heartbeat UPDATE, which is guarded by `status = 'RUNNING'`, so a write that arrives after the run ended changes nothing; the final update and the stale-run recovery clear it. The admin API returns it only for a RUNNING run whose stored value matches the schema. With the 3-second polling of the pages, what `/admin` shows is at most about 13 s old.
+  - `done` / `total` of the image phases come from the scripts' `PROGRESS <done>/<total>` lines (`--progress-every 20` for the dump's image step, `50` for the upload; numbers only, logged and masked like every child line). "Comparing images" is the image child's start-up (URLs collected, total not known yet); "Downloading images" counts images compared with the bucket and fetched when different. "Comparing rows" (full) counts dump rows compared with the database. Other phases have no total (an indeterminate bar).
+  - The live counters say what is known so far: "Images downloaded" stays 0 until the image step has ended (the progress lines carry no per-image outcome).
+- **`items`** (jsonb, ≤ 512 KB as jsonb text — CHECK `SyncRun_items_size`) — `{ version: 1, cards: { new, changed }, images: { downloaded, overwritten, unverified, uploaded, failed, uploadFailed } }`, strict shape `syncRunItemsSchema`. Card ids and image paths only (`cards/<id>_<kind>.webp`, `emblems/<kind>/<name>.png`), failures as `{path, reason}` with a closed set of classes: `http_<status>`, `timeout`, `bad_signature`, `too_large`, `host_refused`, `other` — never a response body, a URL, a header or a card name. Every list keeps the **newest 2,000** entries with its true `total` and a `truncated` flag; a record still over 512 KB is shortened further (every list to the same lower cap, newest kept; as a last resort every list is emptied and the totals stay) before it is written, so the CHECK never refuses a worker write. One rule decides what may be listed — `isSyncItemPath` (the shape above, **at most 200 characters**), used by both the schema and the worker: an entry that is not a record path (or not a positive card id) is **counted in `total` but not listed**, so the run's record is still written and the page says it under "N more not listed"; a failure class outside the set is stored as `other`.
+  - Incremental: the cards found new / changed (newest first = the source's release order), then the image step's lists, its per-image results file and the upload's results file; written by the checkpoint **before** the catalogue transaction (a worker that dies after the commit leaves it on the row, and the stale recovery keeps it) and again by the final update. Full: the same structure, cards sorted by release time (the dump's own order is not), written before the seed and at the end. Every file is read before the run directory is removed — also when the image step or the upload **ends early** (blocked, failed, cancelled, time limit, worker stop): the record then keeps what that step had fetched (its image lists, or the files on disk when the child stopped before writing them, and both results files as far as they were written), and the run's final update stores it with the BLOCKED / FAILED / CANCELLED status (the original error is kept; nothing is written once the run has left RUNNING).
+  - **An image the source does not have (HTTP 404)** is listed under "failed" with `http_404` but is neither counted in "Images failed" nor owed: the next run would meet the same 404 (some emblems never exist). "Images failed" stays the count of errors and refusals that the next run retries.
+  - Card names are **not** stored: `admin.runs.get` returns the first **50 rows of each group** (with `listed` ≤ 2,000 and the true `total`), and the card rows' name, overall, max overall, position and card type come from **one batched Player lookup** (≤ 100 ids). Ids the catalogue no longer holds are gathered in one collapsible line per group, "N not in the catalogue now", which opens to the ids. `runs.list` and the dashboard never carry `items`.
+- **Size and retention**: a run with nothing new stores a few hundred bytes; the bound is 512 KB per run. Old runs are not pruned automatically — delete old `SyncRun` rows by hand if the table grows (they hold no catalogue data).
+- **The pages**: the dashboard's "Queued and running" card shows each run's phase, bar and counters with a link to the run; "Run now" answers "… queued as run #N" with a link to it. The run page has a **Progress** block while the run is queued or running (`role="progressbar"`, `aria-valuemin` 0, `aria-valuemax` = total, `aria-valuenow` = done, `aria-valuetext` "45 of 120 images"; indeterminate without `aria-valuenow`, its pulse off under reduced motion), the counters so far in place of the final statistics, and **What was downloaded**: New cards, Changed cards, Images downloaded / overwritten / replaced (unverified) / not stored / uploaded, Uploads that failed — each a disclosure with its count, its first rows, "None" when empty, and how many entries are not shown or not listed.
+- **Script flags (opt-in; without them both scripts print and write exactly what they did before)**: `efootbase_dump.py --progress-every N --results-file PATH` (image step) and `r2_upload.py --progress-every N --results-file PATH`. A results file holds one JSON line per image / file (`{"path"|"key", "outcome"}`: `ok`, `not_modified`, `skipped_exists` or a failure class), each written whole as its image / upload finishes, so a killed script leaves every finished line (at most the one in progress is lost); PATH must be absolute, outside the repository tree and not exist yet (created `0600`, never through a link). With either flag a **SIGTERM** (the worker's cancel, time limit or stop) ends the script cleanly. The handler only sets a flag; it never raises, because an exception inside `concurrent.futures`' lock loop could deadlock the pool. The completion loop reads the flag at least every 0.25 s and keeps at most one item per worker in flight. On the flag:
+  - nothing new starts, and the work already running finishes and is recorded;
+  - the dump writes its image lists;
+  - both print a last `PROGRESS` line and "stopped by SIGTERM after N of M …", then exit 143 without a manifest.
+
+  For the dump this covers the image step only; its data phase ends on a SIGTERM as before. A second SIGTERM, or the worker's SIGKILL 10 s later, ends either script at once. Without the flags a SIGTERM kills them as before (the loop is the original one). The worker puts both files in the run's temporary directory, which is removed with it.
 
 ## Recovery when the worker dies
 
@@ -271,6 +318,26 @@ The worker's console shows one line per tick event and run (`[worker] …`). The
 
 ## Rollback
 
+### Of migration `20261028000000_admin_sync_live_progress` (hourly default, progress, items)
+
+Take a `pg_dump -Fc` first. Stop the worker and the API (the admin API reads both columns; the worker writes them), then, as one transaction:
+
+```sql
+BEGIN;
+ALTER TABLE "SyncRun" DROP CONSTRAINT IF EXISTS "SyncRun_items_size";
+ALTER TABLE "SyncRun" DROP COLUMN IF EXISTS "items";
+ALTER TABLE "SyncRun" DROP COLUMN IF EXISTS "progress";
+ALTER TABLE "SyncConfig" ALTER COLUMN "incrementalIntervalMin" SET DEFAULT 360;
+DELETE FROM "_prisma_migrations" WHERE "migration_name" = '20261028000000_admin_sync_live_progress';
+COMMIT;
+```
+
+- The schedule row keeps its current interval (60 after the migration): set 360 again in the dashboard if wanted.
+- Revert the code with it (`git revert` of the change): the worker, the API and the admin pages of this change read and write the two columns. Remove `packages/db/prisma/migrations/20261028000000_admin_sync_live_progress/` from the deployed code too, or the next `pnpm db:migrate` re-applies it.
+- Tested on scratch databases only: the migration from the empty baseline and on a read-only copy of the live database (360 → 60; a copy at 180 stays 180), applied again twice (no error, no change), the size CHECK at 524,288 bytes accepted and at 524,289 refused.
+
+### Of migration `20261019230000_admin_sync_worker` (the whole admin area)
+
 Take a `pg_dump` first: the rollback deletes the admin accounts and the whole run history. Then **stop the worker**; a run in progress ends FAILED. Then run, as one transaction:
 
 ```sql
@@ -301,9 +368,19 @@ COMMIT;
   - The full-run test runs the real seed as a child against its scratch database.
 - **Smoke test**: the admin section of `scripts/smoke-test.sh` starts a second API on port 4301 against a scratch database `eflab_smoke_admin_<pid>` with a throwaway admin, and checks the negative paths: 401 without a session (and with a valid visitor `eflab_session` cookie), 403 without the header or with a foreign origin, identical sign-in failures, the lock-out (also against one batched request of 6 sign-ins and 5 parallel ones), 12-hour idle and 7-day absolute expiry (time moved in the database), sign-in of a disabled account, a lock end that does not move with the database session's time zone (UTC+7 / UTC−4), the admin CLI's refusals (short password, existing name, password as an argument), no secret fields, and `no-store`. It restarts its API between blocks (resetting the in-memory per-address limit, picking up the time-zone setting). It never writes to the live database.
 - **Dump script against hostile data**: `apps/worker/test/dump-script.test.ts` (no database) feeds `efootbase_dump.py` path-traversal emblem kinds and file names, a string card id, URLs on another loopback port, `file://`, user-info and a redirect to another host (also one adding user-info), HTML / SVG / text / 30 MB bodies, wrong shapes, symlinked `.part` files and directories, pesdb URLs outside `transparent` `/assets/img/`, an oversized API answer and `--validate-only`, and checks that nothing is written outside the output directory or through a link and the foreign host gets no request.
-- Unit tests: `@eflab/shared` covers the schedule, watermark, redaction and log ring buffer, with tamper cases. `@eflab/db` covers password hashing and the shared row mapping.
+- Unit tests: `@eflab/shared` covers the schedule, watermark, redaction and log ring buffer, with tamper cases, and (`sync-records.test.ts`) the presets, the phases, the strict progress and items schemas, the caps and the jsonb size fit. `@eflab/db` covers password hashing and the shared row mapping.
+- Live progress and the items record (change `admin-sync-live-progress`): the worker suites hold a run in its image step (a CDN delay of the fake source) and read the progress from the row with every heartbeat, check that a late write after the run left RUNNING changes nothing, the record of 3 new cards, a 404 listed as `http_404`, upload failures by class, hostile results-file lines dropped, the record on the row before the catalogue write / the seed, 2,500 changed cards in a full run (2,000 listed, total 2,500), paths at the 200-character bound (listed) and one over it (counted, not listed, record still written), the record of an image step or upload that ended early (blocked mid-way, a failed upload, a worker stop and a cancel during the images — the partial lists stored with BLOCKED / FAILED / CANCELLED; the incremental ones wrote no catalogue row, the full one was blocked after its seed), and the migration itself on the scratch database (a row at 360 → 60, a customised 180 kept, re-applied without change, one CHECK that stores a 524,288-byte record and refuses a 524,289-byte one). `apps/worker/test/upload-script.test.ts` runs a copy of `r2_upload.py` against stub `boto3` / `botocore` (no bucket) for the two opt-in flags; the dump script's flags are in `dump-script.test.ts`. Both also stop the real script part-way:
+  - a SIGTERM with the flags (exit 143, every finished item in the results file, the dump's lists written);
+  - a SIGTERM while `concurrent.futures` holds every future's lock (the lock loop made slow by a wrapper: exit 143, no hang);
+  - a SIGTERM right after the handler is installed ("after 0 of N");
+  - a SIGKILL (only whole lines, at most the in-flight ones lost);
+  - a SIGTERM without the flags (killed as before).
+
+  The stand-in upload (`fake-upload.mjs`) behaves the same way. The incremental suite cancels a run during its upload twice, once with the stand-in and once with a copy of the real `r2_upload.py`, whose `boto3` is a local stub that a wrapper verifies before running. Both end CANCELLED, with the record's uploads equal to the files the bucket received. The admin smoke section checks the progress and items views, and that the names join is one Player lookup.
 - One real request is made by hand only, at acceptance: a check with the owner's key, against a scratch database.
 
 ## Public bundle
 
 The admin pages are their own client entries and import the shared code by subpath (see the comment at the top of `apps/web/lib/admin-trpc.tsx`). No admin code is duplicated into public pages. Still, splitting the shared chunks adds **about 1 KB gzip to the public pages' First Load JS** (measured 2026-10-20 with the "First Load JS" column of a Next 15 / webpack build). Next 16 prints no such column: after changing admin imports, re-measure the public pages with the bundle metric of change `next-16-upgrade` (gzip bytes of the JS a route loads in a fresh browser at 1440 px — definition in `CLAUDE.md` → "Next.js 16").
+
+Change `admin-sync-live-progress` keeps its new shared code (`packages/shared/src/sync-records.ts`) out of the `@eflab/shared` barrel — the admin pages, the API and the worker import it by its subpath. Measured with two `.next-check` builds (HEAD before the change and the final tree, `diagnostics/route-bundle-stats.json`): every public route's first-load JS is 18 bytes smaller uncompressed (module numbering) and no admin-only text appears in any public first-load chunk; `/admin` +7.5 KB, `/admin/runs/[id]` +10.3 KB uncompressed.
