@@ -1,9 +1,10 @@
 "use client";
 // /admin — sync dashboard (openspec change admin-sync-worker, data-sync-worker
 // "Admin Dashboard Behaviour", design decision 10). Worker state, warnings
-// (blocked by the source, worker offline, overwritten card images), the run
-// buttons, the queued / running runs with Cancel, the last run, the next
-// scheduled runs, the newest card and the schedule form.
+// (blocked by the source, worker offline), the run buttons, the queued /
+// running runs with Cancel, the last run, the next scheduled runs, the newest
+// card, the card-image version (read-only information — the worker raises it
+// itself; openspec change auto-image-version, design D7) and the schedule form.
 //
 // Refresh: every 3 s while a run is queued or running, every 30 s otherwise —
 // only while the tab is visible (a hidden tab polls nothing and refetches once
@@ -18,7 +19,7 @@
 // preset of the current value) — Save as before.
 import Link from "next/link";
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
-import { Activity, AlertTriangle, ImageOff, Play, RefreshCw, Server, ShieldAlert, Zap } from "lucide-react";
+import { Activity, AlertTriangle, Image as ImageIcon, Play, RefreshCw, Server, ShieldAlert, Zap } from "lucide-react";
 import type { SyncConfigDTO, SyncConfigUpdateInput, SyncDashboardDTO, SyncKind } from "@eflab/shared";
 import { SYNC_INTERVAL_MAX_MINUTES, SYNC_INTERVAL_MIN_MINUTES, isBlocked } from "@eflab/shared/sync";
 import { syncConfigUpdateInput } from "@eflab/shared/schemas";
@@ -31,7 +32,7 @@ import { RunProgress } from "@/components/admin/RunProgress";
 import { CancelRunButton, useRunAnnouncer } from "@/components/admin/run-actions";
 import { SYNC_INTERVAL_PRESETS } from "@eflab/shared/sync-records";
 import {
-  IMAGE_VERSION_INSTRUCTION,
+  IMAGE_VERSION_NOTE,
   KIND_LABELS,
   STATUS_LABELS,
   WEEKDAY_LABELS,
@@ -146,24 +147,11 @@ function DashboardBody({ data, updatedAt, polling }: { data: SyncDashboardDTO; u
         </Notice>
       )}
 
-      {data.overwrittenImages && (
-        <Notice tone="warn" title="Card images were overwritten" icon={<ImageOff className="size-4 text-[var(--color-accent-warn)]" aria-hidden />} testId="overwritten-warning">
-          <p>
-            <Link href={runHref(data.overwrittenImages.runId)} className="font-semibold text-white underline-offset-2 hover:underline">
-              Run #{data.overwrittenImages.runId}
-            </Link>{" "}
-            overwrote <strong className="text-white tabular-nums">{data.overwrittenImages.count.toLocaleString("en-US")}</strong> existing card
-            image{data.overwrittenImages.count === 1 ? "" : "s"} on R2
-            {data.overwrittenImages.finishedAt ? ` (finished ${formatUtcDateTime(data.overwrittenImages.finishedAt)})` : ""}.
-          </p>
-          <p>{IMAGE_VERSION_INSTRUCTION}</p>
-        </Notice>
-      )}
-
-      <div className="grid min-w-0 gap-4 md:grid-cols-3">
+      <div className="grid min-w-0 gap-4 md:grid-cols-2 xl:grid-cols-4">
         <WorkerPanel data={data} now={now} />
         <NextRunsPanel data={data} now={now} blocked={blocked} />
         <NewestCardPanel data={data} />
+        <ImageVersionPanel data={data} />
       </div>
 
       <ActionsPanel data={data} blocked={blocked} />
@@ -300,6 +288,54 @@ function NewestCardPanel({ data }: { data: SyncDashboardDTO }) {
           No card in the database has a release date.
         </p>
       )}
+    </Panel>
+  );
+}
+
+/**
+ * The card-image version, read-only (openspec change auto-image-version,
+ * design D7): the stored value, or "Default in use" while nothing is stored,
+ * and the latest run that replaced card images as a plain information line —
+ * no warning role, no instruction (the worker raised the version itself).
+ */
+function ImageVersionPanel({ data }: { data: SyncDashboardDTO }) {
+  const { current, lastReplacingRun: last } = data.imageVersion;
+  return (
+    <Panel title="Card image version">
+      <div className="space-y-2" data-testid="image-version" data-image-version={current ?? ""}>
+        <p className="flex items-center gap-2 text-sm font-semibold text-white">
+          <ImageIcon className="size-4 text-[var(--color-text-secondary)]" aria-hidden />
+          {current ? (
+            <code className="font-mono tabular-nums">{current}</code>
+          ) : (
+            <span>Default in use</span>
+          )}
+        </p>
+        <p className="text-xs text-[var(--color-text-secondary)] [overflow-wrap:anywhere]" data-testid="image-version-last-run">
+          {last ? (
+            <>
+              <Link href={runHref(last.runId)} className="font-semibold text-white underline-offset-2 hover:underline">
+                Run #{last.runId}
+              </Link>{" "}
+              replaced <strong className="text-white tabular-nums">{last.count.toLocaleString("en-US")}</strong> card image{last.count === 1 ? "" : "s"} on R2
+              {last.finishedAt ? ` (finished ${formatUtcDateTime(last.finishedAt)})` : ""}
+              {last.raisedTo ? (
+                <>
+                  {" "}
+                  and raised the version to <code className="font-mono tabular-nums text-white">{last.raisedTo}</code>.
+                </>
+              ) : (
+                " — from before the version was raised automatically."
+              )}
+            </>
+          ) : current ? (
+            "No finished run has replaced a card image."
+          ) : (
+            "No version is stored yet: the web app uses its built-in default until a run replaces card images."
+          )}
+        </p>
+        <p className="text-[11px] text-[var(--color-text-dim)]">{IMAGE_VERSION_NOTE}</p>
+      </div>
     </Panel>
   );
 }

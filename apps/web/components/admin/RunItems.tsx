@@ -167,7 +167,7 @@ export function RunItems({ run }: { run: Pick<SyncRunDTO, "items" | "itemsInvali
       <Group title="New cards" help="Cards that were not in the database, newest first — linked to their card page." group={it.cards.new} testId="items-cards-new" defaultOpen renderRows={(rows) => <CardRows rows={rows} />} />
       <Group title="Changed cards" help="Cards whose stored values changed, newest first." group={it.cards.changed} testId="items-cards-changed" defaultOpen renderRows={(rows) => <CardRows rows={rows} />} />
       <Group title="Images downloaded" help="Image files fetched from the source (new to the bucket or different from it)." group={it.images.downloaded} testId="items-images-downloaded" render={(p) => <Path path={p} />} />
-      <Group title="Images overwritten" help="Downloads that replaced a bucket object with different content — raise the image version." group={it.images.overwritten} testId="items-images-overwritten" render={(p) => <Path path={p} />} />
+      <Group title="Images overwritten" help="Downloads that replaced a bucket object with different content — the card-image version is raised automatically when the run ends." group={it.images.overwritten} testId="items-images-overwritten" render={(p) => <Path path={p} />} />
       <Group title="Images replaced (unverified)" help="Downloads that may have replaced a bucket object whose ETag is not a content hash." group={it.images.unverified} testId="items-images-unverified" render={(p) => <Path path={p} />} />
       <Group
         title="Images not stored"

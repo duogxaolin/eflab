@@ -3,9 +3,11 @@
 // data-sync-worker "Run Statistics And History" and "Overwritten Images
 // Warning"): status, times, watermarks, error, statistics table (English
 // labels with an explanation per row), the check result for a check, the
-// overwritten-images instruction and the redacted log tail (monospace, scrolls
-// inside its own box — never the page). Refreshes every 3 s while the run is
-// queued or running and the tab is visible.
+// information line of a run that raised the card-image version (openspec
+// change auto-image-version, design D7 — never an instruction to raise it)
+// and the redacted log tail (monospace, scrolls inside its own box — never
+// the page). Refreshes every 3 s while the run is queued or running and the
+// tab is visible.
 //
 // openspec change admin-sync-live-progress (design D6): a "Progress" block while
 // the run is queued or running (phase, progress bar); while it runs the
@@ -26,13 +28,14 @@ import { RunProgress } from "@/components/admin/RunProgress";
 import { RunItems } from "@/components/admin/RunItems";
 import {
   CHECK_ROWS,
-  IMAGE_VERSION_INSTRUCTION,
+  IMAGE_VERSION_NOTE,
   KIND_LABELS,
   STAT_ROWS,
   TRIGGER_LABELS,
   formatCheckValue,
   formatDuration,
   formatUtcDateTime,
+  imageVersionRaisedText,
   runDurationMs,
 } from "@/components/admin/run-display";
 
@@ -120,6 +123,9 @@ function RunBody({ run, cancelMessage, onCancel }: { run: SyncRunDTO; cancelMess
   const active = isActiveSyncStatus(run.status);
   const duration = runDurationMs(run);
   const overwritten = run.stats.imagesOverwritten ?? 0;
+  // A run that raised the stored card-image version says so (its stats carry the value); a run from
+  // before the raise existed, or one that failed before its upload started, shows no such line.
+  const raisedTo = run.stats.imageVersionRaisedTo ?? null;
   // While the run is active: the counters of the latest progress write over the stored statistics (a
   // checkpoint's snapshot — the full run writes one before its seed, the incremental before its write),
   // so the live image counts stay visible after a checkpoint; the final statistics replace them at the end.
@@ -146,13 +152,13 @@ function RunBody({ run, cancelMessage, onCancel }: { run: SyncRunDTO; cancelMess
         <StatusBadge status={run.status} />
       </div>
 
-      {overwritten > 0 && (
-        <Notice tone="warn" title="Card images were overwritten" icon={<ImageOff className="size-4 text-[var(--color-accent-warn)]" aria-hidden />} testId="overwritten-warning">
-          <p>
-            This run overwrote <strong className="text-white tabular-nums">{overwritten.toLocaleString("en-US")}</strong> existing card image
-            {overwritten === 1 ? "" : "s"} on R2.
+      {raisedTo && (
+        <Notice tone="info" title="Card images replaced on R2" icon={<ImageOff className="size-4 text-[var(--color-accent-secondary)]" aria-hidden />} testId="image-version-raised">
+          <p data-testid="image-version-raised-text">
+            {imageVersionRaisedText(raisedTo)}
+            {overwritten > 0 ? ` (${overwritten.toLocaleString("en-US")} existing card image${overwritten === 1 ? "" : "s"} replaced).` : "."}
           </p>
-          <p>{IMAGE_VERSION_INSTRUCTION}</p>
+          <p>{IMAGE_VERSION_NOTE}</p>
         </Notice>
       )}
 

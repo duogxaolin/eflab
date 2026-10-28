@@ -7,7 +7,7 @@
 // client component): the URL comes from API_INTERNAL_URL (container-to-
 // container), falling back to the public NEXT_PUBLIC_API_URL and finally the
 // dev default.
-import { superjson } from "@eflab/shared";
+import { isImageVersion, superjson } from "@eflab/shared";
 import type {
   FeaturedBundleDTO,
   PlayerCardDTO,
@@ -97,4 +97,39 @@ export function fetchSkill(slug: string): Promise<SkillDTO | null> {
  *  rarity rank is computed over it). */
 export function fetchSkillList(): Promise<SkillDTO[]> {
   return apiQuery<SkillDTO[]>("skill.list", {});
+}
+
+/** How long the root layout's read of the card-image version may wait (ms) — the same bound as `apiQuery`. */
+const IMAGE_VERSION_TIMEOUT_MS = API_TIMEOUT_MS;
+/** How often that read is revalidated (seconds): a raised version reaches new page loads within about a minute. */
+export const IMAGE_VERSION_REVALIDATE_SECONDS = 60;
+
+/**
+ * The stored card-image version (`catalogue.meta` → `imageVersion`) for the
+ * root layout (change auto-image-version, design D6): one small request
+ * cached by Next's data cache and revalidated at most every
+ * IMAGE_VERSION_REVALIDATE_SECONDS (a different cache mode than `apiQuery`'s
+ * `no-store`, so a static page stays static), bounded by the same timeout,
+ * and never throwing — an unreachable API, a timeout, an error answer or an
+ * invalid shape all give null, which `resolveImageVersion` turns into the
+ * build-time / committed fallback. Only the layout calls it.
+ */
+export async function fetchImageVersion(): Promise<string | null> {
+  const envelope = { "0": superjson.serialize({}) };
+  const url = `${API_BASE}/trpc/catalogue.meta?batch=1&input=${encodeURIComponent(JSON.stringify(envelope))}`;
+  try {
+    const res = await fetch(url, {
+      next: { revalidate: IMAGE_VERSION_REVALIDATE_SECONDS },
+      signal: AbortSignal.timeout(IMAGE_VERSION_TIMEOUT_MS),
+      headers: { accept: "application/json" },
+    });
+    if (!res.ok) return null;
+    const body = (await res.json()) as unknown;
+    const item = Array.isArray(body) ? (body[0] as BatchItem | undefined) : undefined;
+    if (!item || "error" in item) return null;
+    const meta = superjson.deserialize(item.result.data as never) as { imageVersion?: unknown } | null;
+    return isImageVersion(meta?.imageVersion) ? meta.imageVersion : null;
+  } catch {
+    return null;
+  }
 }

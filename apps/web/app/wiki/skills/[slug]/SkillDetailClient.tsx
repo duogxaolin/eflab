@@ -10,6 +10,7 @@ import { PlayerCard } from "@/components/cards/PlayerCard";
 import { QueryErrorState } from "@/lib/query-state";
 import { SKILL_GROUP_LABELS, skillDescription, skillGroup, skillLabel } from "@/lib/skill-labels";
 import { playerCardDynamicUrl } from "@/lib/r2-images";
+import { useImageVersion } from "@/lib/image-version";
 import { SkillIcon } from "@/components/skills/SkillIcon";
 import { SkillEffects } from "@/components/skills/SkillEffects";
 import { SectionHeader } from "@/components/layout/SectionHeader";
@@ -38,11 +39,12 @@ export interface SkillRarity {
 function TopCardRow({ player }: { player: CardPreview }) {
   const attack = player.playingStyleAttack != null ? playingStyleName(player.playingStyleAttack) : null;
   const defence = player.playingStyleDefense != null ? playingStyleName(player.playingStyleDefense) : null;
+  const imageVersion = useImageVersion();
   return (
     <Link href={`/players/${player.baseId}/${player.id}`} className="skill-top-row" data-testid="skill-top-row" data-card-id={player.id}>
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
-        src={playerCardDynamicUrl(player.id)}
+        src={playerCardDynamicUrl(player.id, imageVersion)}
         alt=""
         width={48}
         height={68}

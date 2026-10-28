@@ -4,6 +4,7 @@ import { Shield, Swords } from "lucide-react";
 import { playingStyleName, type CardPreview } from "@eflab/shared";
 import { positionOf, statTierBg, statTierForeground } from "@/lib/card-display";
 import { playerCardDynamicUrl } from "@/lib/r2-images";
+import { useImageVersion } from "@/lib/image-version";
 
 /**
  * One player result (search palette, compare picker, home search list): a
@@ -34,11 +35,12 @@ export function PlayerSearchRow({
   const attack = player.playingStyleAttack != null ? playingStyleName(player.playingStyleAttack) : null;
   const defence = player.playingStyleDefense != null ? playingStyleName(player.playingStyleDefense) : null;
   const pack = player.packName?.trim() || null;
+  const imageVersion = useImageVersion();
   return (
     <button type="button" className={`efb-result-row ${className}`} {...rest}>
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
-        src={playerCardDynamicUrl(player.id)}
+        src={playerCardDynamicUrl(player.id, imageVersion)}
         alt=""
         width={40}
         height={56}

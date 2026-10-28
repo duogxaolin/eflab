@@ -20,45 +20,64 @@
 // art helper and the emblem-by-key helpers were removed in change
 // remove-dead-surface (no caller); the objects remain in the bucket.
 //
-// Card image cache version: R2 serves objects with `Cache-Control: public,
-// max-age=31536000, immutable`, and a re-dump overwrites changed card images
-// under the SAME key (2026-10-18: 5,312 cards; 2026-10-24: 821). Browsers and edges would keep
-// the old bytes for a year, so every card URL carries `?v=<IMAGE_VERSION>`
-// (R2 ignores the query; the cache key changes). Bump it whenever card objects
-// are overwritten in place: edit DEFAULT_IMAGE_VERSION (committed default, takes
-// effect without configuration) or set NEXT_PUBLIC_IMAGE_VERSION and rebuild —
-// it is inlined at build time. Conditions/flags/emblems are unversioned (never
-// overwritten).
+// Card image cache version (change auto-image-version, design D6): R2 serves
+// objects with `Cache-Control: public, max-age=31536000, immutable`, and the
+// sync worker (like a re-dump: 2026-10-18 5,312 cards; 2026-10-24 821) replaces
+// a changed card image under the SAME key. Browsers and edges would keep the
+// old bytes for a year, so every card URL carries `?v=<version>` (R2 ignores
+// the query; the cache key changes). The version is resolved per request by
+// `resolveImageVersion`, in this order: the value stored in the database
+// (CatalogueMeta.imageVersion, raised by the worker in the transaction that
+// records a run that replaced images; read by the root layout through
+// `catalogue.meta`, revalidated every 60 s) → NEXT_PUBLIC_IMAGE_VERSION
+// (build-time, inlined) → the committed DEFAULT_IMAGE_VERSION. The two
+// fallbacks only serve a database with nothing stored or an API that cannot be
+// reached; nobody edits them for a sync any more. The root layout hands the
+// resolved value to the components through `ImageVersionProvider` /
+// `useImageVersion()` (lib/image-version.tsx); the URL helpers take it as an
+// explicit argument — no module-level state, no setter. Conditions / flags /
+// emblems are unversioned (never overwritten).
+
+import { isImageVersion } from "@eflab/shared";
 
 const R2_BASE =
   process.env.NEXT_PUBLIC_R2_PUBLIC_BASE ??
   "https://pub-1a19c30950c04ef3964669ac4792f6f0.r2.dev";
 
-/** Committed card-image version (date of the last in-place overwrite on R2). */
+/** Committed card-image version: the fallback when nothing is stored and no build-time version is set (date of the last in-place overwrite before the worker raised the version itself). */
 export const DEFAULT_IMAGE_VERSION = "20261024";
 
-/** Effective card-image version: NEXT_PUBLIC_IMAGE_VERSION when non-empty, else the default. */
-export const IMAGE_VERSION =
-  (process.env.NEXT_PUBLIC_IMAGE_VERSION || "").trim() || DEFAULT_IMAGE_VERSION;
+/** Build-time fallback: NEXT_PUBLIC_IMAGE_VERSION when non-empty, else the committed default. */
+const BUILD_IMAGE_VERSION = (process.env.NEXT_PUBLIC_IMAGE_VERSION || "").trim() || DEFAULT_IMAGE_VERSION;
+
+/**
+ * The card-image version to put in every card URL: the stored value when it is
+ * one (8–14 digits, as `catalogue.meta` serves it), else the build-time
+ * NEXT_PUBLIC_IMAGE_VERSION when set, else DEFAULT_IMAGE_VERSION. The one
+ * rule of the resolution order (design D6).
+ */
+export function resolveImageVersion(stored: string | null | undefined): string {
+  return isImageVersion(stored) ? stored : BUILD_IMAGE_VERSION;
+}
 
 /** R2 object key → full public URL. Strip leading slash if present. */
 export function r2Url(key: string): string {
   return `${R2_BASE}/${key.replace(/^\//, "")}`;
 }
 
-/** Card image key → versioned public URL (`?v=IMAGE_VERSION`, see header). */
-function cardImageUrl(key: string): string {
-  return `${r2Url(key)}?v=${encodeURIComponent(IMAGE_VERSION)}`;
+/** Card image key → versioned public URL (`?v=<version>`, see header). */
+function cardImageUrl(key: string, version: string): string {
+  return `${r2Url(key)}?v=${encodeURIComponent(version)}`;
 }
 
-/** Player card image (transparent, no text/watermark — efootbase render). 240×339 WebP. */
-export function playerCardUrl(playerId: string | number): string {
-  return cardImageUrl(`cards/${playerId}_transparent.webp`);
+/** Player card image (transparent, no text/watermark — efootbase render). 240×339 WebP. `version` from `useImageVersion()`. */
+export function playerCardUrl(playerId: string | number, version: string): string {
+  return cardImageUrl(`cards/${playerId}_transparent.webp`, version);
 }
 
-/** Player card dynamic variant (animated background). Same dimensions, larger file. */
-export function playerCardDynamicUrl(playerId: string | number): string {
-  return cardImageUrl(`cards/${playerId}_dynamic.webp`);
+/** Player card dynamic variant (animated background). Same dimensions, larger file. `version` from `useImageVersion()`. */
+export function playerCardDynamicUrl(playerId: string | number, version: string): string {
+  return cardImageUrl(`cards/${playerId}_dynamic.webp`, version);
 }
 
 /** Condition badge SVG. `letter` is A–E (lowercased internally). 5 files on R2. */

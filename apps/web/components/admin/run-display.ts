@@ -99,7 +99,7 @@ export const STAT_ROWS: ReadonlyArray<{ key: CountKey; label: string; help: stri
   {
     key: "imagesOverwritten",
     label: "Images overwritten",
-    help: "Uploads that replaced an existing card image on R2 — visitors see them only after the image version is raised.",
+    help: "Uploads that replaced an existing card image on R2 — the stored card-image version is raised automatically when such a run ends, so visitors fetch the new images.",
   },
   {
     key: "imagesUnverified",
@@ -195,6 +195,13 @@ export function reasonLabel(reason: string): string {
   }
 }
 
-/** The instruction shown with every overwritten-images warning. */
-export const IMAGE_VERSION_INSTRUCTION =
-  "R2 serves card images with a one-year immutable cache, so browsers and the CDN keep showing the old images. Raise DEFAULT_IMAGE_VERSION in apps/web/lib/r2-images.ts (or set NEXT_PUBLIC_IMAGE_VERSION) and rebuild the web app so visitors see the new ones.";
+// ---- The card-image version (openspec change auto-image-version, design D7) ----
+
+/** The run-detail line of a run that raised the stored card-image version (spec "Run detail shows the value"). */
+export function imageVersionRaisedText(version: string): string {
+  return `Card images replaced on R2 — image version raised automatically to ${version}`;
+}
+
+/** What the version is for — shown as information, never as an instruction. */
+export const IMAGE_VERSION_NOTE =
+  "R2 serves card images with a one-year immutable cache; every card URL carries this version, so a raised value makes browsers and the CDN fetch the replaced images. The web app reads it within about two minutes — nothing to do on your side.";
