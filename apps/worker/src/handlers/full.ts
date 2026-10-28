@@ -25,8 +25,9 @@
 //     efootbase_dump.py --no-data --only-ids … --etag-vs-bucket R2_PUBLIC_BASE
 //     — a HEAD on the bucket and on the CDN, a download only when the bucket has
 //     no object or the ETags differ — then the upload with --no-resume from the
-//     staging images folder. images_overwritten.txt = the overwritten count
-//     (the dashboard's "raise the image version" warning).
+//     staging images folder. images_overwritten.txt = the overwritten count;
+//     an upload that starts with overwrites makes the runner raise the stored
+//     card-image version when the run ends (auto-image-version, design D3).
 //
 // Second verify: the dump script's `--validate-only` pass runs over players.jsonl
 // + teams.json before the seed (W-a); the ids whose images must be compared
@@ -304,6 +305,10 @@ async function full(ctx: RunContext): Promise<RunOutcome> {
     const owed = new Set<number>(step.failedIds);
     if (ctx.stats.imagesDownloaded > 0) {
       ctx.setProgress({ phase: "Uploading images" });
+      // From here on R2 may hold replaced card images (auto-image-version, design D3): the runner raises
+      // the stored card-image version when the run ends — whatever its outcome — because the upload
+      // started with verified overwrites. Set before the child, so a failed / cancelled upload counts.
+      if (ctx.stats.imagesOverwritten > 0) ctx.cardImagesMayBeReplaced = true;
       let up: Awaited<ReturnType<typeof runUpload>>;
       try {
         up = await runUpload(ctx, join(staging, "images"), staging, (done, total) => ctx.setProgress({ phase: "Uploading images", done, total }));
@@ -320,7 +325,7 @@ async function full(ctx: RunContext): Promise<RunOutcome> {
       ctx.recordItems(buildSyncRunItems(found));
     }
     if (ctx.stats.imagesOverwritten > 0) {
-      ctx.log(`${ctx.stats.imagesOverwritten} card images were overwritten in the bucket — raise the web build's image version (DEFAULT_IMAGE_VERSION) and rebuild the web app so visitors see them`);
+      ctx.log(`${ctx.stats.imagesOverwritten} card images were overwritten in the bucket — the stored card-image version is raised automatically when this run ends, so visitors fetch the new images (no rebuild)`);
     }
     // third verify W1: failed / skipped images no longer fail the run — they stay owed (pending) and the
     // next run compares them again; the run is OK with the failed / pending counts visible.

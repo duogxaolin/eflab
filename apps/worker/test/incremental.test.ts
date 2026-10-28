@@ -14,7 +14,7 @@
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { SYNC_BLOCK_HOURS, SYNC_WATERMARK_MARGIN_SECONDS, type SyncRunStats } from "@eflab/shared";
+import { SYNC_BLOCK_HOURS, SYNC_WATERMARK_MARGIN_SECONDS, clockImageVersion, isImageVersion, type SyncRunStats } from "@eflab/shared";
 import { syncRunItemsSchema, syncRunProgressSchema, type SyncRunProgress } from "@eflab/shared/sync-records";
 import { isLoopbackHost } from "../src/efootbase.js";
 import { UPLOAD_SCRIPT, loadWorkerEnv } from "../src/env.js";
@@ -130,7 +130,11 @@ if ("skip" in scratch) {
       assert(seededLeagues.length === 1 && seededLeagues[0]!.leagueId === 1 && seededLeagues[0]!._count._all === 5, `baseline seed: the 5 cards store their own league 1 (${JSON.stringify(seededLeagues.map((g) => [g.leagueId, g._count._all]))})`);
       const meta = await prisma.catalogueMeta.findUniqueOrThrow({ where: { id: 1 } });
       assert(meta.playersDumpedAt === null && meta.seededAt !== null && /manifest\.json missing — the stored dump date/.test(seeded.output), "baseline seed without a manifest: the dump date stays unknown (kept, with a notice), seededAt written");
+      assert(meta.imageVersion === null, "baseline: no card-image version stored (the migration stores nothing, the seed never names the column)");
     }
+    // auto-image-version: the stored version and a run's recorded value
+    const imageVersion = async () => (await prisma.catalogueMeta.findUniqueOrThrow({ where: { id: 1 } })).imageVersion;
+    const raisedTo = (s: unknown) => (s as { imageVersionRaisedTo?: string }).imageVersionRaisedTo;
     // Cross-fill values on card 0 (columns the efootbase write paths never touch).
     await prisma.$executeRaw`UPDATE "Player" SET stars = 4, reputation = 3, "overallPotential" = 77, "communityTier" = 'S', "ratingCF" = 88, "gkClearing" = 41 WHERE id = ${id(0)}`;
     const crossfill = async (pid: bigint) =>
@@ -186,6 +190,7 @@ if ("skip" in scratch) {
       const uploaded = filesUnder(uploadDest, t0);
       assert(JSON.stringify(uploaded) === JSON.stringify(expectCards.map((p) => p.replace("/cdn/", ""))), `new cards: the 6 new card images were uploaded (${uploaded.join(", ")})`);
       assert(stats.imagesDownloaded === 6 && stats.imagesUploaded === 6 && stats.imagesOverwritten === 0 && stats.imagesFailed === 0, "new cards: images downloaded 6 / uploaded 6 / overwritten 0 / failed 0");
+      assert((await imageVersion()) === null && raisedTo(row.stats) === undefined, "\"Nothing replaced\": 6 images new to the bucket, 0 overwritten → the stored version is unchanged (NULL), nothing recorded");
       assert(stats.pages === 1 && stats.requests === 2 + 6, `new cards: pages 1, requests 8 (${stats.pages}, ${stats.requests})`);
       const wb = (T - 2 * 86400 - SYNC_WATERMARK_MARGIN_SECONDS) * 1000;
       assert(row.watermarkBefore?.getTime() === wb && row.watermarkAfter?.getTime() === T * 1000, "new cards: watermark before = newest in the database − 7 days, after = the newest card written");
@@ -262,7 +267,14 @@ if ("skip" in scratch) {
       assert(JSON.stringify(cdnHeads) === JSON.stringify([`/cdn/cards/${id(0)}_dynamic.webp`, `/cdn/cards/${id(0)}_transparent.webp`]), `images (CR2): the rewritten card's two renders were ETag-compared (HEAD ${cdnHeads.join(", ")})`);
       assert(filesUnder(uploadDest, t0).length === 5 && stats.imagesUploaded === 5, `images: 5 files uploaded (${filesUnder(uploadDest, t0).join(", ")})`);
       assert(stats.imagesOverwritten === 1 && readFileSync(join(uploadDest, editedArt)).equals(fakeImage("edited-art-v2")), `images (CR2): 1 overwritten — the bucket now holds the rewritten card's new render (${stats.imagesOverwritten})`);
-      assert(/overwritten in the bucket — raise the web build's image version/.test(row.logTail) && /validate-only: \d+ image URLs, 0 refused/.test(row.logTail), "images: the log tells to raise the image version; the dry validate pass ran");
+      assert(/overwritten in the bucket — the stored card-image version is raised automatically/.test(row.logTail) && /validate-only: \d+ image URLs, 0 refused/.test(row.logTail), "images: the log says the version is raised automatically (no instruction to rebuild); the dry validate pass ran");
+      // auto-image-version "Overwrites raise it": NULL → the helper's value for the run's end time, written in the
+      // same transaction as the OK status (the run row and the metadata row agree), recorded in stats and log
+      const v = await imageVersion();
+      assert(
+        v !== null && isImageVersion(v) && v === clockImageVersion(row.finishedAt!) && raisedTo(row.stats) === v && row.logTail.includes(`image version raised to ${v}`) && row.logTail.includes("1 card images replaced on R2"),
+        `1 overwritten → the stored version raised from NULL to ${v} (= yyyymmddHHmm of the run's end ${row.finishedAt?.toISOString()}), the run's stats and log carry it`,
+      );
     }
 
     // ---- validation aborts: nothing written, no image request ----
@@ -717,6 +729,113 @@ if ("skip" in scratch) {
         );
       } finally {
         rmSync(box, { recursive: true, force: true });
+      }
+    }
+
+    // ---- auto-image-version: when the real incremental run raises the stored card-image version ----
+    // Each case edits baseline cards at the source (a new stat value and a new release time, so the row
+    // is inside the run's 7-day window — the earlier blocks moved the database's newest card ~8.5 days
+    // past the baseline — and reads changed; a new dynamic render, so the bucket's object differs and
+    // the download counts as a verified overwrite).
+    {
+      let serial = 0;
+      let current = baseline;
+      const editedBaseline = (ks: readonly number[]) => {
+        serial++;
+        current = current.map((r, i) => {
+          if (!ks.includes(i)) return r;
+          fake!.setImage(`cards/${r.id}_dynamic.webp`, fakeImage(`edit-${i}-v${serial}`));
+          return { ...r, finishing: 60 + serial, time_added: T + 900_000 + serial * 10 };
+        });
+        return current;
+      };
+      await prisma.catalogueMeta.update({ where: { id: 1 }, data: { imageVersion: null } });
+
+      // (a) a run that sees no new or changed card → untouched (checked again after a raise, below)
+      fake.setRows(bumpCounters(current));
+      const nothing = await runOnce();
+      assert(nothing.row.status === "OK" && /nothing new at the source/.test(nothing.row.logTail) && (await imageVersion()) === null && raisedTo(nothing.row.stats) === undefined, "\"Run with nothing new\" (NULL stored): no new or changed card → the stored version is unchanged, nothing recorded");
+
+      // (b) "Failure after the upload started": 2 overwrites, the upload child dies after its first file → FAILED, raised
+      fake.setRows(editedBaseline([1, 2]));
+      await prisma.syncConfig.update({ where: { id: 1 }, data: { blockedUntil: null, blockedReason: null, enabled: false } });
+      const dying = await queue();
+      await runner.tick(deps({ env: { ...workerEnv, uploadCommand: [...workerEnv.uploadCommand, "--die-after", "1"] } }));
+      const dyingRow = await prisma.syncRun.findUniqueOrThrow({ where: { id: dying.id } });
+      const vFailed = await imageVersion();
+      assert(
+        dyingRow.status === "FAILED" && /upload step failed/.test(dyingRow.error ?? "") && (dyingRow.stats as SyncRunStats).imagesOverwritten === 2 && vFailed !== null && isImageVersion(vFailed) && raisedTo(dyingRow.stats) === vFailed && dyingRow.logTail.includes(`image version raised to ${vFailed}`),
+        `"Failure after the upload started": 2 overwritten, the upload child died → FAILED ("${(dyingRow.error ?? "").slice(0, 60)}") and the version raised to ${vFailed} (R2 may already hold replacements)`,
+      );
+      // "Run with nothing new" with a stored value: the same rows again (popularity counters moved) → untouched.
+      // (the FAILED run wrote nothing, so the edited rows still read changed — but their renders are now in
+      // the bucket from the upload that died after its first file only for one of them: both are compared)
+      fake.setRows(bumpCounters(current));
+      const again = await runOnce();
+      const vAgain = await imageVersion();
+      assert(again.row.status === "OK" && (again.row.stats as SyncRunStats).cardsChanged === 2 && Number(vAgain) >= Number(vFailed), `the rows the failed run left unwritten are written by the next run (${(again.row.stats as SyncRunStats).cardsChanged} changed, ${(again.row.stats as SyncRunStats).imagesOverwritten} overwritten → version ${vAgain})`);
+      fake.setRows(bumpCounters(current));
+      const quiet = await runOnce();
+      assert(quiet.row.status === "OK" && /nothing new at the source/.test(quiet.row.logTail) && (await imageVersion()) === vAgain && raisedTo(quiet.row.stats) === undefined, `"Run with nothing new" (${vAgain} stored): no new or changed card → the stored version is unchanged, nothing recorded`);
+      const vAfterQuiet = vAgain;
+
+      // (c) "Failure before the upload": overwrites downloaded, the run cancelled while its images download → CANCELLED, untouched
+      {
+        const fresh = seedableRows(12, { cdnBase: fake.cdnBase, newestTimeAdded: T + 800_000, startIndex: 470 });
+        fake.setRows([...fresh, ...editedBaseline([1, 2, 3])]);
+        await prisma.syncConfig.update({ where: { id: 1 }, data: { blockedUntil: null, blockedReason: null, enabled: false } });
+        fake.setCdnDelayMs(250);
+        const run = await queue();
+        const p = runner.tick(deps({ runHeartbeatMs: 150, cancelPollMs: 50 }));
+        const reached = await holdUntil(run.id, (pr) => pr.phase === "Downloading images" && pr.done >= 20);
+        await prisma.syncRun.update({ where: { id: run.id }, data: { cancelRequested: true } });
+        await p;
+        fake.setCdnDelayMs(0);
+        const row = await prisma.syncRun.findUniqueOrThrow({ where: { id: run.id } });
+        assert(reached && row.status === "CANCELLED" && (await imageVersion()) === vAfterQuiet && raisedTo(row.stats) === undefined && !row.logTail.includes("image version raised"), `"Failure before the upload": cancelled during the image step (3 edited renders among 27 images) → ${row.status}, the version unchanged (${vAfterQuiet}) — nothing was uploaded`);
+      }
+
+      // (d) "Cancel after the upload started": 5 overwrites uploading slowly, an admin cancels → CANCELLED, raised
+      {
+        fake.setRows(editedBaseline([0, 1, 2, 3, 4]));
+        await prisma.syncConfig.update({ where: { id: 1 }, data: { blockedUntil: null, blockedReason: null, enabled: false } });
+        const t0 = Date.now() - 1;
+        const run = await queue();
+        const p = runner.tick(deps({ runHeartbeatMs: 150, cancelPollMs: 50, env: { ...workerEnv, uploadCommand: [...workerEnv.uploadCommand, "--delay-ms", "300"] } }));
+        const reached = await holdUntil(run.id, (pr) => pr.phase === "Uploading images" && filesUnder(uploadDest, t0).length >= 2);
+        await prisma.syncRun.update({ where: { id: run.id }, data: { cancelRequested: true } });
+        await p;
+        const row = await prisma.syncRun.findUniqueOrThrow({ where: { id: run.id } });
+        const v = await imageVersion();
+        assert(
+          reached && row.status === "CANCELLED" && v !== null && Number(v) > Number(vAfterQuiet) && raisedTo(row.stats) === v && row.logTail.includes(`image version raised to ${v}`) && /stopped by SIGTERM/.test(row.logTail),
+          `"Cancel after the upload started": 5 overwritten, cancelled mid-upload → ${row.status} and the version raised ${vAfterQuiet} → ${v}`,
+        );
+      }
+
+      // (e) "Two runs in one minute": strictly increasing (the same minute → the previous value + 1)
+      {
+        fake.setRows(editedBaseline([1]));
+        const a = await runOnce();
+        const vA = await imageVersion();
+        fake.setRows(editedBaseline([2]));
+        const b = await runOnce();
+        const vB = await imageVersion();
+        const sameMinute = clockImageVersion(a.row.finishedAt!) === clockImageVersion(b.row.finishedAt!);
+        assert(
+          a.row.status === "OK" && b.row.status === "OK" && vA !== null && vB !== null && Number(vB) > Number(vA) && raisedTo(a.row.stats) === vA && raisedTo(b.row.stats) === vB && (!sameMinute || vB === String(Number(vA) + 1)),
+          `"Two runs in one minute": ${vA} → ${vB} strictly increasing${sameMinute ? " (same UTC minute: the previous value + 1)" : " (a later minute: the clock value)"}`,
+        );
+      }
+
+      // (f) a stored value ahead of the worker's clock (set by hand) still increases: current + 1
+      {
+        await prisma.catalogueMeta.update({ where: { id: 1 }, data: { imageVersion: "209912312359" } });
+        fake.setRows(editedBaseline([3]));
+        const { row } = await runOnce();
+        const v = await imageVersion();
+        assert(row.status === "OK" && v === "209912312360" && raisedTo(row.stats) === "209912312360", `a stored version ahead of the clock (209912312359) → ${v} (current + 1, never the smaller clock value)`);
+        await prisma.catalogueMeta.update({ where: { id: 1 }, data: { imageVersion: null } });
       }
     }
 
