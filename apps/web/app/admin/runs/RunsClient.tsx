@@ -111,7 +111,7 @@ function RunHistory() {
             )}
           </div>
           {runs.isFetchNextPageError && (
-            <p role="alert" className="px-4 pb-3 text-xs text-[var(--color-accent-danger)]">
+            <p role="alert" className="px-4 pb-3 text-xs text-[var(--color-danger-soft-foreground)]">
               {adminErrorMessage(runs.error)}
             </p>
           )}

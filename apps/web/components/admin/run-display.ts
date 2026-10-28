@@ -2,6 +2,7 @@
 // English labels for every run kind, trigger, status and statistic — the UI
 // never shows the raw enum names or the camelCase statistic keys.
 import type { SyncCheckResult, SyncKind, SyncRunStats, SyncRunSummaryDTO, SyncStatus, SyncTrigger } from "@eflab/shared";
+import type { SyncProgressCounter } from "@eflab/shared/sync-records";
 
 export const KIND_LABELS: Record<SyncKind, string> = {
   CHECK: "API check",
@@ -29,7 +30,7 @@ export const STATUS_BADGE_CLASS: Record<SyncStatus, string> = {
   RUNNING:
     "border-[var(--color-accent-secondary)]/50 bg-[var(--color-accent-secondary)]/15 text-[var(--color-accent-secondary)]",
   OK: "border-[var(--color-accent)]/50 bg-[var(--color-accent)]/15 text-[var(--color-accent)]",
-  FAILED: "border-[var(--color-accent-danger)]/50 bg-[var(--color-accent-danger)]/15 text-[var(--color-accent-danger)]",
+  FAILED: "border-[var(--color-accent-danger)]/50 bg-[var(--color-accent-danger)]/15 text-[var(--color-danger-soft-foreground)]",
   BLOCKED: "border-[var(--color-accent-warn)]/50 bg-[var(--color-accent-warn)]/15 text-[var(--color-accent-warn)]",
   CANCELLED: "border-[var(--color-line)] bg-[var(--color-panel)] text-[var(--color-text-dim)]",
 };
@@ -152,6 +153,46 @@ export function checkSummary(check: SyncCheckResult): string {
   if (check.newerThanDb === true) parts.push("source has newer cards");
   else if (check.newerThanDb === false) parts.push("no newer cards");
   return parts.join(" · ");
+}
+
+// ---- Live progress and the downloaded-items record (openspec change admin-sync-live-progress) ----
+
+/** Labels of the counters a progress snapshot carries (same wording as the statistics rows). */
+export const COUNTER_LABELS: Readonly<Record<SyncProgressCounter, string>> = {
+  cardsNew: "New cards",
+  cardsChanged: "Changed cards",
+  imagesDownloaded: "Images downloaded",
+  imagesUploaded: "Images uploaded",
+  imagesOverwritten: "Images overwritten",
+  imagesFailed: "Images failed",
+  requests: "Requests made",
+};
+export const COUNTER_ORDER: readonly SyncProgressCounter[] = ["cardsNew", "cardsChanged", "imagesDownloaded", "imagesUploaded", "imagesOverwritten", "imagesFailed", "requests"];
+
+/** What one unit of a phase is ("45 of 120 images"). */
+export function phaseUnit(phase: string): string {
+  if (phase === "Downloading images" || phase === "Uploading images" || phase === "Comparing images") return "images";
+  if (phase === "Comparing rows") return "rows";
+  if (phase === "Reading pages") return "pages";
+  return "steps";
+}
+
+/** Readable text of a failure reason class (the class itself is shown too). */
+export function reasonLabel(reason: string): string {
+  const m = /^http_(\d{3})$/.exec(reason);
+  if (m) return m[1] === "404" ? "HTTP 404 — not at the source" : `HTTP ${m[1]}`;
+  switch (reason) {
+    case "timeout":
+      return "Timed out";
+    case "bad_signature":
+      return "Not an image";
+    case "too_large":
+      return "Too large";
+    case "host_refused":
+      return "Image host refused";
+    default:
+      return "Other error";
+  }
 }
 
 /** The instruction shown with every overwritten-images warning. */

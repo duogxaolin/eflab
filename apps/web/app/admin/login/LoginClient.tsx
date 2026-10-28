@@ -105,7 +105,7 @@ function LoginForm({ next }: { next: Route }) {
               className={inputClass}
             />
           </div>
-          <div id={errorId} role="alert" aria-live="assertive" className="min-h-0 text-xs text-[var(--color-accent-danger)] empty:hidden">
+          <div id={errorId} role="alert" aria-live="assertive" className="min-h-0 text-xs text-[var(--color-danger-soft-foreground)] empty:hidden">
             {error}
           </div>
           <button

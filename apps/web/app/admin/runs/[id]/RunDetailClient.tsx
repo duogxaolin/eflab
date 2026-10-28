@@ -6,15 +6,24 @@
 // overwritten-images instruction and the redacted log tail (monospace, scrolls
 // inside its own box — never the page). Refreshes every 3 s while the run is
 // queued or running and the tab is visible.
+//
+// openspec change admin-sync-live-progress (design D6): a "Progress" block while
+// the run is queued or running (phase, progress bar); while it runs the
+// Statistics panel shows the counters of the latest progress write over the
+// stored statistics (a checkpoint's snapshot), never "No statistics yet." once
+// the worker has written its first counters; "What was downloaded"
+// (components/admin/RunItems.tsx) below the statistics.
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { ArrowLeft, ImageOff } from "lucide-react";
-import type { SyncRunDTO } from "@eflab/shared";
+import type { SyncRunDTO, SyncRunStats } from "@eflab/shared";
 import { isActiveSyncStatus } from "@eflab/shared/sync";
 import { adminErrorMessage, adminTrpc, trpcErrorStatus } from "@/lib/admin-trpc";
 import { AdminShell } from "@/components/admin/AdminShell";
 import { ACTIVE_POLL_MS, Notice, Panel, StatusBadge, useDocumentVisible } from "@/components/admin/admin-ui";
 import { CancelRunButton, useRunAnnouncer } from "@/components/admin/run-actions";
+import { RunProgress } from "@/components/admin/RunProgress";
+import { RunItems } from "@/components/admin/RunItems";
 import {
   CHECK_ROWS,
   IMAGE_VERSION_INSTRUCTION,
@@ -96,7 +105,7 @@ function RunDetail({ id }: { id: number }) {
       ) : (
         <>
           {run.isError && (
-            <p role="alert" className="text-xs text-[var(--color-accent-danger)]">
+            <p role="alert" className="text-xs text-[var(--color-danger-soft-foreground)]">
               Could not refresh: {adminErrorMessage(run.error)} The values below are from the last successful update.
             </p>
           )}
@@ -111,7 +120,12 @@ function RunBody({ run, cancelMessage, onCancel }: { run: SyncRunDTO; cancelMess
   const active = isActiveSyncStatus(run.status);
   const duration = runDurationMs(run);
   const overwritten = run.stats.imagesOverwritten ?? 0;
-  const statRows = STAT_ROWS.filter((r) => run.stats[r.key] !== undefined);
+  // While the run is active: the counters of the latest progress write over the stored statistics (a
+  // checkpoint's snapshot — the full run writes one before its seed, the incremental before its write),
+  // so the live image counts stay visible after a checkpoint; the final statistics replace them at the end.
+  const liveCounters = active && run.progress && Object.keys(run.progress.counters).length > 0 ? run.progress.counters : null;
+  const shown: SyncRunStats = liveCounters ? { ...run.stats, ...liveCounters } : run.stats;
+  const statRows = STAT_ROWS.filter((r) => shown[r.key] !== undefined);
   const meta: Array<[string, string]> = [
     ["Trigger", `${TRIGGER_LABELS[run.trigger]}${run.requestedBy ? ` by ${run.requestedBy}` : ""}`],
     ["Queued", formatUtcDateTime(run.queuedAt)],
@@ -142,9 +156,15 @@ function RunBody({ run, cancelMessage, onCancel }: { run: SyncRunDTO; cancelMess
         </Notice>
       )}
 
+      {active && (
+        <Panel title="Progress">
+          <RunProgress run={run} counters={false} />
+        </Panel>
+      )}
+
       {run.error && (
         <section aria-labelledby="run-error" className="min-w-0 rounded-xl border border-[var(--color-accent-danger)]/50 bg-[var(--color-accent-danger)]/10 p-4">
-          <h2 id="run-error" className="text-xs font-bold uppercase tracking-wider text-[var(--color-accent-danger)]">
+          <h2 id="run-error" className="text-xs font-bold uppercase tracking-wider text-[var(--color-danger-soft-foreground)]">
             Error
           </h2>
           <p className="mt-1.5 whitespace-pre-wrap text-sm text-white [overflow-wrap:anywhere]">{run.error}</p>
@@ -179,8 +199,14 @@ function RunBody({ run, cancelMessage, onCancel }: { run: SyncRunDTO; cancelMess
           ) : (
             <div className="min-w-0 space-y-4">
               {statRows.length > 0 && (
-                <table className="w-full table-fixed text-xs" data-testid="run-stats">
-                  <caption className="sr-only">Run statistics</caption>
+                <table className="w-full table-fixed text-xs" data-testid="run-stats" data-live={liveCounters ? "true" : undefined}>
+                  {liveCounters ? (
+                    <caption className="mb-1 text-left text-[11px] text-[var(--color-text-dim)]">
+                      So far — the counters of the worker&apos;s latest progress write ({formatUtcDateTime(run.progress!.updatedAt)}); the final statistics replace these when the run ends.
+                    </caption>
+                  ) : (
+                    <caption className="sr-only">Run statistics</caption>
+                  )}
                   <thead className="sr-only">
                     <tr>
                       <th scope="col">Statistic</th>
@@ -189,7 +215,7 @@ function RunBody({ run, cancelMessage, onCancel }: { run: SyncRunDTO; cancelMess
                   </thead>
                   <tbody className="divide-y divide-[var(--color-line-separator)]">
                     {statRows.map((r) => {
-                      const v = run.stats[r.key] as number;
+                      const v = shown[r.key] as number;
                       return (
                         <tr key={r.key} title={r.help}>
                           <th scope="row" className="py-1.5 pr-3 text-left align-top font-normal">
@@ -227,6 +253,10 @@ function RunBody({ run, cancelMessage, onCancel }: { run: SyncRunDTO; cancelMess
           )}
         </Panel>
       </div>
+
+      <Panel title="What was downloaded">
+        <RunItems run={run} />
+      </Panel>
 
       <Panel title="Log tail">
         {run.logTail ? (
