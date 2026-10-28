@@ -269,6 +269,32 @@ Two columns on `SyncRun` (migration `20261028000000_admin_sync_live_progress`), 
 
   For the dump this covers the image step only; its data phase ends on a SIGTERM as before. A second SIGTERM, or the worker's SIGKILL 10 s later, ends either script at once. Without the flags a SIGTERM kills them as before (the loop is the original one). The worker puts both files in the run's temporary directory, which is removed with it.
 
+## Card image version (change auto-image-version)
+
+Card faces are one R2 object per card, served `immutable` for a year and replaced under the same key when a run finds a changed render (a verified "overwritten" image). Visitors only fetch the new bytes when the `?v=<version>` query of the card URL changes, so the version is **stored in the database and raised by the worker itself** — nothing to edit, build or restart.
+
+- **Where**: `CatalogueMeta.imageVersion` (migration `20261028120000_card_image_version`): NULL, or 8–14 digits (CHECK `CatalogueMeta_image_version_format`). NULL means "nothing stored": the web app then uses its build-time `NEXT_PUBLIC_IMAGE_VERSION`, else the committed `DEFAULT_IMAGE_VERSION` in `apps/web/lib/r2-images.ts`. The migration stores no value and the seed never touches the column.
+- **When the worker raises it**: a run that **started its upload step with at least one overwritten image** raises it in the same transaction that records the run's final state — after the upload child has ended, whatever the outcome (OK; FAILED or CANCELLED once the upload began, because R2 may already hold replacements). A run that replaced nothing, or that ended before its upload started, leaves it alone. The new value is `yyyymmddHHmm` (UTC) of the run's end, or the stored value + 1 when the clock is not ahead of it — always strictly greater. The run records it as `imageVersionRaisedTo` in its statistics and as "image version raised to <value>" in its log; the run page says "Card images replaced on R2 — image version raised automatically to <value>".
+- **Worker killed during the upload**: the stale-run recovery (10 minutes without a heartbeat) also raises the version when the dead run's last progress write showed overwritten images in the phase "Uploading images" or "Writing the catalogue", and records it on the recovered run. **Not covered**: a death within the first 10 seconds of the upload phase, before that phase's first progress write — the replaced images are then unannounced and the next run does not re-detect them (the bucket objects now equal the source). Raise it by hand in that case.
+- **How it reaches visitors**: `catalogue.meta` serves the value; the web root layout reads it with a request revalidated every 60 s and hands it to every card URL of the render. The static routes (`/`, `/players`, `/compare`, `/wiki/skills`) are regenerated at most every 60 s and the dynamic ones re-read the cached value at the same rhythm — both stale-while-revalidate: the first request after the window still serves the previous value and triggers the refresh, the next one sees the new value (measured on a check build: 6–40 s after the SQL write, depending on where the route stood in its window). So a new page load uses the new value within about two minutes, plus any page cache in front of the web app. The web app needs a writable `.next/cache` for this (the regenerated pages and the fetch data cache are written there): in Docker keep that directory writable or mount it — on a read-only filesystem the value baked at build time persists until the next build. An already-open tab keeps its value until its next full load (acceptable for an image cache).
+- **Reading it**: the dashboard's "Card image version" panel (the stored value, or "Default in use"), the last run that replaced images with the value it set, or in SQL:
+
+  ```sql
+  SELECT "imageVersion" FROM "CatalogueMeta" WHERE id = 1;
+  ```
+
+- **Setting or raising it by hand** (the first time after the migration — run #1 of 2026-10-28 had replaced 19 images before the worker could raise anything —, or after the uncovered kill above). Any value greater than the stored one and matching the format works; the clock value of now, UTC, is the convention:
+
+  ```sql
+  -- set once after migrating (does nothing when a value is already stored)
+  UPDATE "CatalogueMeta" SET "imageVersion" = to_char(now() AT TIME ZONE 'UTC', 'YYYYMMDDHH24MI') WHERE id = 1 AND "imageVersion" IS NULL;
+  -- raise after an unannounced replacement: the clock value or the stored value + 1, whichever is
+  -- numerically greater (compared as numbers, so a 14-digit stored value ahead of the clock still rises)
+  UPDATE "CatalogueMeta" SET "imageVersion" = greatest(to_char(now() AT TIME ZONE 'UTC', 'YYYYMMDDHH24MI')::numeric, coalesce("imageVersion", '0')::numeric + 1)::text WHERE id = 1;
+  ```
+
+  Checked on a scratch database: from NULL, from a 12-digit value behind the clock and from `99999999` it stores the clock value; from a 14-digit value ahead of the clock (`20991231235959`) it stores that value + 1 (`20991231235960`, still 14 digits) — always numerically greater than before and matching the CHECK. The one storable value it cannot raise is `99999999999999` (14 nines: its + 1 has 15 digits, so the CHECK refuses the statement and nothing is written); the worker's own helper answers the clock value for it, a different string that still changes the URL. No restart is needed: the API reads the row on every call and the web app re-reads it within about a minute.
+
 ## Recovery when the worker dies
 
 - **Restart it.** On each tick the worker marks every `RUNNING` run whose heartbeat is **10 minutes** old as FAILED "worker restarted", and the queue continues. A run is therefore recovered 10 minutes after its last heartbeat, not at the instant of the restart.
@@ -284,7 +310,7 @@ Two columns on `SyncRun` (migration `20261028000000_admin_sync_live_progress`), 
 ## Limits (by design, stated in the dashboard where they matter)
 
 - **Incremental sees only new cards**: it reads newest first by `time_added` back to the newest release in the database minus 7 days. `time_added` does not change on stat edits, so **stat edits to older cards are only picked up by the weekly full run**.
-  - It downloads the images of the cards it inserts and of the emblems of the countries, teams and leagues it inserts, and compares the images of the known cards it rewrites (and of owed cards among its rows) with the bucket, downloading only the ones that differ (a verified difference counts as overwritten — the image-version warning applies). It therefore needs `R2_PUBLIC_BASE` and refuses to start without it.
+  - It downloads the images of the cards it inserts and of the emblems of the countries, teams and leagues it inserts, and compares the images of the known cards it rewrites (and of owed cards among its rows) with the bucket, downloading only the ones that differ (a verified difference counts as overwritten, and a run that uploads such images raises the card-image version — see "Card image version"). It therefore needs `R2_PUBLIC_BASE` and refuses to start without it.
   - It does not create Pack rows: a new card whose featured pack is unknown keeps `featuredPackId` null until a full run.
   - A skill the source dropped from a card it sees again stays linked until a full run.
 - **Writes**:
@@ -292,8 +318,8 @@ Two columns on `SyncRun` (migration `20261028000000_admin_sync_live_progress`), 
   - it never deletes and never touches Pack, FeaturedBundle, Skill or Manager;
   - the full run is the existing seed without `--prune` or `--reset-users`.
 - **No cross-fill**: neither run runs `pnpm db:crossfill`. New cards have no eFHUB stars, reputation, position ratings or tier badge until the owner runs it by hand.
-- **Overwritten card images** stay stale in browser and CDN caches (R2 serves them `immutable` for a year). When a run reports overwritten images (dashboard and run detail), raise `DEFAULT_IMAGE_VERSION` in `apps/web/lib/r2-images.ts` (or set `NEXT_PUBLIC_IMAGE_VERSION`) and **rebuild the web app**. Nothing does this automatically.
-- **Changed-image detection and the "overwritten" count** (`--etag-vs-bucket`, both runs; third verify W2): a HEAD on the bucket object (public URL) and on the image host; equal plain-MD5 ETags → unchanged, nothing downloaded. Otherwise the image is downloaded and **its body's MD5 decides**: equal to the bucket object's content-MD5 ETag → dropped (not stored, not counted — this is what happens to pesdb.net renders, whose ETags are not content MD5s, and to weak ETags); different → a **verified overwrite** ("Images overwritten", the only count behind the "raise the image version" warning); the bucket object's ETag not a content MD5 (multipart, weak) or the bucket answer unusable → the replacement is counted as **"Images replaced (unverified)"**, never as overwritten. This relies on R2's ETag of a single-part upload being the content MD5 (S3 semantics; `r2_upload.py` uploads card images single-part) — **not verified against the real bucket**; if it does not hold, replacements show up as "unverified" instead of "overwritten" (more downloads, never a missed change). After a run with unverified replacements, check whether visitors may see stale images and raise the image version if in doubt.
+- **Overwritten card images** would stay stale in browser and CDN caches (R2 serves them `immutable` for a year) if the card URLs did not change: a run that uploads overwritten images **raises the stored card-image version itself** when it ends (see "Card image version" — the dashboard and the run detail show the value; nothing to edit or build). Limits: a worker killed within the first 10 seconds of its upload phase leaves the replacement unannounced (raise by hand, SQL above); an open tab keeps its version until its next full load; a new value reaches new loads within about a minute plus any page cache.
+- **Changed-image detection and the "overwritten" count** (`--etag-vs-bucket`, both runs; third verify W2): a HEAD on the bucket object (public URL) and on the image host; equal plain-MD5 ETags → unchanged, nothing downloaded. Otherwise the image is downloaded and **its body's MD5 decides**: equal to the bucket object's content-MD5 ETag → dropped (not stored, not counted — this is what happens to pesdb.net renders, whose ETags are not content MD5s, and to weak ETags); different → a **verified overwrite** ("Images overwritten", the only count that makes the run raise the card-image version); the bucket object's ETag not a content MD5 (multipart, weak) or the bucket answer unusable → the replacement is counted as **"Images replaced (unverified)"**, never as overwritten. This relies on R2's ETag of a single-part upload being the content MD5 (S3 semantics; `r2_upload.py` uploads card images single-part) — **not verified against the real bucket**; if it does not hold, replacements show up as "unverified" instead of "overwritten" (more downloads, never a missed change — but then no automatic raise either). After a run with unverified replacements and no overwritten count, check whether visitors may see stale images and raise the version by hand if in doubt (SQL in "Card image version").
   - An image that changed while its card's row did not is not detected (neither run compares unchanged cards); a manual dump stays the exhaustive path.
 - **The r2.dev rate limit.** The public `r2.dev` URL is rate-limited by Cloudflare and meant for development. Both runs send one bucket HEAD per compared card image.
   - A bucket answer other than 200 or 404 (a 429 included) is treated as "unknown": the image is downloaded again and, if stored, counted as "unverified". This inflates the counts but **does not block** the run; only a 403 / 429 / challenge from efootbase's own API or CDN blocks it (a third-party image host only skips its own images).
@@ -317,6 +343,21 @@ Two columns on `SyncRun` (migration `20261028000000_admin_sync_live_progress`), 
 - **Secrets in logs**: every configured secret value (key, R2 values, the database URL and its password — also one given as `?password=`) is masked raw, percent-encoded (upper / lower hex, form encoding), JSON-escaped (JavaScript and Python `ensure_ascii` forms, `/` escaped or not) and base64 (standard / url-safe, padded or not, also inside a larger base64 blob). A child's output line longer than 64 K characters is dropped whole and replaced by a marker (never split, so a secret cannot be cut into unmasked halves). Values shorter than 8 characters are not masked (they would corrupt ordinary text), so **a real worker refuses to start with an `EFBASE_API_KEY` shorter than 8 characters**.
 
 ## Rollback
+
+### Of migration `20261028120000_card_image_version` (the stored card-image version)
+
+Take a `pg_dump -Fc` first. Stop the worker and the API (the API selects the column in `catalogue.meta` and the dashboard; the worker writes it), then:
+
+```sql
+BEGIN;
+ALTER TABLE "CatalogueMeta" DROP CONSTRAINT IF EXISTS "CatalogueMeta_image_version_format";
+ALTER TABLE "CatalogueMeta" DROP COLUMN IF EXISTS "imageVersion";
+DELETE FROM "_prisma_migrations" WHERE "migration_name" = '20261028120000_card_image_version';
+COMMIT;
+```
+
+- Revert the code with it (`git revert` of the change): the worker, the API, the web root layout and the admin pages read or write the column. Remove `packages/db/prisma/migrations/20261028120000_card_image_version/` from the deployed code too, or the next `pnpm db:migrate` re-applies it. After the revert, overwritten images again need the by-hand `DEFAULT_IMAGE_VERSION` bump and a web build.
+- Tested on scratch databases only: the migration from the empty baseline and on a migrated copy of the live database, applied again (no error, no change, NULL kept), the CHECK refusing `2026-10-28`, a 7-digit and a 15-digit value and accepting 12- and 14-digit ones.
 
 ### Of migration `20261028000000_admin_sync_live_progress` (hourly default, progress, items)
 
@@ -377,6 +418,7 @@ COMMIT;
   - a SIGTERM without the flags (killed as before).
 
   The stand-in upload (`fake-upload.mjs`) behaves the same way. The incremental suite cancels a run during its upload twice, once with the stand-in and once with a copy of the real `r2_upload.py`, whose `boto3` is a local stub that a wrapper verifies before running. Both end CANCELLED, with the record's uploads equal to the files the bucket received. The admin smoke section checks the progress and items views, and that the names join is one Player lookup.
+- The card-image version (change `auto-image-version`): `@eflab/shared` pins `nextImageVersion` (clock ahead, same minute, a stored value ahead of the clock, day and year rollover, malformed input, 14 digits, the format of every result); `@eflab/db` pins the model / migration / seed agreement without a database; the worker suites apply the migration a second time on the scratch database and exercise the CHECK, then run the real handlers against the fake source and bucket — 1 overwritten image raises the value in the run's final transaction (stats and log carry it), 6 new images or nothing new leave it alone, an upload child that dies and a cancel during the upload still raise it, a cancel during the image step does not, two raising runs are strictly increasing, a stored value ahead of the clock becomes that value + 1, a run whose guarded final update matches no row raises nothing, the stale recovery raises for a dead run in "Uploading images" / "Writing the catalogue" with overwrites and not otherwise, and a stored value survives the full run's seed. The smoke test compares `catalogue.meta.imageVersion` with SQL on the first database and, on the admin scratch database, reads null → a stored value → null between calls without a restart, the dashboard fact with the raising run, `runs.get` passing `imageVersionRaisedTo`, and the CHECK refusing a dashed date.
 - One real request is made by hand only, at acceptance: a check with the owner's key, against a scratch database.
 
 ## Public bundle

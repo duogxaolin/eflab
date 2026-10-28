@@ -106,11 +106,11 @@ A full run SHALL dump all players, metadata and packs into a temporary directory
 - **THEN** the next full run compares that card's images with the bucket even though its row no longer differs, and uploads the changed one.
 
 ### Requirement: Overwritten Images Warning
-When a run overwrites any existing card image, the dashboard and the run detail SHALL show how many were overwritten and that the web build's image version must be raised and the web rebuilt for visitors to see them. An image counts as overwritten only when the bucket object it replaces has a content-hash ETag that differs from the downloaded body; a downloaded body equal to the bucket object SHALL be dropped, and a replacement of a bucket object whose ETag is not a content hash SHALL be counted separately as unverified, not as overwritten.
+When a run overwrites any existing card image, the dashboard and the run detail SHALL show how many were overwritten, and the worker SHALL raise the card-image version automatically as the `card-image-version` capability defines, so that visitors see the new images without anyone editing code or rebuilding the web app; the pages SHALL say the version was raised instead of asking for it. An image counts as overwritten only when the bucket object it replaces has a content-hash ETag that differs from the downloaded body; a downloaded body equal to the bucket object SHALL be dropped, and a replacement of a bucket object whose ETag is not a content hash SHALL be counted separately as unverified, not as overwritten.
 
 #### Scenario: Warning shown
 - **WHEN** a finished run reports 12 overwritten card images
-- **THEN** the run detail and the dashboard show that count with the instruction to raise the image version.
+- **THEN** the run detail and the dashboard show that count, and the run detail says the image version was raised automatically, with no instruction to raise it by hand.
 
 ### Requirement: Run Statistics And History
 Each run SHALL record: the pages and requests made, cards new, changed and unchanged, images downloaded, uploaded, overwritten, unverified, failed and still owed, duration, and the watermark before and after. While a run is running its statistics known so far SHALL be visible, not only after it ends. The admin SHALL be able to list runs newest first with pagination and open one to see its statistics, error, log tail, its live progress while it runs and what it downloaded.
