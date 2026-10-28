@@ -14,7 +14,7 @@
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { SYNC_BLOCK_HOURS, type SyncRunStats } from "@eflab/shared";
+import { SYNC_BLOCK_HOURS, clockImageVersion, type SyncRunStats } from "@eflab/shared";
 import { syncRunItemsSchema } from "@eflab/shared/sync-records";
 import { SEED_FALLBACK_R2_BASE } from "../src/catalogue.js";
 import { isLoopbackHost } from "../src/efootbase.js";
@@ -152,6 +152,7 @@ if ("skip" in scratch) {
       assert(meta.playersDumpedAt?.toISOString() === runClock.toISOString() && metaText === runClock.toISOString().replace("T", " ").replace("Z", ""),
         `first full run: the dump date = the run's --dumped-at ${runClock.toISOString()}, stored as UTC under the ${sessionTz} session (${meta.playersDumpedAt?.toISOString()}, column text ${metaText})`);
       assert(meta.seededAt !== null && meta.seededAt.getTime() >= t0 && meta.seededAt.getTime() <= Date.now(), "first full run: seededAt = the seed's own time");
+      assert(meta.imageVersion === null && (stats as { imageVersionRaisedTo?: string }).imageVersionRaisedTo === undefined, "first full run (every image new to the bucket, 0 overwritten): the stored card-image version stays NULL, nothing recorded");
       const byLeague = await prisma.player.groupBy({ by: ["leagueId"], _count: { _all: true } });
       assert(byLeague.length === 1 && byLeague[0]!.leagueId === 1 && byLeague[0]!._count._all === 5, `first full run: every card stores its own league (1) (${JSON.stringify(byLeague.map((g) => [g.leagueId, g._count._all]))})`);
       assert(stats.cardsNew === 5 && stats.cardsChanged === 0 && stats.cardsUnchanged === 0, `first full run: 5 new (${stats.cardsNew}/${stats.cardsChanged}/${stats.cardsUnchanged})`);
@@ -179,12 +180,19 @@ if ("skip" in scratch) {
 
     // ---- same source again: nothing changed (the comparison reads the seed's own rows back —
     //      non-ASCII names, fractional floats; the popularity counters moved, which is not a change) ----
+    const imageVersion = async () => (await prisma.catalogueMeta.findUniqueOrThrow({ where: { id: 1 } })).imageVersion;
     {
       fake.setRows(bumpCounters(rows));
+      // auto-image-version "Seed leaves the version alone" / "Seed never raises it": a stored version
+      // survives the full run's seed child, and a run that replaced nothing leaves it as it is.
+      await prisma.catalogueMeta.update({ where: { id: 1 }, data: { imageVersion: "202610281300" } });
       const { row, stats, bucketReqs } = await runOnce();
       assert(row.status === "OK" && stats.cardsNew === 0 && stats.cardsChanged === 0 && stats.cardsUnchanged === 5, `unchanged source: 0 new / 0 changed / 5 unchanged (${stats.cardsNew}/${stats.cardsChanged}/${stats.cardsUnchanged})`);
       assert(stats.imagesDownloaded === 0 && stats.imagesOverwritten === 0 && stats.imagesUploaded === 0, "unchanged source: no image downloaded or uploaded");
       assert(bucketReqs.every((r) => r.path.startsWith("/emblems/")), "unchanged source: only the emblem is checked against the bucket (no card selected)");
+      const meta = await prisma.catalogueMeta.findUniqueOrThrow({ where: { id: 1 } });
+      assert(meta.imageVersion === "202610281300" && meta.seededAt !== null && meta.seededAt.getTime() >= Date.parse(row.startedAt!.toISOString()) && (stats as { imageVersionRaisedTo?: string }).imageVersionRaisedTo === undefined,
+        `a stored version 202610281300 survives the seed (seededAt rewritten, imageVersion kept) and a run with nothing replaced leaves it alone (${meta.imageVersion})`);
     }
 
     // ---- two edited cards (one with a new image) and a new card ----
@@ -203,7 +211,13 @@ if ("skip" in scratch) {
       assert(JSON.stringify(up) === JSON.stringify(expected), `edited cards: only the new card's images and the one differing image were uploaded (${up.join(", ")})`);
       assert(readFileSync(join(uploadDest, editedImage)).equals(fakeImage("edited-art-v2")), "edited cards: the bucket now holds the new art");
       assert(stats.imagesOverwritten === 1 && stats.imagesDownloaded === 3 && stats.imagesUploaded === 3, `edited cards: overwritten 1, downloaded 3, uploaded 3 (${stats.imagesOverwritten}/${stats.imagesDownloaded}/${stats.imagesUploaded})`);
-      assert(/overwritten in the bucket — raise the web build's image version/.test(row.logTail), "edited cards: the log tells to raise the image version");
+      assert(/overwritten in the bucket — the stored card-image version is raised automatically/.test(row.logTail), "edited cards: the log says the version is raised automatically (no instruction to rebuild)");
+      // auto-image-version "Overwrites raise it": raised in the run's final transaction, recorded on the run
+      const v = await imageVersion();
+      assert(
+        v !== null && Number(v) > 202610281300 && (stats as { imageVersionRaisedTo?: string }).imageVersionRaisedTo === v && row.logTail.includes(`image version raised to ${v}`) && v === clockImageVersion(row.finishedAt!),
+        `edited cards (1 overwritten): the stored version raised from 202610281300 to ${v} = the helper's value for the run's end time, in the run's stats and log`,
+      );
       const gets = reqs.filter((r) => r.path.startsWith("/cdn/") && r.method === "GET").map((r) => r.path.replace("/cdn/", "")).sort();
       assert(JSON.stringify(gets) === JSON.stringify(expected), `edited cards: the unchanged image of an edited card was not downloaded (${gets.join(", ")})`);
       assert(leftovers(row.id).length === 0, "edited cards: the staging directory was removed");
@@ -302,9 +316,12 @@ if ("skip" in scratch) {
       const aPending = (a.row.stats as { imagesPendingIds?: number[] }).imagesPendingIds ?? [];
       const p3 = await prisma.player.findUniqueOrThrow({ where: { id: id(3) } });
       assert(a.row.status === "BLOCKED" && p3.finishing === 91 && aPending.includes(Number(id(3))), `CR2 run A: the seed committed, the image step was blocked, the card's id is kept as pending (${a.row.status}, pending ${aPending.join(",")})`);
+      const vBeforeB = await imageVersion();
       const b = await runOnce();
       const gets = b.reqs.filter((r) => r.path.startsWith("/cdn/") && r.method === "GET").map((r) => r.path);
-      const bStats = b.stats as { imagesPendingIds?: number[] };
+      const bStats = b.stats as { imagesPendingIds?: number[]; imageVersionRaisedTo?: string };
+      const vAfterB = await imageVersion();
+      assert(vBeforeB !== null && vAfterB !== null && Number(vAfterB) > Number(vBeforeB) && bStats.imageVersionRaisedTo === vAfterB, `CR2 run B (1 overwritten, a BLOCKED run A before it left the version alone): raised ${vBeforeB} → ${vAfterB}`);
       assert(b.row.status === "OK" && b.stats.cardsChanged === 0 && gets.join() === `/cdn/${art}`, `CR2 run B: the card is unchanged by its row, yet its image is compared and downloaded (${b.row.status}, changed ${b.stats.cardsChanged}, GET ${gets.join(", ") || "none"})`);
       assert(b.stats.imagesOverwritten === 1 && readFileSync(join(uploadDest, art)).equals(fakeImage("pending-art-v3")) && bStats.imagesPendingIds === undefined, "CR2 run B: the bucket holds the new art (1 overwritten), nothing is pending any more");
       const c = await runOnce();

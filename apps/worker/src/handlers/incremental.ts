@@ -358,6 +358,10 @@ async function incremental(ctx: RunContext): Promise<RunOutcome> {
       if (step.failedRels.length > 0) ctx.log(`failed or skipped images: ${readLines(join(imgDir, "image_errors.log")).slice(0, 3).join("; ")}`);
       if (ctx.stats.imagesDownloaded > 0) {
         ctx.setProgress({ phase: "Uploading images" });
+        // From here on R2 may hold replaced card images (auto-image-version, design D3): the runner raises
+        // the stored card-image version when the run ends — whatever its outcome — because the upload
+        // started with verified overwrites. Set before the child, so a failed / cancelled upload counts.
+        if (ctx.stats.imagesOverwritten > 0) ctx.cardImagesMayBeReplaced = true;
         let up: Awaited<ReturnType<typeof runUpload>>;
         try {
           up = await runUpload(ctx, join(imgDir, "images"), work, (done, total) => ctx.setProgress({ phase: "Uploading images", done, total }));
@@ -374,7 +378,7 @@ async function incremental(ctx: RunContext): Promise<RunOutcome> {
         ctx.recordItems(buildSyncRunItems(found));
       }
       if (ctx.stats.imagesOverwritten > 0) {
-        ctx.log(`${ctx.stats.imagesOverwritten} card images were overwritten in the bucket — raise the web build's image version (DEFAULT_IMAGE_VERSION) and rebuild the web app so visitors see them`);
+        ctx.log(`${ctx.stats.imagesOverwritten} card images were overwritten in the bucket — the stored card-image version is raised automatically when this run ends, so visitors fetch the new images (no rebuild)`);
       }
     }
     recordOwedImages(ctx, owed);

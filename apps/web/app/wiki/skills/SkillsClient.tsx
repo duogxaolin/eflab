@@ -8,6 +8,7 @@ import { trpc } from "@/lib/trpc";
 import { QueryErrorState } from "@/lib/query-state";
 import { useDebouncedValue } from "@/lib/use-debounced-value";
 import { playerCardDynamicUrl } from "@/lib/r2-images";
+import { useImageVersion } from "@/lib/image-version";
 import { SectionHeader, type SectionTone } from "@/components/layout/SectionHeader";
 import { SKILL_GROUP_LABELS, compareSkills, skillDescription, skillLabel } from "@/lib/skill-labels";
 
@@ -143,6 +144,7 @@ function SkillTile({ skill, group }: { skill: SkillDTO; group: SkillGroup }) {
   const count = skill.playerCount;
   const countText = `${count.toLocaleString("en-US")} ${count === 1 ? "card" : "cards"}`;
   const leader = skill.leader;
+  const imageVersion = useImageVersion();
   // Named by its content, in the order shown (WCAG 2.5.3 Label in Name,
   // change a11y-names-and-card-league): "Momentum Dribbling Stat boost
   // Allows players … Top card: Lionel Messi 160 cards" — the skill name, the
@@ -169,7 +171,7 @@ function SkillTile({ skill, group }: { skill: SkillDTO; group: SkillGroup }) {
           <span className="skill-tile__leader" data-testid="skill-leader" data-card-id={leader.id}>
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
-              src={playerCardDynamicUrl(leader.id)}
+              src={playerCardDynamicUrl(leader.id, imageVersion)}
               alt=""
               width={16}
               height={22}

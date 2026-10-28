@@ -6,6 +6,7 @@ import type { CardPreview } from "@eflab/shared";
 import { playingStyleName } from "@eflab/shared";
 import { CARD_TYPE_COLOR_VAR, CARD_TYPE_LABEL, positionOf } from "@/lib/card-display";
 import { playerCardDynamicUrl, conditionUrl } from "@/lib/r2-images";
+import { useImageVersion } from "@/lib/image-version";
 import { useNearViewport } from "./useNearViewport";
 
 // efootbase-aligned card tile. The face is the single `cards/{id}_dynamic.webp`
@@ -103,7 +104,7 @@ export function PlayerCard({
   const cardColor = CARD_TYPE_COLOR_VAR[player.cardType];
 
   const pos = positionOf(player.registeredPosition);
-  const faceUrl = playerCardDynamicUrl(player.id);
+  const faceUrl = playerCardDynamicUrl(player.id, useImageVersion());
   // Condition letter: stored as "A"–"E" (seeded from the dump) or null.
   const condLetter =
     typeof player.condition === "string" && /^[a-eA-E]$/.test(player.condition)

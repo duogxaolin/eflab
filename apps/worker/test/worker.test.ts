@@ -18,7 +18,7 @@ import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
-import { REDACTION_MASK, SYNC_BLOCK_HOURS, SYNC_STALE_RUN_MS, makeRedactor, type SyncRunStats } from "@eflab/shared";
+import { REDACTION_MASK, SYNC_BLOCK_HOURS, SYNC_STALE_RUN_MS, isImageVersion, makeRedactor, type SyncRunStats } from "@eflab/shared";
 import { CHILD_KILL_GRACE_MS, runChild } from "../src/child.js";
 import {
   CANCEL_POLL_MS,
@@ -393,6 +393,37 @@ if ("skip" in scratch) {
     const db = (await prisma.$queryRaw<Array<{ db: string }>>`SELECT current_database() AS db`)[0]?.db;
     assert(db === SCRATCH, `connected to the scratch database (${db})`);
 
+    // ---- auto-image-version 1.3: migration 20261028120000_card_image_version on the scratch database ----
+    // `migrate deploy` applied it above; applied a second time it changes nothing, stores nothing, and the
+    // CHECK is the shared format ("Migration is additive and stores nothing", "Bad value refused").
+    {
+      const migration = readFileSync(join(DB_PACKAGE_DIR, "prisma", "migrations", "20261028120000_card_image_version", "migration.sql"), "utf8");
+      const column = async () =>
+        (await prisma.$queryRaw<Array<{ data_type: string; is_nullable: string }>>`SELECT data_type, is_nullable FROM information_schema.columns WHERE table_name = 'CatalogueMeta' AND column_name = 'imageVersion'`)[0];
+      const stored = async () => (await prisma.catalogueMeta.findUniqueOrThrow({ where: { id: 1 } })).imageVersion;
+      const first = await column();
+      assert(first?.data_type === "text" && first.is_nullable === "YES" && (await stored()) === null, "migration (migrate deploy): CatalogueMeta.imageVersion exists, nullable text, NULL on the row the earlier migration inserted");
+      const again = await executeScratchSql(scratch.url, migration);
+      const second = await column();
+      const checks = Number((await prisma.$queryRaw<Array<{ n: bigint }>>`SELECT count(*) AS n FROM pg_constraint WHERE conname = 'CatalogueMeta_image_version_format'`)[0]!.n);
+      assert(again.code === 0 && second?.data_type === "text" && checks === 1 && (await stored()) === null, `migration applied a second time: no error, the column and exactly one CHECK exist, the stored version is still NULL (exit ${again.code})`);
+      const refused = async (v: string) => {
+        try {
+          await prisma.catalogueMeta.update({ where: { id: 1 }, data: { imageVersion: v } });
+          return false;
+        } catch (e) {
+          return /CatalogueMeta_image_version_format|23514|check constraint/i.test((e as Error).message);
+        }
+      };
+      assert((await refused("2026-10-28")) && (await refused("2026102")) && (await refused("202610281307551")) && (await stored()) === null, "CHECK: 2026-10-28, a 7-digit and a 15-digit value are refused by the database (the row keeps NULL)");
+      await prisma.catalogueMeta.update({ where: { id: 1 }, data: { imageVersion: "202610281307" } });
+      const v12 = await stored();
+      await prisma.catalogueMeta.update({ where: { id: 1 }, data: { imageVersion: "20261028130755" } });
+      const v14 = await stored();
+      await prisma.catalogueMeta.update({ where: { id: 1 }, data: { imageVersion: null } });
+      assert(v12 === "202610281307" && v14 === "20261028130755" && isImageVersion(v12) && isImageVersion(v14) && (await stored()) === null, "CHECK: a 12-digit and a 14-digit value are accepted (then set back to NULL)");
+    }
+
     fake = await startFakeSource({ key: TEST_SECRETS.EFBASE_API_KEY });
     fake.setRows(generateRows(5, { cdnBase: fake.cdnBase, newestTimeAdded: NEWEST_SOURCE }));
     assert(isLoopbackHost(new URL(fake.apiBase).hostname), `fake source is on loopback (${new URL(fake.apiBase).host})`);
@@ -565,6 +596,39 @@ if ("skip" in scratch) {
       const c2 = await prisma.syncRun.findUniqueOrThrow({ where: { id: check2.id } });
       assert(f.status === "RUNNING" && r2.recovered.length === 0, "a RUNNING run with a 5-minute-old heartbeat is left alone");
       assert(r2.claim === "busy" && c2.status === "QUEUED", "…and the next queued run waits (claim = busy)");
+
+      // auto-image-version "Worker killed during the upload": a dead run whose last progress showed
+      // overwritten images in its upload phase (or the catalogue write after it) raises the stored
+      // version in the recovery transaction and records it; one in the image phase, or without
+      // overwrites, does not.
+      for (const [phase, overwritten, expectRaise] of [
+        ["Uploading images", 7, true],
+        ["Downloading images", 3, false],
+        ["Writing the catalogue", 2, true],
+        ["Uploading images", 0, false],
+      ] as const) {
+        await reset();
+        await prisma.catalogueMeta.update({ where: { id: 1 }, data: { imageVersion: "202610281300" } });
+        const t = Date.now();
+        const progress = { phase, done: 3, total: 10, counters: { cardsNew: 2, imagesOverwritten: overwritten }, updatedAt: new Date(t - SYNC_STALE_RUN_MS - 60_000).toISOString() };
+        const dead = await prisma.syncRun.create({
+          data: { kind: "INCREMENTAL", trigger: "SCHEDULE", status: "RUNNING", queuedAt: new Date(t - 3600_000), startedAt: new Date(t - 3600_000), heartbeatAt: new Date(t - SYNC_STALE_RUN_MS - 60_000), progress, stats: { cardsNew: 2, imagesOverwritten: overwritten }, logTail: "line one\n" },
+        });
+        const rec = await runner.recoverStaleRuns(deps());
+        const d = await prisma.syncRun.findUniqueOrThrow({ where: { id: dead.id } });
+        const meta = await prisma.catalogueMeta.findUniqueOrThrow({ where: { id: 1 } });
+        const st = d.stats as { imageVersionRaisedTo?: string; cardsNew?: number; imagesOverwritten?: number };
+        const base = rec.join() === String(dead.id) && d.status === "FAILED" && d.error === "worker restarted" && d.progress === null && st.cardsNew === 2 && st.imagesOverwritten === overwritten;
+        if (expectRaise) {
+          assert(
+            base && meta.imageVersion !== null && Number(meta.imageVersion) > 202610281300 && st.imageVersionRaisedTo === meta.imageVersion && d.logTail.startsWith("line one\n") && d.logTail.includes(`image version raised to ${meta.imageVersion}`) && d.logTail.includes(`${overwritten} overwritten`),
+            `stale run in phase "${phase}" with ${overwritten} overwritten → recovered FAILED and the version raised to ${meta.imageVersion} (recorded in its stats and log, other stats kept)`,
+          );
+        } else {
+          assert(base && meta.imageVersion === "202610281300" && st.imageVersionRaisedTo === undefined && !d.logTail.includes("image version raised"), `stale run in phase "${phase}" with ${overwritten} overwritten → recovered FAILED, the version untouched (${meta.imageVersion})`);
+        }
+      }
+      await prisma.catalogueMeta.update({ where: { id: 1 }, data: { imageVersion: null } });
     }
 
     // ---- 5.1 claim exclusion (database-enforced) ----
@@ -731,6 +795,103 @@ if ("skip" in scratch) {
       await queue("INCREMENTAL");
       await runner.tick(deps({ handlers }));
       assert(threw !== null && /checkpoint/.test(threw), `S4: ctx.checkpoint() throws when its RUNNING row was not updated (${threw ?? "did not throw"})`);
+
+      // auto-image-version: the runner's final transaction raises the stored version only for a run that
+      // started its upload with overwrites (`ctx.cardImagesMayBeReplaced`) — whatever its outcome —, in
+      // the same transaction as its final state, never when the guarded update matches no row.
+      const metaVersion = async () => (await prisma.catalogueMeta.findUniqueOrThrow({ where: { id: 1 } })).imageVersion;
+      type Ctx2 = import("../src/runner.js").RunContext;
+      const flagged = (outcome: import("../src/runner.js").RunOutcome, flag: boolean, overwritten: number): RunHandlers => ({
+        ...defaultHandlers,
+        INCREMENTAL: async (ctx: Ctx2) => {
+          ctx.stats.imagesOverwritten = overwritten;
+          ctx.stats.imagesUploaded = flag ? overwritten : 0;
+          if (flag) ctx.cardImagesMayBeReplaced = true;
+          return outcome;
+        },
+      });
+      for (const [label, outcome, flag, overwritten, expectRaise] of [
+        ["OK after an upload with 19 overwrites", { status: "OK" }, true, 19, true],
+        ["FAILED after the upload started with 5 overwrites", { status: "FAILED", error: "upload step failed" }, true, 5, true],
+        ["OK with 41 images uploaded and 0 overwritten", { status: "OK" }, true, 0, false],
+        ["FAILED before the upload with 5 overwrites counted", { status: "FAILED", error: "image step failed" }, false, 5, false],
+      ] as const) {
+        await reset();
+        await prisma.catalogueMeta.update({ where: { id: 1 }, data: { imageVersion: "202610281300" } });
+        const run = await queue("INCREMENTAL");
+        await runner.tick(deps({ handlers: flagged(outcome, flag && overwritten > 0, overwritten) }));
+        const row = await prisma.syncRun.findUniqueOrThrow({ where: { id: run.id } });
+        const v = await metaVersion();
+        const st = row.stats as { imageVersionRaisedTo?: string; imagesOverwritten?: number };
+        if (expectRaise) {
+          assert(
+            row.status === outcome.status && v !== null && Number(v) > 202610281300 && st.imageVersionRaisedTo === v && st.imagesOverwritten === overwritten && row.logTail.includes(`image version raised to ${v}`) && row.progress === null,
+            `${label}: ${row.status}, the version raised to ${v} and recorded in the run's stats and log (the same transaction as its final state)`,
+          );
+        } else {
+          assert(row.status === outcome.status && v === "202610281300" && st.imageVersionRaisedTo === undefined && !row.logTail.includes("image version raised"), `${label}: ${row.status}, the version untouched (${v})`);
+        }
+      }
+      // the guarded final update matches no row (the run was taken away) → no raise
+      await reset();
+      await prisma.catalogueMeta.update({ where: { id: 1 }, data: { imageVersion: "202610281300" } });
+      const gone: RunHandlers = {
+        ...defaultHandlers,
+        INCREMENTAL: async (ctx) => {
+          await prisma.syncRun.update({ where: { id: ctx.run.id }, data: { status: "FAILED", finishedAt: new Date(), error: "taken away" } });
+          ctx.stats.imagesOverwritten = 3;
+          ctx.cardImagesMayBeReplaced = true;
+          return { status: "OK" };
+        },
+      };
+      const g = await queue("INCREMENTAL");
+      await runner.tick(deps({ handlers: gone }));
+      const gr = await prisma.syncRun.findUniqueOrThrow({ where: { id: g.id } });
+      assert(gr.status === "FAILED" && gr.error === "taken away" && (await metaVersion()) === "202610281300" && (gr.stats as { imageVersionRaisedTo?: string }).imageVersionRaisedTo === undefined, "a run whose guarded final update matches no row raises nothing (the stored version and the row are unchanged)");
+      await prisma.catalogueMeta.update({ where: { id: 1 }, data: { imageVersion: null } });
+
+      // The row lock (`FOR UPDATE` on CatalogueMeta id 1): a concurrent raiser that holds the lock while the
+      // runner's final transaction arrives. Deterministic: another session locks the row first, the runner
+      // is held until it is seen waiting on that lock, then the holder writes its own value and commits —
+      // the runner must then read the committed value and store it + 1 (two raises, both counted). Without
+      // the lock the runner would read NULL before the holder's write, compute the clock value and overwrite
+      // the holder's value (a lost update; checked by running this with ` FOR UPDATE` removed).
+      {
+        await reset();
+        let locked!: () => void;
+        let release!: () => void;
+        const isLocked = new Promise<void>((r) => (locked = r));
+        const released = new Promise<void>((r) => (release = r));
+        const HOLDER_VALUE = "209912312359"; // ahead of any clock: the runner's result is unambiguous (+1)
+        const holder = prisma.$transaction(
+          async (tx) => {
+            await tx.$queryRaw`SELECT "imageVersion" FROM "CatalogueMeta" WHERE id = 1 FOR UPDATE`;
+            locked();
+            await released;
+            await tx.catalogueMeta.update({ where: { id: 1 }, data: { imageVersion: HOLDER_VALUE } });
+          },
+          { timeout: 120_000, maxWait: 10_000 },
+        );
+        await isLocked;
+        const run = await queue("INCREMENTAL");
+        const p = runner.tick(deps({ handlers: flagged({ status: "OK" }, true, 4) }));
+        let waiting = 0;
+        for (let i = 0; i < 1200 && waiting === 0; i++) {
+          await sleep(50);
+          waiting = Number((await prisma.$queryRaw<Array<{ n: bigint }>>`SELECT count(*) AS n FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'`)[0]!.n);
+        }
+        assert(waiting > 0, "row lock: the runner's final transaction waits on the CatalogueMeta row another session holds");
+        release();
+        await holder;
+        await p;
+        const row = await prisma.syncRun.findUniqueOrThrow({ where: { id: run.id } });
+        const v = await metaVersion();
+        assert(
+          row.status === "OK" && v === "209912312360" && (row.stats as { imageVersionRaisedTo?: string }).imageVersionRaisedTo === v,
+          `row lock: after the holder committed ${HOLDER_VALUE}, the runner read it under the lock and stored ${v} (= holder + 1, nothing lost; recorded on the run)`,
+        );
+        await prisma.catalogueMeta.update({ where: { id: 1 }, data: { imageVersion: null } });
+      }
 
       // S6: a stopping worker claims nothing
       await reset();

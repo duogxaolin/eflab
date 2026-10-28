@@ -28,6 +28,19 @@
 // the final transaction, which also clears the progress. Stale recovery clears
 // the progress and keeps the items. Nothing here changes the order of a run's
 // steps or the cancel-versus-commit rules below.
+//
+// The card-image cache version (openspec change auto-image-version, design D3
+// / D4): a run that started its upload step with overwritten card images
+// (`ctx.cardImagesMayBeReplaced`, set by the handlers right before the upload)
+// raises CatalogueMeta.imageVersion in the SAME transaction that records its
+// final state — after the upload child has ended, whatever the outcome (OK,
+// FAILED or CANCELLED once the upload began: R2 may already hold replacements),
+// the current value read FOR UPDATE, `nextImageVersion` strictly increasing,
+// the value recorded as `stats.imageVersionRaisedTo` and logged; skipped with
+// the rest when the guarded run update matches no row. A run that never
+// started uploading changes nothing. Stale recovery does the same for a dead
+// run whose last progress showed overwrites in the upload phase (or in the
+// catalogue write that follows it).
 
 import { Prisma, type PrismaClientType } from "@eflab/db";
 import {
@@ -36,7 +49,9 @@ import {
   blockedUntilAfter,
   dueRuns,
   isBlocked,
+  isImageVersion,
   isStaleRun,
+  nextImageVersion,
   syncRunStatsSchema,
   type ScheduleConfig,
   type ScheduleRun,
@@ -94,6 +109,13 @@ export interface RunContext {
   stats: SyncRunStats;
   watermarkBefore: Date | null;
   watermarkAfter: Date | null;
+  /**
+   * Set by a handler immediately before it starts the upload step, only when
+   * `stats.imagesOverwritten > 0`: from then on R2 may hold replaced card
+   * images, so the runner raises the stored card-image version when the run
+   * ends — whatever its outcome (auto-image-version, design D3). Never reset.
+   */
+  cardImagesMayBeReplaced: boolean;
   /** Appends one line to the run's log tail (redacted, ≤ 64 KB kept). */
   log(line: string): void;
   /**
@@ -166,31 +188,92 @@ export function isUniqueViolation(e: unknown): boolean {
   return e instanceof Error && /SyncRun_one_running|23505/.test(e.message);
 }
 
+// ---- The card-image version (auto-image-version, design D3 / D4) ----
+
+/** Phases in which a run has started replacing card images on R2 (the upload, and the catalogue write after it). */
+const IMAGE_REPLACING_PHASES: readonly SyncPhase[] = ["Uploading images", "Writing the catalogue"];
+
+/**
+ * The stored card-image version, read under a row lock (`FOR UPDATE` on the
+ * single CatalogueMeta row, held until the transaction commits): null when the
+ * row is missing or holds no version. The lock serialises two raisers (the
+ * runner's final transaction and the stale recovery never overlap in one
+ * worker, but a second worker or a hand-run SQL might).
+ */
+async function lockedImageVersion(tx: Prisma.TransactionClient): Promise<string | null> {
+  const rows = await tx.$queryRaw<Array<{ imageVersion: string | null }>>`SELECT "imageVersion" FROM "CatalogueMeta" WHERE id = 1 FOR UPDATE`;
+  const v = rows[0]?.imageVersion ?? null;
+  return isImageVersion(v) ? v : null;
+}
+
+/** Stores the version on the single row (typed write; upsert-safe when the row is missing — the migration inserted it, a restore might not). */
+async function storeImageVersion(tx: Prisma.TransactionClient, version: string): Promise<void> {
+  await tx.catalogueMeta.upsert({ where: { id: 1 }, create: { id: 1, imageVersion: version }, update: { imageVersion: version } });
+}
+
+/** `stats` with `imageVersionRaisedTo` added — only when the result still validates (else the stats stay as they were). */
+function statsWithRaisedVersion(stats: Prisma.JsonValue | null, version: string): Prisma.InputJsonObject | undefined {
+  const base = stats && typeof stats === "object" && !Array.isArray(stats) ? stats : {};
+  const parsed = syncRunStatsSchema.safeParse({ ...base, imageVersionRaisedTo: version });
+  return parsed.success ? (parsed.data as Prisma.InputJsonObject) : undefined;
+}
+
+/** The run's stale progress says it was replacing card images: overwrites counted, and in the upload phase or the catalogue write after it. */
+function staleProgressReplacedImages(progress: Prisma.JsonValue | null): { phase: SyncPhase; overwritten: number } | null {
+  const parsed = syncRunProgressSchema.safeParse(progress);
+  if (!parsed.success) return null;
+  const overwritten = parsed.data.counters.imagesOverwritten ?? 0;
+  return overwritten > 0 && IMAGE_REPLACING_PHASES.includes(parsed.data.phase) ? { phase: parsed.data.phase, overwritten } : null;
+}
+
 // ---- Heartbeat, recovery, cancel of queued runs ----
 
 export async function writeWorkerHeartbeat(deps: WorkerDeps): Promise<void> {
   await deps.db.syncConfig.update({ where: { id: 1 }, data: { workerHeartbeatAt: nowOf(deps) } });
 }
 
-/** RUNNING runs with no heartbeat for 10 minutes → FAILED "worker restarted". Returns their ids. */
+/**
+ * RUNNING runs with no heartbeat for 10 minutes → FAILED "worker restarted".
+ * Returns their ids. A dead run whose last progress write showed overwritten
+ * card images in its upload phase (or the catalogue write after it) had
+ * started replacing bucket objects: the recovery transaction also raises the
+ * stored card-image version (auto-image-version, design D3), records it on the
+ * run (`stats.imageVersionRaisedTo`, a log line) and only when its guarded
+ * update matched. Not covered: a death before the upload phase's first
+ * progress write (≤ 10 s) — docs/admin-sync.md gives the SQL to raise by hand.
+ */
 export async function recoverStaleRuns(deps: WorkerDeps): Promise<number[]> {
   const now = nowOf(deps);
   const running = await deps.db.syncRun.findMany({
     where: { status: "RUNNING" },
-    select: { id: true, heartbeatAt: true, startedAt: true, queuedAt: true },
+    select: { id: true, heartbeatAt: true, startedAt: true, queuedAt: true, progress: true, stats: true, logTail: true },
   });
   const recovered: number[] = [];
   for (const r of running) {
     if (!isStaleRun(r, now)) continue;
+    const replaced = staleProgressReplacedImages(r.progress);
     // Conditional on the heartbeat we read: a run that just wrote one is left alone. The live progress
     // goes with the run; its items record stays (written before its catalogue write — admin-sync-live-progress).
-    const res = await deps.db.syncRun.updateMany({
-      where: { id: r.id, status: "RUNNING", heartbeatAt: r.heartbeatAt },
-      data: { status: "FAILED", error: "worker restarted", finishedAt: now, progress: Prisma.DbNull },
+    const { count, raisedTo } = await deps.db.$transaction(async (tx) => {
+      let next: string | null = null;
+      let extra: { stats?: Prisma.InputJsonObject; logTail?: string } = {};
+      if (replaced) {
+        next = nextImageVersion(now, await lockedImageVersion(tx));
+        const tail = new LogTail(SYNC_LOG_TAIL_MAX_BYTES, deps.env.redact);
+        for (const line of r.logTail.split("\n")) if (line !== "") tail.push(line);
+        tail.push(`${now.toISOString()} image version raised to ${next} (recovered run: its last progress showed ${replaced.overwritten} overwritten card images in phase "${replaced.phase}")`);
+        extra = { stats: statsWithRaisedVersion(r.stats, next), logTail: tail.toString() };
+      }
+      const res = await tx.syncRun.updateMany({
+        where: { id: r.id, status: "RUNNING", heartbeatAt: r.heartbeatAt },
+        data: { status: "FAILED", error: "worker restarted", finishedAt: now, progress: Prisma.DbNull, ...extra },
+      });
+      if (res.count === 1 && next !== null) await storeImageVersion(tx, next);
+      return { count: res.count, raisedTo: res.count === 1 ? next : null };
     });
-    if (res.count === 1) {
+    if (count === 1) {
       recovered.push(r.id);
-      say(deps, `run ${r.id}: no heartbeat for 10 minutes → FAILED (worker restarted)`);
+      say(deps, `run ${r.id}: no heartbeat for 10 minutes → FAILED (worker restarted)${raisedTo ? `; image version raised to ${raisedTo}` : ""}`);
     }
   }
   return recovered;
@@ -384,6 +467,7 @@ export async function executeRun(deps: WorkerDeps, run: ClaimedRun): Promise<Exe
     stats: {},
     watermarkBefore: null,
     watermarkAfter: null,
+    cardImagesMayBeReplaced: false,
     log: (line) => tail.push(`${stamp()} ${line}`),
     writeCatalogue: async (what, fn, wopts) => {
       if (signal.aborted) throw new Error(`${what}: not started (run aborted)`);
@@ -600,11 +684,23 @@ export async function executeRun(deps: WorkerDeps, run: ClaimedRun): Promise<Exe
   }
   ctx.log(`run ${run.id} ended ${status}${error ? `: ${error}` : ""}`);
 
-  const statsJson = (stats.success ? stats.data : {}) as Prisma.InputJsonObject;
+  const finalStats = (stats.success ? stats.data : {}) as SyncRunStats;
   // Validated (and possibly logged) before the log tail is taken for the final write.
   const finalItems = itemsJson();
+  let raisedTo: string | null = null;
   await db.$transaction(async (tx) => {
-    await tx.syncRun.updateMany({
+    // The card-image version (design D3): the run started its upload step with overwritten images, so
+    // R2 may hold replacements now that the upload child has ended — whatever the outcome. The current
+    // value is read under the row lock, the next one computed (strictly greater) and written below only
+    // when the guarded run update matched; the stats JSON and the log tail are built here so the run
+    // records the value it set (design D4).
+    let next: string | null = null;
+    if (ctx.cardImagesMayBeReplaced) {
+      next = nextImageVersion(finishedAt, await lockedImageVersion(tx));
+      ctx.log(`image version raised to ${next} (${ctx.stats.imagesOverwritten ?? 0} card images replaced on R2 — visitors fetch the new ones without a rebuild)`);
+    }
+    const statsJson = (next === null ? finalStats : (statsWithRaisedVersion(finalStats as Prisma.JsonObject, next) ?? finalStats)) as Prisma.InputJsonObject;
+    const res = await tx.syncRun.updateMany({
       where: { id: run.id, status: "RUNNING" },
       data: {
         status,
@@ -620,11 +716,16 @@ export async function executeRun(deps: WorkerDeps, run: ClaimedRun): Promise<Exe
         ...(finalItems ? { items: finalItems } : {}),
       },
     });
+    // Skipped with the rest when the run is no longer RUNNING (nothing of this run was recorded).
+    if (res.count === 1 && next !== null) {
+      await storeImageVersion(tx, next);
+      raisedTo = next;
+    }
     if (blockedUntil) {
       await tx.syncConfig.update({ where: { id: 1 }, data: { blockedUntil, blockedReason: blockedReason!.slice(0, 500) } });
     }
   });
-  say(deps, `run ${run.id} ${run.kind} → ${status}${error ? ` (${error})` : ""}`);
+  say(deps, `run ${run.id} ${run.kind} → ${status}${error ? ` (${error})` : ""}${raisedTo ? `; image version raised to ${raisedTo}` : ""}`);
   return { id: run.id, kind: run.kind, status, error };
 }
 

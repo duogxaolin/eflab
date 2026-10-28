@@ -333,6 +333,18 @@ if [ "$(sql "SELECT (to_regclass('public.\"CatalogueMeta\"') IS NOT NULL
 else
   echo "!!! schema: migration 20261024000000_catalogue_data_refresh NOT applied — the checks that read its columns are SKIPPED (see the summary)"
 fi
+# Migration 20261028120000_card_image_version (change auto-image-version): the
+# stored card-image version `catalogue.meta` serves next to the dump date. Without
+# the column the procedure cannot answer at all, so its check is SKIPPED (loudly).
+IMG_MIGRATED="no"
+IMAGE_VERSION_SQL=""
+if [ "$MIGRATED" = "yes" ] && [ "$(sql "SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'CatalogueMeta' AND column_name = 'imageVersion')::text")" = "true" ]; then
+  IMG_MIGRATED="yes"
+  IMAGE_VERSION_SQL="$(sql "SELECT coalesce(\"imageVersion\", '') FROM \"CatalogueMeta\" WHERE id = 1")"
+  echo "schema: migration 20261028120000_card_image_version applied — stored card-image version: ${IMAGE_VERSION_SQL:-none (fallback in use)}"
+else
+  echo "!!! schema: migration 20261028120000_card_image_version NOT applied — the catalogue.meta check is SKIPPED (see the summary)"
+fi
 # not_ready <check> <reason>: SKIPPED for the schema state, or FAILED when the
 # refresh is required (SMOKE_REQUIRE_REFRESH=1) or the state is unknown (no SQL).
 not_ready() {
@@ -347,6 +359,12 @@ not_ready() {
 needs_migration() {
   [ "$MIGRATED" = "yes" ] && return 0
   not_ready "$1" "the database lacks migration 20261024000000_catalogue_data_refresh (Player.leagueId, Manager.pickerOrder, CatalogueMeta)"
+  return 1
+}
+needs_image_version() {
+  needs_migration "$1" || return 1
+  [ "$IMG_MIGRATED" = "yes" ] && return 0
+  not_ready "$1" "the database lacks migration 20261028120000_card_image_version (CatalogueMeta.imageVersion)"
   return 1
 }
 needs_card_leagues() {
@@ -1173,14 +1191,25 @@ else
 fi
 
 # 5j. The dump date (catalogue-data-refresh "Stored Dump Date"): catalogue.meta
-#     answers the stored CatalogueMeta.playersDumpedAt (ISO UTC) or null.
-if needs_migration "catalogue.meta = the stored dump date"; then
+#     answers the stored CatalogueMeta.playersDumpedAt (ISO UTC) or null — and,
+#     since change auto-image-version ("Public Catalogue Meta Exposes The
+#     Version"), the stored card-image version or null (nothing stored: the web
+#     app's fallback is in use). Both read the same row, which the procedure
+#     cannot select without the second migration.
+if needs_image_version "catalogue.meta = the stored dump date and card-image version"; then
   trpc_get "catalogue.meta" '{}'
   CM="$(result 'd["playersDumpedAt"] or ""')"
+  IV="$(result 'd["imageVersion"] or ""')"
+  IV_SHAPE="$(result 'sorted(d.keys()) == ["imageVersion", "playersDumpedAt"] and (d["imageVersion"] is None or __import__("re").fullmatch(r"[0-9]{8,14}", d["imageVersion"]) is not None)')"
   if [ "$CODE" = "200" ] && [ "$CM" = "$DUMP_DATE" ] && { [ -n "$CM" ] || [ "${SMOKE_REQUIRE_REFRESH:-}" != "1" ]; }; then
     pass "catalogue.meta → playersDumpedAt ${CM:-null} = CatalogueMeta (SQL)"
   else
     fail "catalogue.meta = the stored dump date" "api='$CM' sql='$DUMP_DATE' code=$CODE body=${BODY:0:160}"
+  fi
+  if [ "$CODE" = "200" ] && [ "$IV" = "$IMAGE_VERSION_SQL" ] && [ "$IV_SHAPE" = "True" ]; then
+    pass "catalogue.meta → imageVersion ${IV:-null} = CatalogueMeta.imageVersion (SQL; null = nothing stored, the web app's fallback), 8–14 digits when set, no other field"
+  else
+    fail "catalogue.meta = the stored card-image version" "api='$IV' sql='$IMAGE_VERSION_SQL' shape=$IV_SHAPE code=$CODE body=${BODY:0:160}"
   fi
 fi
 trpc_get "skill.list" '{}'
@@ -2098,7 +2127,10 @@ print("%d|%s|%s" % (len(ids), ids == sorted(set(ids), reverse=True), times == so
 
   # -- 14. dashboard ------------------------------------------------------------
   admin_req GET admin.dashboard - -H @"$C1"
-  local dash; dash="$(ares '"%s|%s|%s|%s|%s|%s|%s|%s" % (d["workerOnline"], d["lastRun"]["id"], d["activeRuns"], d["overwrittenImages"]["runId"], d["overwrittenImages"]["count"], d["newestCard"], d["config"]["updatedBy"], bool(d["next"]["incremental"] and d["next"]["full"]))')"
+  # auto-image-version: the dashboard carries the card-image version (the stored value, null here — the
+  # migration stores nothing — and the latest run that replaced images, with no raised value for a run
+  # from before the raise existed) as information; the old `overwrittenImages` warning field is gone.
+  local dash; dash="$(ares '"%s|%s|%s|%s|%s|%s|%s|%s|%s|%s" % (d["workerOnline"], d["lastRun"]["id"], d["activeRuns"], d["imageVersion"]["lastReplacingRun"]["runId"], d["imageVersion"]["lastReplacingRun"]["count"], d["imageVersion"]["lastReplacingRun"]["raisedTo"], d["imageVersion"]["current"], d["newestCard"], d["config"]["updatedBy"], bool(d["next"]["incremental"] and d["next"]["full"]) and "overwrittenImages" not in d)')"
   pg_scratch -c "UPDATE \"SyncConfig\" SET \"workerHeartbeatAt\" = now() AT TIME ZONE 'UTC'" >/dev/null 2>&1
   admin_req GET admin.dashboard - -H @"$C1"
   local online_now; online_now="$(ares 'd["workerOnline"]')"
@@ -2110,11 +2142,43 @@ print("%d|%s|%s" % (len(ids), ids == sorted(set(ids), reverse=True), times == so
   admin_req GET admin.dashboard - -H @"$C1"
   local active_ids; active_ids="$(ares '",".join(str(r["id"]) for r in d["activeRuns"])')"
   admin_req POST admin.runs.cancel "{\"id\":${check4_id:-0}}" -H @"$C1" "${CSRF[@]}"
-  if [ "$dash" = "False|${over_id}|[]|${over_id}|12|None|$admin_user|True" ] && [ "$online_now" = "True" ] && [ "$online_stale" = "False" ] \
+  if [ "$dash" = "False|${over_id}|[]|${over_id}|12|None|None|None|$admin_user|True" ] && [ "$online_now" = "True" ] && [ "$online_stale" = "False" ] \
     && [ -n "$check4_id" ] && [ "$active_ids" = "$check4_id" ]; then
-    apass "dashboard → worker offline without heartbeat / online at 0 s / offline at 3 min; last run, active runs, next runs, 12 overwritten images (run #$over_id), empty catalogue → no newest card"
+    apass "dashboard → worker offline without heartbeat / online at 0 s / offline at 3 min; last run, active runs, next runs, the last replacing run #$over_id (12 images, no raised value — a pre-raise run), no stored image version (fallback), empty catalogue → no newest card"
   else
     afail "dashboard" "dash=$dash online_now=$online_now stale=$online_stale active=$active_ids (check $check4_id)"
+  fi
+
+  # -- 14c. the card-image version (auto-image-version): catalogue.meta on this API (the scratch
+  #         database, so the value can be changed between calls), the dashboard's read-only fact with the
+  #         run that raised it, runs.get passing imageVersionRaisedTo through, the CHECK refusing a bad
+  #         value, and null again once nothing is stored --------------------------------------------
+  admin_req GET catalogue.meta - -H @"$C1"
+  local iv0; iv0="$(ares '"%s|%s" % (d["imageVersion"], sorted(d.keys()))')"
+  pg_scratch -c "UPDATE \"CatalogueMeta\" SET \"imageVersion\" = '202610281307' WHERE id = 1" >/dev/null 2>&1
+  local raised_id; raised_id="$(pg_scratch -c "INSERT INTO \"SyncRun\" (\"kind\", \"trigger\", \"status\", \"queuedAt\", \"startedAt\", \"finishedAt\", \"stats\")
+    VALUES ('INCREMENTAL', 'SCHEDULE', 'OK', (now() AT TIME ZONE 'UTC') + interval '1 hour', (now() AT TIME ZONE 'UTC') + interval '1 hour', (now() AT TIME ZONE 'UTC') + interval '1 hour',
+            '{\"pages\": 1, \"requests\": 6, \"cardsNew\": 0, \"cardsChanged\": 2, \"cardsUnchanged\": 5, \"imagesDownloaded\": 2, \"imagesUploaded\": 2, \"imagesOverwritten\": 2, \"imagesFailed\": 0, \"durationMs\": 9000, \"imageVersionRaisedTo\": \"202610281307\"}') RETURNING id")"
+  admin_req GET catalogue.meta - -H @"$C1"
+  local iv1; iv1="$(ares 'd["imageVersion"]')"
+  admin_req GET admin.dashboard - -H @"$C1"
+  local dash_iv; dash_iv="$(ares '"%s|%s|%s|%s" % (d["imageVersion"]["current"], d["imageVersion"]["lastReplacingRun"]["runId"], d["imageVersion"]["lastReplacingRun"]["count"], d["imageVersion"]["lastReplacingRun"]["raisedTo"])')"
+  admin_req GET admin.runs.get "{\"id\":${raised_id:-0}}" -H @"$C1"
+  local g_raised; g_raised="$(ares '"%s|%s|%s" % (d["stats"].get("imageVersionRaisedTo"), d["stats"].get("imagesOverwritten"), d["statsInvalid"])')"
+  local bad_write="accepted"
+  pg_scratch -c "UPDATE \"CatalogueMeta\" SET \"imageVersion\" = '2026-10-28' WHERE id = 1" >/dev/null 2>&1 || bad_write="refused"
+  admin_req GET catalogue.meta - -H @"$C1"
+  local iv_after_bad; iv_after_bad="$(ares 'd["imageVersion"]')"
+  pg_scratch -c "UPDATE \"CatalogueMeta\" SET \"imageVersion\" = NULL WHERE id = 1" >/dev/null 2>&1
+  admin_req GET catalogue.meta - -H @"$C1"
+  local iv2; iv2="$(ares 'd["imageVersion"]')"
+  admin_req GET admin.dashboard - -H @"$C1"
+  local dash_iv2; dash_iv2="$(ares '"%s|%s" % (d["imageVersion"]["current"], d["imageVersion"]["lastReplacingRun"]["runId"])')"
+  if [ "$iv0" = "None|['imageVersion', 'playersDumpedAt']" ] && [ "$iv1" = "202610281307" ] && [ -n "$raised_id" ] && [ "$dash_iv" = "202610281307|${raised_id}|2|202610281307" ] \
+    && [ "$g_raised" = "202610281307|2|False" ] && [ "$bad_write" = "refused" ] && [ "$iv_after_bad" = "202610281307" ] && [ "$iv2" = "None" ] && [ "$dash_iv2" = "None|${raised_id}" ]; then
+    apass "card-image version: catalogue.meta null → 202610281307 once stored → null again (changed between calls, no restart); dashboard → current 202610281307 and run #$raised_id (2 replaced, raised to 202610281307) as information; runs.get passes imageVersionRaisedTo; the CHECK refuses '2026-10-28'"
+  else
+    afail "card-image version (catalogue.meta / dashboard / runs.get / CHECK)" "meta0=$iv0 meta1=$iv1 dash=$dash_iv get=$g_raised bad=$bad_write after_bad=$iv_after_bad meta2=$iv2 dash2=$dash_iv2 (run $raised_id)"
   fi
 
   # -- 14b. live progress and the downloaded-items record (admin-sync-live-progress) --
@@ -2499,7 +2563,7 @@ run_admin_checks
 
 # ---------------------------------------------------------------------------
 echo ""
-echo "Smoke summary: $PASS passed, $FAIL failed, $SKIP skipped (api: $API; SQL: ${SQL_DB:-none}; migration 20261024000000_catalogue_data_refresh: $MIGRATED${SMOKE_REQUIRE_REFRESH:+; SMOKE_REQUIRE_REFRESH=$SMOKE_REQUIRE_REFRESH})"
+echo "Smoke summary: $PASS passed, $FAIL failed, $SKIP skipped (api: $API; SQL: ${SQL_DB:-none}; migration 20261024000000_catalogue_data_refresh: $MIGRATED; migration 20261028120000_card_image_version: $IMG_MIGRATED${SMOKE_REQUIRE_REFRESH:+; SMOKE_REQUIRE_REFRESH=$SMOKE_REQUIRE_REFRESH})"
 if [ "$SKIP" -gt 0 ]; then
   echo "Skipped (not counted as passed — they run once the database has the migration / the seeded columns):"
   for n in "${SKIPPED_NAMES[@]}"; do echo "  ○ $n"; done

@@ -49,6 +49,7 @@ import {
   SYNC_KINDS,
   adminSignInInput,
   isBlocked,
+  isImageVersion,
   isWorkerOnline,
   nextScheduledRuns,
   publicRunStats,
@@ -532,13 +533,15 @@ export const adminRouter = router({
    * the order the worker takes them; the next scheduled times
    * (`nextScheduledRuns`, fed every active run plus the latest-starting
    * incremental and full run — the history `dueRuns` reads); the newest card in
-   * the database; the latest finished run that overwrote card images.
+   * the database; the stored card-image version and the latest finished run
+   * that replaced card images on R2 (information — the worker raised the
+   * version itself; change auto-image-version, design D5 / D7).
    */
   dashboard: adminProcedure.query(async ({ ctx }): Promise<SyncDashboardDTO> => {
     const now = new Date();
     const warn = warnerFor(ctx.req.log);
     const finishedOrder = [{ finishedAt: { sort: "desc", nulls: "last" } }, { id: "desc" }] satisfies Prisma.SyncRunOrderByWithRelationInput[];
-    const [config, active, lastFinished, latestSyncStarts, newest, overwritten] = await Promise.all([
+    const [config, active, lastFinished, latestSyncStarts, newest, replacing, catalogueMeta] = await Promise.all([
       readConfig(),
       prisma.syncRun.findMany({ where: { status: { in: ACTIVE } }, orderBy: { id: "asc" }, select: runSummarySelect }),
       prisma.syncRun.findFirst({ where: { status: { notIn: ACTIVE } }, orderBy: finishedOrder, select: runSummarySelect }),
@@ -558,6 +561,7 @@ export const adminRouter = router({
         orderBy: finishedOrder,
         select: { id: true, stats: true, finishedAt: true },
       }),
+      prisma.catalogueMeta.findUnique({ where: { id: 1 }, select: { imageVersion: true } }),
     ]);
 
     const scheduleRuns: ScheduleRun[] = [
@@ -576,19 +580,23 @@ export const adminRouter = router({
       now,
     );
 
-    // The overwritten count is read through the shared schema's own field
-    // (a row whose other statistics are invalid still reports a valid count).
-    let overwrittenImages: SyncDashboardDTO["overwrittenImages"] = null;
-    if (overwritten) {
-      const raw = overwritten.stats;
-      const field = raw && typeof raw === "object" && !Array.isArray(raw) ? raw.imagesOverwritten : undefined;
-      const count = syncRunStatsSchema.shape.imagesOverwritten.safeParse(field);
+    // The latest run that replaced card images, read through the shared schema's own fields (a row whose
+    // other statistics are invalid still reports a valid count); `raisedTo` is null for a run from before
+    // the worker raised the version itself (or one that failed before its upload started).
+    let lastReplacingRun: SyncDashboardDTO["imageVersion"]["lastReplacingRun"] = null;
+    if (replacing) {
+      const raw = replacing.stats;
+      const fields = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
+      const count = syncRunStatsSchema.shape.imagesOverwritten.safeParse(fields.imagesOverwritten);
+      const raised = syncRunStatsSchema.shape.imageVersionRaisedTo.safeParse(fields.imageVersionRaisedTo);
       if (count.success && count.data !== undefined && count.data > 0) {
-        overwrittenImages = { runId: overwritten.id, count: count.data, finishedAt: iso(overwritten.finishedAt) };
+        lastReplacingRun = { runId: replacing.id, count: count.data, finishedAt: iso(replacing.finishedAt), raisedTo: raised.success && raised.data !== undefined ? raised.data : null };
       } else {
-        warn(overwritten.id, "stored SyncRun.stats.imagesOverwritten is not a valid count — not shown");
+        warn(replacing.id, "stored SyncRun.stats.imagesOverwritten is not a valid count — not shown");
       }
     }
+    // The stored value as catalogue.meta serves it (null when nothing is stored or the value is malformed).
+    const currentImageVersion = isImageVersion(catalogueMeta?.imageVersion) ? catalogueMeta.imageVersion : null;
 
     const releaseAt = newest?.releaseDate ?? null;
     return {
@@ -602,7 +610,7 @@ export const adminRouter = router({
         newest && releaseAt
           ? { id: newest.id.toString(), baseId: newest.baseId.toString(), name: newest.name, releaseAt: releaseAt.toISOString() }
           : null,
-      overwrittenImages,
+      imageVersion: { current: currentImageVersion, lastReplacingRun },
     };
   }),
 });

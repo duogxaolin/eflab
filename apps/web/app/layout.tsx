@@ -7,6 +7,9 @@ import { SiteHeader } from "@/components/layout/SiteHeader";
 import { MobileBottomNav } from "@/components/layout/MobileBottomNav";
 import { SiteFooter } from "@/components/layout/SiteFooter";
 import { SkipLink } from "@/components/layout/SkipLink";
+import { fetchImageVersion } from "@/lib/api-server";
+import { ImageVersionProvider } from "@/lib/image-version";
+import { resolveImageVersion } from "@/lib/r2-images";
 
 /** id of the page's `<main>` (the "Skip to content" target). */
 const MAIN_ID = "main-content";
@@ -45,7 +48,13 @@ export const viewport: Viewport = {
   themeColor: "#060606",
 };
 
-export default function RootLayout({ children }: { children: ReactNode }) {
+export default async function RootLayout({ children }: { children: ReactNode }) {
+  // The card-image cache version (change auto-image-version, design D6): the
+  // stored value — raised by the sync worker after a run replaced card images on
+  // R2 — read through a 60-s revalidated fetch that never throws (null on any
+  // failure), else the build-time / committed fallback; one value for every
+  // card URL of this render, handed to the client tree by the provider below.
+  const imageVersion = resolveImageVersion(await fetchImageVersion());
   return (
     <html lang="en" className={inter.variable} suppressHydrationWarning>
       {/* Below lg the body reserves the floating tab bar's height plus the
@@ -64,18 +73,20 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           <div className="efb-backdrop__tint" />
         </div>
         <Providers>
-          <div className="relative z-1 flex flex-1 flex-col">
-            <SiteHeader />
-            {/* The skip link's focus target: focusable only while it holds
-                the skip link's focus (SkipLink sets and removes its
-                tabindex); no outline, scroll margin under the header —
-                `.efb-skip-target`. */}
-            <main id={MAIN_ID} className="efb-skip-target flex-1 mx-auto w-full max-w-6xl px-4 py-8">
-              {children}
-            </main>
-            <SiteFooter />
-            <MobileBottomNav />
-          </div>
+          <ImageVersionProvider version={imageVersion}>
+            <div className="relative z-1 flex flex-1 flex-col">
+              <SiteHeader />
+              {/* The skip link's focus target: focusable only while it holds
+                  the skip link's focus (SkipLink sets and removes its
+                  tabindex); no outline, scroll margin under the header —
+                  `.efb-skip-target`. */}
+              <main id={MAIN_ID} className="efb-skip-target flex-1 mx-auto w-full max-w-6xl px-4 py-8">
+                {children}
+              </main>
+              <SiteFooter />
+              <MobileBottomNav />
+            </div>
+          </ImageVersionProvider>
         </Providers>
       </body>
     </html>
