@@ -100,6 +100,16 @@ function prismaCli(args: string[], url: string, stdin?: string): Promise<CliResu
 
 const sqlExecute = (url: string, sql: string) => prismaCli(["db", "execute", "--schema", SCHEMA, "--stdin"], url, sql);
 
+/**
+ * Runs a SQL script (several statements, `DO $$ … $$` blocks included — e.g. a
+ * migration file) on a SCRATCH database through `prisma db execute`; refuses any
+ * other database name. Output masked of the URL.
+ */
+export async function executeScratchSql(url: string, sql: string): Promise<{ code: number | null; output: string }> {
+  if (!TEST_DATABASE_NAME_RE.test(databaseName(url))) throw new Error("executeScratchSql: only a scratch database eflab_synctest*");
+  return sqlExecute(url, sql);
+}
+
 const UNREACHABLE = /P1001|P1000|P1017|Can't reach database|ECONNREFUSED|connection refused|Authentication failed/i;
 
 export type ScratchDb = { url: string; name: string; drop(): Promise<void> } | { skip: string };

@@ -10,6 +10,12 @@
 // when it becomes visible again). The API decides every refusal (409 already
 // queued / running, 412 blocked, 403 CSRF); the buttons mirror those rules
 // from the data they have and show why they are unusable.
+//
+// openspec change admin-sync-live-progress (design D6): every queued / running
+// run shows its phase, progress bar and counters so far (RunProgress); after a
+// run is queued the feedback links to its page; the schedule form has interval
+// presets (15 min … 24 hours) that fill the minutes field (`aria-pressed` on the
+// preset of the current value) — Save as before.
 import Link from "next/link";
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { Activity, AlertTriangle, ImageOff, Play, RefreshCw, Server, ShieldAlert, Zap } from "lucide-react";
@@ -21,7 +27,10 @@ import { Modal } from "@/components/filters/Modal";
 import { AdminShell } from "@/components/admin/AdminShell";
 import { ACTIVE_POLL_MS, ActionButton, Notice, Panel, useDocumentVisible } from "@/components/admin/admin-ui";
 import { RunSummary, runHref } from "@/components/admin/RunSummary";
-import { CancelRunButton, useRunAnnouncer } from "@/components/admin/run-actions";import {
+import { RunProgress } from "@/components/admin/RunProgress";
+import { CancelRunButton, useRunAnnouncer } from "@/components/admin/run-actions";
+import { SYNC_INTERVAL_PRESETS } from "@eflab/shared/sync-records";
+import {
   IMAGE_VERSION_INSTRUCTION,
   KIND_LABELS,
   STATUS_LABELS,
@@ -36,7 +45,7 @@ export function DashboardClient() {
   return <AdminShell>{() => <Dashboard />}</AdminShell>;
 }
 
-type Feedback = { tone: "ok" | "error"; text: string } | null;
+type Feedback = { tone: "ok" | "error"; text: string; runId?: number } | null;
 
 function Dashboard() {
   const visible = useDocumentVisible();
@@ -86,7 +95,7 @@ function Dashboard() {
       ) : (
         <>
           {dashboard.isError && (
-            <p role="alert" className="text-xs text-[var(--color-accent-danger)]">
+            <p role="alert" className="text-xs text-[var(--color-danger-soft-foreground)]">
               Could not refresh: {adminErrorMessage(dashboard.error)} The values below are from the last successful update.
             </p>
           )}
@@ -116,7 +125,7 @@ function DashboardBody({ data, updatedAt, polling }: { data: SyncDashboardDTO; u
       </p>
 
       {blocked && (
-        <Notice tone="danger" title="efootbase blocked our requests" icon={<ShieldAlert className="size-4 text-[var(--color-accent-danger)]" aria-hidden />} testId="blocked-banner">
+        <Notice tone="danger" title="efootbase blocked our requests" icon={<ShieldAlert className="size-4 text-[var(--color-danger-soft-foreground)]" aria-hidden />} testId="blocked-banner">
           <p>
             The source refused a request{config.blockedReason ? ` (${config.blockedReason})` : ""}. Until{" "}
             <strong className="text-white">{formatUtcDateTime(config.blockedUntil)}</strong> the worker sends nothing, the schedule
@@ -169,7 +178,16 @@ function DashboardBody({ data, updatedAt, polling }: { data: SyncDashboardDTO; u
           <ul className="min-w-0 divide-y divide-[var(--color-line-separator)]">
             {active.map((run) => (
               <li key={run.id} className="grid min-w-0 gap-3 py-3 first:pt-0 last:pb-0 sm:grid-cols-[1fr_14rem] sm:items-start">
-                <RunSummary run={run} waitingForWorker={!data.workerOnline} />
+                <div className="min-w-0 space-y-3" data-testid="active-run" data-run-id={run.id}>
+                  <RunSummary run={run} waitingForWorker={!data.workerOnline} />
+                  <RunProgress run={run} waitingForWorker={!data.workerOnline} compact />
+                  <Link
+                    href={runHref(run.id)}
+                    className="inline-block text-xs font-medium text-[var(--color-text-secondary)] underline-offset-2 hover:text-[var(--color-accent)] hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-accent)]"
+                  >
+                    Open run #{run.id} — progress and what it downloads →
+                  </Link>
+                </div>
                 <CancelRunButton run={run} />
               </li>
             ))}
@@ -204,7 +222,7 @@ function WorkerPanel({ data, now }: { data: SyncDashboardDTO; now: number }) {
             className={`inline-flex items-center rounded-lg border px-2 py-0.5 text-[11px] font-bold uppercase tracking-wider ${
               data.workerOnline
                 ? "border-[var(--color-accent)]/50 bg-[var(--color-accent)]/15 text-[var(--color-accent)]"
-                : "border-[var(--color-accent-danger)]/50 bg-[var(--color-accent-danger)]/15 text-[var(--color-accent-danger)]"
+                : "border-[var(--color-accent-danger)]/50 bg-[var(--color-accent-danger)]/15 text-[var(--color-danger-soft-foreground)]"
             }`}
           >
             {data.workerOnline ? "Online" : "Offline"}
@@ -297,6 +315,7 @@ function ActionsPanel({ data, blocked }: { data: SyncDashboardDTO; blocked: bool
         text: `${KIND_LABELS[run.kind]} queued as run #${run.id}${
           data.workerOnline ? "." : " — the worker is offline, so it waits until the worker runs again."
         }`,
+        runId: run.id,
       }),
     onError: (e) => setFeedback({ tone: "error", text: adminErrorMessage(e) }),
     onSettled: () => {
@@ -367,10 +386,22 @@ function ActionsPanel({ data, blocked }: { data: SyncDashboardDTO; blocked: bool
         aria-live="polite"
         data-testid="action-feedback"
         className={`mt-3 text-xs [overflow-wrap:anywhere] empty:hidden ${
-          feedback?.tone === "error" ? "text-[var(--color-accent-danger)]" : "text-[var(--color-accent)]"
+          feedback?.tone === "error" ? "text-[var(--color-danger-soft-foreground)]" : "text-[var(--color-accent)]"
         }`}
       >
         {feedback?.text}
+        {feedback?.runId !== undefined && (
+          <>
+            {" "}
+            <Link
+              href={runHref(feedback.runId)}
+              data-testid="queued-run-link"
+              className="font-semibold text-white underline underline-offset-2 hover:text-[var(--color-accent)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-accent)]"
+            >
+              Open run #{feedback.runId} to follow its progress
+            </Link>
+          </>
+        )}
       </div>
 
       <Modal
@@ -546,9 +577,29 @@ function ScheduleForm({ config }: { config: SyncConfigDTO }) {
               aria-describedby={ids.intervalHelp}
               className={`${inputClass} ${border(Boolean(errors.interval))}`}
             />
-            <p id={ids.intervalHelp} className={`text-[11px] ${errors.interval ? "text-[var(--color-accent-danger)]" : "text-[var(--color-text-dim)]"}`}>
-              {errors.interval ?? `${SYNC_INTERVAL_MIN_MINUTES}–${SYNC_INTERVAL_MAX_MINUTES} (360 = every 6 hours).`}
+            <p id={ids.intervalHelp} className={`text-[11px] ${errors.interval ? "text-[var(--color-danger-soft-foreground)]" : "text-[var(--color-text-dim)]"}`}>
+              {errors.interval ?? `${SYNC_INTERVAL_MIN_MINUTES}–${SYNC_INTERVAL_MAX_MINUTES} (60 = hourly, the default).`}
             </p>
+            <div role="group" aria-label="Interval presets" className="flex min-w-0 flex-wrap gap-1.5 pt-0.5" data-testid="interval-presets">
+              {SYNC_INTERVAL_PRESETS.map((p) => {
+                const pressed = draft.interval.trim() === String(p.minutes);
+                return (
+                  <button
+                    key={p.minutes}
+                    type="button"
+                    aria-pressed={pressed}
+                    onClick={() => set("interval", String(p.minutes))}
+                    className={`button button--sm rounded-full px-2.5 text-[11px] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-accent)] ${
+                      pressed
+                        ? "bg-[var(--color-accent)] font-bold text-[var(--color-accent-foreground)]"
+                        : "button--secondary text-[var(--color-text-secondary)] hover:text-white"
+                    }`}
+                  >
+                    {p.label}
+                  </button>
+                );
+              })}
+            </div>
           </div>
           <div className="min-w-0 space-y-1.5">
             <label htmlFor={ids.weekday} className={label}>
@@ -567,7 +618,7 @@ function ScheduleForm({ config }: { config: SyncConfigDTO }) {
                 </option>
               ))}
             </select>
-            {errors.weekday && <p className="text-[11px] text-[var(--color-accent-danger)]">{errors.weekday}</p>}
+            {errors.weekday && <p className="text-[11px] text-[var(--color-danger-soft-foreground)]">{errors.weekday}</p>}
           </div>
           <div className="min-w-0 space-y-1.5">
             <label htmlFor={ids.hour} className={label}>
@@ -586,7 +637,7 @@ function ScheduleForm({ config }: { config: SyncConfigDTO }) {
                 </option>
               ))}
             </select>
-            {errors.hour && <p className="text-[11px] text-[var(--color-accent-danger)]">{errors.hour}</p>}
+            {errors.hour && <p className="text-[11px] text-[var(--color-danger-soft-foreground)]">{errors.hour}</p>}
           </div>
         </div>
         <p className="text-[11px] text-[var(--color-text-dim)]">
@@ -600,7 +651,7 @@ function ScheduleForm({ config }: { config: SyncConfigDTO }) {
             aria-live="polite"
             data-testid="schedule-status"
             className={`text-xs [overflow-wrap:anywhere] empty:hidden sm:pt-2.5 ${
-              status?.tone === "error" ? "text-[var(--color-accent-danger)]" : "text-[var(--color-accent)]"
+              status?.tone === "error" ? "text-[var(--color-danger-soft-foreground)]" : "text-[var(--color-accent)]"
             }`}
           >
             {status?.text}

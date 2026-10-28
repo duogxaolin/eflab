@@ -92,7 +92,8 @@ const fullDone = run("FULL", "OK", at(SUNDAY_0300, 10 * MIN));
 
 // 1. Constants = the spec's numbers.
 {
-  assert(SYNC_DEFAULT_INTERVAL_MINUTES === 360 && SYNC_DEFAULT_FULL_WEEKDAY === 0 && SYNC_DEFAULT_FULL_HOUR_UTC === 3, "defaults: every 360 min, full sync Sunday 03 UTC");
+  // hourly since change admin-sync-live-progress (was 360)
+  assert(SYNC_DEFAULT_INTERVAL_MINUTES === 60 && SYNC_DEFAULT_FULL_WEEKDAY === 0 && SYNC_DEFAULT_FULL_HOUR_UTC === 3, "defaults: every 60 min, full sync Sunday 03 UTC");
   assert(SYNC_WATERMARK_MARGIN_SECONDS === 604_800, "watermark margin = 7 days in seconds");
   assert(SYNC_LOG_TAIL_MAX_BYTES === 65_536, "log tail bound = 64 KB");
   assert(SYNC_STALE_RUN_MS === 10 * MIN, "stale RUNNING run = 10 minutes without heartbeat");

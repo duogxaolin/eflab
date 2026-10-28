@@ -57,6 +57,7 @@ export const runCheck: RunHandler = async (ctx) => {
   };
   ctx.stats.check = check;
   ctx.stats.requests = 1;
+  ctx.setProgress({ phase: "Asking the source" }); // one request: no done / total (admin-sync-live-progress)
   ctx.log(`GET ${env.apiBase}/players (limit=1, newest first)`);
 
   const t0 = performance.now();

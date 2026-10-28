@@ -66,6 +66,21 @@ Sync-worker modes (openspec admin-sync-worker; all optional — without them the
       exit 1 listing each refused entry (exit 0 when there is none); no request, no file written. The sync
       worker runs it before any database write.
 
+Sync-worker progress / results (openspec admin-sync-live-progress; both opt-in — without them the output
+and the files are byte for byte what the script wrote before):
+  --progress-every N   in the image step print `PROGRESS <done>/<total>` (numbers only) once at its start
+      and after every N images and the last one
+  --results-file PATH  write one JSON line per image of the image step, {"path": "<images/ relative path>",
+      "outcome": "<class>"} — ok, not_modified, skipped_exists, or a failure class: http_<status>, timeout,
+      bad_signature, too_large, host_refused, other (never a body, a URL or a header). PATH must be absolute,
+      outside this repository, and not exist yet (created 0600, never through a link). Each line is written
+      whole as its image finishes, so a killed run leaves every finished line.
+  With either flag, a SIGTERM during the image step stops it cleanly: the handler (installed for that step
+  only) just sets a flag, which the image loop reads every 0.25 s; nothing more is fetched, the images being
+  fetched finish and are recorded, the image lists (images_new.txt, images_failed.txt, …) and the last
+  PROGRESS line are written as on a block, then exit 143 without manifest.json (as an error exit). A second
+  SIGTERM ends it at once; outside the image step a SIGTERM ends the script as before.
+
 Source-data safety (openspec admin-sync-worker, verify findings C1, W-a, W-b, W-e): image URLs, file names,
 ids and shapes come from the source, so they are checked before any request or write.
   - URLs: https on port 443, no user-info; `dynamic` card renders and emblems only from the efootbase CDN
@@ -107,7 +122,10 @@ import ipaddress
 import json
 import os
 import re
+import signal
+import socket
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Optional
@@ -313,6 +331,128 @@ def image_body_problem(body: bytes, content_type: str) -> Optional[str]:
     return f"not an image (Content-Type {ct or 'none'}, no PNG/WEBP/JPEG/GIF signature)"
 
 
+def _http_reason(code) -> str:
+    """Failure class of an HTTP status (--results-file): http_<status>, or 'other' outside 100–599."""
+    return f"http_{code}" if isinstance(code, int) and 100 <= code <= 599 else "other"
+
+
+def _exc_reason(e: BaseException) -> str:
+    """Failure class of an exception (--results-file): 'timeout' for a socket / read timeout, else 'other'."""
+    if isinstance(e, (socket.timeout, TimeoutError)):
+        return "timeout"
+    if isinstance(e, urllib.error.URLError) and isinstance(getattr(e, "reason", None), (socket.timeout, TimeoutError)):
+        return "timeout"
+    return "other"
+
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+class ResultsFile:
+    """--results-file, written as the images finish: each record is ONE whole JSON line handed to the kernel
+    in one unbuffered os.write (nothing waits in a Python buffer), so a process killed at any moment leaves
+    every finished line on disk and at most an unfinished last line, which readers drop."""
+
+    def __init__(self, fd: int):
+        self.fd = fd
+        self.lock = threading.Lock()  # the completion loop is the only writer today; kept for any later caller
+
+    def write(self, rec: dict) -> None:
+        data = (json.dumps(rec, ensure_ascii=True) + "\n").encode("ascii")
+        with self.lock:
+            while data:
+                data = data[os.write(self.fd, data):]
+
+    def close(self) -> None:
+        with self.lock:
+            if self.fd >= 0:
+                os.close(self.fd)
+                self.fd = -1
+
+
+def open_results_file(path: str) -> ResultsFile:
+    """--results-file: an absolute path outside this repository that does not exist yet, created 0600 with
+    O_EXCL|O_NOFOLLOW (never through a link). Exits with an error otherwise."""
+    if not os.path.isabs(path):
+        sys.exit(f"ERROR: --results-file must be an absolute path (got {path!r})")
+    parent = os.path.realpath(os.path.dirname(path))
+    target = os.path.join(parent, os.path.basename(path))
+    root = str(REPO_ROOT)
+    if os.path.commonpath([root, target]) == root:
+        sys.exit("ERROR: --results-file must be outside the repository tree")
+    try:
+        fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    except OSError as e:
+        sys.exit(f"ERROR: --results-file {target}: cannot create it ({e.strerror}; it must not exist yet)")
+    return ResultsFile(fd)
+
+
+class StopRequested(SystemExit):
+    """The stop a SIGTERM asked for during the image step (--progress-every / --results-file only): exit 143.
+    Raised from ordinary code once the images being fetched have been recorded and the image lists written,
+    as the stop on a block does — never from the signal handler."""
+
+    def __init__(self):
+        super().__init__(143)
+
+
+_TERM = {"requested": False}
+
+
+def _on_sigterm(signum, frame):
+    # Never raises: an exception at an arbitrary bytecode — e.g. inside concurrent.futures' loop that takes
+    # every future's lock — would leave locks held and deadlock the pool. It only marks the request, which
+    # the image loop reads every 0.25 s. A second SIGTERM ends the script at once (lines already on disk).
+    signal.signal(signal.SIGTERM, signal.SIG_DFL)
+    _TERM["requested"] = True
+
+
+def run_stoppable(items, submit, take, window: int, should_stop=lambda: False) -> bool:
+    """The image loop used with --progress-every / --results-file. At most `window` (= the worker count) items
+    are submitted at a time, in `items` order, so each concurrent.futures.wait round costs O(window), not
+    O(all images), and no item waits queued behind the running ones (a freed worker cannot start one before
+    this loop has read the flag); the finished ones of a round are taken in submission order; the SIGTERM
+    flag is read every 0.25 s even while every worker waits on a slow fetch. On the flag — or `should_stop()` (a block) — nothing more is submitted
+    and the queued ones are cancelled; after a SIGTERM the running ones finish and are taken, after a block
+    the loop ends at once (as the loop without the flags does). Returns True when stopped by SIGTERM."""
+    it = iter(items)
+    order: dict = {}
+    pending: set = set()
+    seq = 0
+
+    def refill() -> None:
+        nonlocal seq
+        while len(pending) < window and not _TERM["requested"] and not should_stop():
+            item = next(it, None)
+            if item is None:
+                return
+            fut = submit(item)
+            order[fut] = seq
+            seq += 1
+            pending.add(fut)
+
+    refill()
+    while pending:
+        done, rest = concurrent.futures.wait(pending, timeout=0.25, return_when=concurrent.futures.FIRST_COMPLETED)
+        pending.clear()
+        pending.update(rest)
+        for fut in sorted(done, key=order.__getitem__):
+            if fut.cancelled():
+                continue
+            take(fut)
+            if should_stop() and not _TERM["requested"]:
+                for f2 in pending:
+                    f2.cancel()
+                return False
+        if _TERM["requested"]:
+            for fut in list(pending):
+                if fut.cancel():
+                    pending.discard(fut)  # queued, never started
+        else:
+            refill()
+    return _TERM["requested"]
+
+
 class _SameOriginRedirect(urllib.request.HTTPRedirectHandler):
     """Follows a redirect only to the same scheme, host and port without user-info — never elsewhere
     (urllib would carry the X-API-Key header along) and never from https to http."""
@@ -398,8 +538,9 @@ def get_json(url: str, key: str, *, validate=None, retries: int = PAGE_RETRIES):
 
 
 def http_download(url: str, dest: Path, *, timeout: int = 60, retries: int = 2,
-                  ref: Optional[Path] = None) -> tuple[str, str]:
-    """Download URL to dest. Returns (status, url). status ∈ {'ok','skip404','skip_exists','blocked','error'}.
+                  ref: Optional[Path] = None) -> tuple:
+    """Download URL to dest. Returns (status, url, reason). status ∈ {'ok','skip404','skip_exists','blocked','error'};
+    reason = the failure class --results-file records ('' when nothing failed; see _http_reason / _exc_reason).
     Skip if dest exists (resume). 404 → skip (not an error, e.g., team-virtual emblem).
     403/429 → 'blocked' (never retried). Writes via a .part file so a crash leaves no truncated image.
     ref = a previously downloaded copy: a HEAD request first, and when the CDN's ETag (md5, DigitalOcean
@@ -408,7 +549,7 @@ def http_download(url: str, dest: Path, *, timeout: int = 60, retries: int = 2,
     The caller has checked url (image_url_allowed) and dest (dest_under); a redirect to another origin is
     refused (OPENER) and not retried."""
     if dest.exists() and dest.stat().st_size > 0:
-        return ("skip_exists", url)
+        return ("skip_exists", url, "")
     req = urllib.request.Request(url, headers={"User-Agent": UA})
     if ref is not None and ref.exists() and ref.stat().st_size > 0:
         COUNTER.cdn += 1
@@ -417,15 +558,16 @@ def http_download(url: str, dest: Path, *, timeout: int = 60, retries: int = 2,
             with OPENER.open(head, timeout=timeout) as resp:
                 etag = (resp.headers.get("ETag") or "").strip('"')
             if etag and "-" not in etag and hashlib.md5(ref.read_bytes()).hexdigest() == etag:
-                return ("not_modified", url)
+                return ("not_modified", url, "")
         except urllib.error.HTTPError as e:
             if e.code in (403, 429):
-                return ("blocked", f"{url} | HTTP {e.code}")
+                return ("blocked", f"{url} | HTTP {e.code}", _http_reason(e.code))
             if e.code == 404:
-                return ("skip404", url)
+                return ("skip404", url, "http_404")
         except Exception:
             pass  # fall through to a normal GET
     last_err = None
+    last_reason = "other"
     for attempt in range(retries + 1):
         COUNTER.cdn += 1
         try:
@@ -434,33 +576,36 @@ def http_download(url: str, dest: Path, *, timeout: int = 60, retries: int = 2,
                     try:
                         body = read_bounded(resp, MAX_IMAGE_BYTES)
                     except BodyTooLarge as e:
-                        return ("error", f"{url} | refused: {e}")  # not retried, never stored
+                        return ("error", f"{url} | refused: {e}", "too_large")  # not retried, never stored
                     problem = image_body_problem(body, resp.headers.get("Content-Type", ""))
                     if problem == "html":
-                        return ("blocked", f"{url} | HTML (challenge?) body")
+                        return ("blocked", f"{url} | HTML (challenge?) body", "host_refused")
                     if problem:
-                        return ("error", f"{url} | refused: {problem}")
+                        return ("error", f"{url} | refused: {problem}", "bad_signature")
                     dest.parent.mkdir(parents=True, exist_ok=True)
                     dest_under(dest.parent, dest.name)  # re-checked after mkdir: no link below the root
                     write_bytes_new(dest, body)
-                    return ("ok", url)
+                    return ("ok", url, "")
                 else:
                     last_err = f"HTTP {resp.status}"
+                    last_reason = _http_reason(resp.status)
         except urllib.error.HTTPError as e:
             if e.code == 404:
-                return ("skip404", url)
+                return ("skip404", url, "http_404")
             if e.code in (403, 429):
-                return ("blocked", f"{url} | HTTP {e.code}")
+                return ("blocked", f"{url} | HTTP {e.code}", _http_reason(e.code))
             if 300 <= e.code < 400:
-                return ("error", f"{url} | HTTP {e.code}: {e.msg}")
+                return ("error", f"{url} | HTTP {e.code}: {e.msg}", _http_reason(e.code))
             last_err = f"HTTP {e.code}"
+            last_reason = _http_reason(e.code)
         except UnsafePath as e:
-            return ("refused", f"{url} | {e}")
+            return ("refused", f"{url} | {e}", "other")
         except Exception as e:
             last_err = str(e)[:80]
+            last_reason = _exc_reason(e)
         if attempt < retries:
             time.sleep(0.5 * (attempt + 1))
-    return ("error", f"{url} | {last_err}")
+    return ("error", f"{url} | {last_err}", last_reason)
 
 
 def http_head(url: str, *, timeout: int = 30) -> tuple[int, Optional[str]]:
@@ -871,8 +1016,21 @@ def skip_known_emblems(urls: list[tuple[str, str]], skip_from: Path, image_types
     return todo, len(urls) - len(todo)
 
 
+def _result_outcome(status: str, reason: str) -> str:
+    """--results-file outcome of one image: ok / not_modified / skipped_exists, else its failure class."""
+    if status in ("ok", "not_modified"):
+        return status
+    if status == "skip_exists":
+        return "skipped_exists"
+    if status in ("hostBlocked", "hostSkipped"):
+        return "host_refused"
+    return reason or ("host_refused" if status == "blocked" else "other")
+
+
 def download_images(images_dir: Path, urls: list[tuple[str, str]], workers: int, ref_dir: Optional[Path] = None,
-                    bucket_base: Optional[str] = None, refused: Optional[list] = None) -> dict:
+                    bucket_base: Optional[str] = None, refused: Optional[list] = None,
+                    progress_every: Optional[int] = None, results: Optional[ResultsFile] = None,
+                    stop_on_sigterm: bool = False) -> dict:
     """Download all (url, relpath) concurrently. Returns {ok, skip404, skip_exists, blocked, error}.
     Stops (and exits 2) on 403/429 from the CDN. bucket_base (--etag-vs-bucket): compare each image with
     the object already in the bucket first (bucket_compare) and download only new / changed ones.
@@ -897,82 +1055,117 @@ def download_images(images_dir: Path, urls: list[tuple[str, str]], workers: int,
     stop = False
 
     def fetch_one(url: str, rel: str):
-        """(status, info, bucket decision or None, the bucket's plain-MD5 ETag or None)."""
+        """(status, info, bucket decision or None, the bucket's plain-MD5 ETag or None, failure class or '')."""
         kind = "emblems" if rel.startswith("emblems/") else "transparent" if rel.endswith("_transparent.webp") else "dynamic"
         if not image_url_allowed(url, kind):
-            return "refused", f"{url} | URL not allowed for {kind}", None, None
+            return "refused", f"{url} | URL not allowed for {kind}", None, None, "other"
         if image_host(url) in blocked_hosts:
-            return "hostSkipped", f"{url} | {image_host(url)} refused an earlier request in this run", None, None
+            return "hostSkipped", f"{url} | {image_host(url)} refused an earlier request in this run", None, None, "host_refused"
         try:
             dest = dest_under(images_dir, rel)
             ref = dest_under(ref_dir, rel) if ref_dir else None
         except UnsafePath as e:
-            return "refused", f"{url} | {e}", None, None
+            return "refused", f"{url} | {e}", None, None, "other"
         if not bucket_base:
-            status, info = http_download(url, dest, ref=ref)
-            return status, info, None, None
+            status, info, reason = http_download(url, dest, ref=ref)
+            return status, info, None, None, reason
         decision, b_md5 = bucket_compare(url, rel, bucket_base)
         if decision == "blocked":
-            return "blocked", f"{url} | HTTP 403/429 (HEAD)", decision, b_md5
+            return "blocked", f"{url} | HTTP 403/429 (HEAD)", decision, b_md5, "host_refused"
         if decision == "same":
-            return "not_modified", url, decision, b_md5
-        status, info = http_download(url, dest)
+            return "not_modified", url, decision, b_md5, ""
+        status, info, reason = http_download(url, dest)
         if status == "ok" and decision in ("changed", "unknown") and b_md5 is not None:
             # third verify W2: the body decides, not the CDN's ETag (pesdb / weak ETags): same bytes as the
             # bucket object → nothing to store, nothing overwritten
             if hashlib.md5(dest.read_bytes()).hexdigest() == b_md5:
                 os.unlink(dest)
-                return "not_modified", url, "same", b_md5
-        return status, info, decision, b_md5
+                return "not_modified", url, "same", b_md5, ""
+        return status, info, decision, b_md5, reason
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = {pool.submit(fetch_one, url, rel): (url, rel) for url, rel in urls}
-        for fut in concurrent.futures.as_completed(futures):
-            url, rel = futures[fut]
-            try:
-                status, info, decision, b_md5 = fut.result()
-                if status == "blocked" and is_third_party(url):
-                    # a third-party host (pesdb.net) refused: skip its remaining images, never block the run
-                    blocked_hosts.add(image_host(url))
-                    status = "hostBlocked"
-                    print(f"  {image_host(url)} refused ({info.split(' | ')[-1]}) — its remaining images are skipped in this run")
-                stats[status] = stats.get(status, 0) + 1
-                if decision in ("new", "changed", "unknown"):
-                    key = {"new": "bucketNew", "changed": "bucketChanged", "unknown": "bucketUnknown"}[decision]
-                    stats[key] += 1
-                if status == "ok" and decision in ("changed", "unknown"):
-                    # replaces an object already in the bucket: "overwritten" only when that object's ETag is
-                    # a content MD5 that differs from the body (checked in fetch_one); otherwise "unverified"
-                    if b_md5 is not None:
-                        overwritten.append(rel)
-                        stats["overwritten"] += 1
-                    else:
-                        unverified.append(rel)
-                        stats["unverified"] += 1
-                if status == "ok":
-                    new_files.append(rel)
-                    try:
-                        stats["bytes"] += (images_dir / rel).stat().st_size
-                    except OSError:
-                        pass
-                elif status == "blocked":
-                    errors_log.append(f"{rel}: {info}")
-                    stop = True
-                elif status in ("error", "refused", "hostBlocked", "hostSkipped"):
-                    errors_log.append(f"{rel}: {info}")
-                    failed.append(rel)
-            except Exception as e:
-                stats["error"] += 1
-                errors_log.append(f"{rel}: {e}")
+    progress_shown = 0
+    item_of: dict = {}  # submitted future → (url, rel) (both loops fill it)
+
+    def take(fut) -> None:
+        """One finished image: counts, lists, error line and its results line (written now, before the
+        progress line that announces it)."""
+        nonlocal done, stop
+        url, rel = item_of[fut]
+        try:
+            status, info, decision, b_md5, reason = fut.result()
+            if status == "blocked" and is_third_party(url):
+                # a third-party host (pesdb.net) refused: skip its remaining images, never block the run
+                blocked_hosts.add(image_host(url))
+                status = "hostBlocked"
+                print(f"  {image_host(url)} refused ({info.split(' | ')[-1]}) — its remaining images are skipped in this run")
+            stats[status] = stats.get(status, 0) + 1
+            if decision in ("new", "changed", "unknown"):
+                key = {"new": "bucketNew", "changed": "bucketChanged", "unknown": "bucketUnknown"}[decision]
+                stats[key] += 1
+            if status == "ok" and decision in ("changed", "unknown"):
+                # replaces an object already in the bucket: "overwritten" only when that object's ETag is
+                # a content MD5 that differs from the body (checked in fetch_one); otherwise "unverified"
+                if b_md5 is not None:
+                    overwritten.append(rel)
+                    stats["overwritten"] += 1
+                else:
+                    unverified.append(rel)
+                    stats["unverified"] += 1
+            if status == "ok":
+                new_files.append(rel)
+                try:
+                    stats["bytes"] += (images_dir / rel).stat().st_size
+                except OSError:
+                    pass
+            elif status == "blocked":
+                errors_log.append(f"{rel}: {info}")
+                stop = True
+            elif status in ("error", "refused", "hostBlocked", "hostSkipped"):
+                errors_log.append(f"{rel}: {info}")
                 failed.append(rel)
-            done += 1
-            if stop:
-                for f2 in futures:
-                    f2.cancel()
-                break
-            if done % 500 == 0 or done == total:
-                rate = done / max(time.time() - t0, 1e-9)
-                print(f"  {done}/{total} ({rate:.0f}/s) ok={stats['ok']} 404={stats['skip404']} exist={stats['skip_exists']} err={stats['error']}")
+            if results is not None:
+                results.write({"path": rel, "outcome": _result_outcome(status, reason)})
+        except Exception as e:
+            stats["error"] += 1
+            errors_log.append(f"{rel}: {e}")
+            failed.append(rel)
+            if results is not None:
+                results.write({"path": rel, "outcome": _exc_reason(e)})
+        done += 1
+
+    def show_progress() -> None:
+        nonlocal progress_shown
+        if progress_every and (done % progress_every == 0 or done == total):
+            print(f"PROGRESS {done}/{total}")
+            progress_shown = done
+        if done % 500 == 0 or done == total:
+            rate = done / max(time.time() - t0, 1e-9)
+            print(f"  {done}/{total} ({rate:.0f}/s) ok={stats['ok']} 404={stats['skip404']} exist={stats['skip_exists']} err={stats['error']}")
+
+    def take_and_show(fut) -> None:
+        take(fut)
+        if not stop:  # as in the loop below: no progress line for the item that blocked
+            show_progress()
+
+    if progress_every and total > 0:
+        print(f"PROGRESS 0/{total}")
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+        def submit(item):
+            fut = pool.submit(fetch_one, *item)
+            item_of[fut] = item
+            return fut
+
+        if stop_on_sigterm:
+            run_stoppable(urls, submit, take_and_show, window=max(1, workers), should_stop=lambda: stop)
+        else:
+            futures = [submit(item) for item in urls]  # the loop as it always was
+            for fut in concurrent.futures.as_completed(futures):
+                take(fut)
+                if stop:
+                    for f2 in futures:
+                        f2.cancel()
+                    break
+                show_progress()
     if errors_log:
         write_text_under(images_dir.parent, "image_errors.log", "\n".join(errors_log[:200]))
         print(f"  logged {min(len(errors_log), 200)} errors to image_errors.log")
@@ -989,6 +1182,12 @@ def download_images(images_dir: Path, urls: list[tuple[str, str]], workers: int,
     if bucket_base:
         print(f"  vs bucket: new={stats['bucketNew']} changed={stats['bucketChanged']} unknown={stats['bucketUnknown']} "
               f"overwritten={stats['overwritten']} (images_overwritten.txt) unverified={stats['unverified']} (images_unverified.txt)")
+    # a SIGTERM (flags only) — also one that arrived while the lists above were written — wins over a block
+    if stop_on_sigterm and _TERM["requested"]:
+        if progress_every and progress_shown != done:
+            print(f"PROGRESS {done}/{total}")  # the last count, printed once the stop is final
+        print(f"ERROR: stopped by SIGTERM after {done} of {total} images — the image lists hold what was done", file=sys.stderr)
+        raise StopRequested()
     if stop:
         print("ERROR: CDN returned 403/429 or an HTML challenge — stopped. See image_errors.log", file=sys.stderr)
         sys.exit(2)
@@ -1029,7 +1228,14 @@ def main():
                     help="TESTS ONLY (needs SYNC_TEST_MODE=1): also accept image URLs on this loopback host:port")
     ap.add_argument("--validate-only", action="store_true",
                     help="check <out>/players.jsonl + teams.json against every source-data rule; exit 1 on any refusal; no request, no file")
+    # ---- sync-worker progress / results (openspec admin-sync-live-progress); off by default ----
+    ap.add_argument("--progress-every", type=int, default=None, metavar="N",
+                    help="image step: print 'PROGRESS <done>/<total>' at its start and every N images (numbers only)")
+    ap.add_argument("--results-file", default=None, metavar="PATH",
+                    help="image step: one JSON line per image {path, outcome} to PATH (absolute, outside the repository, new)")
     args = ap.parse_args()
+    if args.progress_every is not None and args.progress_every < 1:
+        sys.exit("ERROR: --progress-every must be at least 1")
 
     for flag, entries, target in (("--allow-host", args.allow_host, TEST_ALLOWED_NETLOCS),
                                   ("--allow-third-party-host", args.allow_third_party_host, TEST_THIRD_PARTY_NETLOCS)):
@@ -1080,6 +1286,10 @@ def main():
         print(f"validate-only: {len(urls)} image URLs, 0 refused")
         return
 
+    results_fh = open_results_file(args.results_file) if args.results_file else None  # before any request
+    # SIGTERM handling of the image step: only with the sync-worker flags, installed around that step alone
+    # (the data phase and any run without the flags end on a SIGTERM exactly as before)
+    stop_on_sigterm = args.progress_every is not None or results_fh is not None
     key = load_key_from_environment() if args.key_from_env else load_key(args.env)
     out = Path(os.path.realpath(args.out))  # the --out path itself is resolved once; nothing below it may be a link
     out.mkdir(parents=True, exist_ok=True)
@@ -1137,6 +1347,8 @@ def main():
                 print(f"\n  SKIP images: {players_jsonl} not found (run without --no-data first)")
             else:
                 print(f"\n[images] collecting URLs from players + teams")
+                if stop_on_sigterm:
+                    signal.signal(signal.SIGTERM, _on_sigterm)  # a flag only; read by the image loop
                 only_ids = None
                 if args.only_ids:
                     txt = Path(args.only_ids).read_text().strip()
@@ -1152,9 +1364,19 @@ def main():
                     urls, skipped = skip_known_emblems(urls, Path(args.skip_from), image_types)
                     manifest["emblemsSkippedKnown"] = skipped
                     print(f"  skip-from {args.skip_from}: known emblems skipped={skipped}, to fetch={len(urls)}")
-                stats = download_images(images_dir, urls, args.workers, Path(args.etag_vs) / "images" if args.etag_vs else None,
-                                        bucket_base=args.etag_vs_bucket.rstrip("/") if args.etag_vs_bucket else None,
-                                        refused=REFUSED)
+                try:
+                    stats = download_images(images_dir, urls, args.workers, Path(args.etag_vs) / "images" if args.etag_vs else None,
+                                            bucket_base=args.etag_vs_bucket.rstrip("/") if args.etag_vs_bucket else None,
+                                            refused=REFUSED, progress_every=args.progress_every, results=results_fh,
+                                            stop_on_sigterm=stop_on_sigterm)
+                finally:
+                    # each finished image's line is already on disk (written as it finished), also when the step
+                    # stops on a block (exit 2) or a SIGTERM (exit 143, flags only); the file is closed here
+                    if results_fh is not None:
+                        results_fh.close()
+                        results_fh = None
+                    if stop_on_sigterm:
+                        signal.signal(signal.SIGTERM, signal.SIG_DFL)  # after the image step: as before
                 manifest["imageStats"] = stats
                 manifest["cdnRequests"] = COUNTER.cdn
                 if args.etag_vs_bucket:
@@ -1166,6 +1388,9 @@ def main():
         sys.exit(f"ERROR: an API answer was too large ({e}) — refused, nothing written for it")
     except UnsafePath as e:
         sys.exit(f"ERROR: refused to write outside the output directory or through a link: {e}")
+
+    if results_fh is not None:  # --results-file without an image step: left empty
+        results_fh.close()
 
     # ---- manifest ----
     manifest["durationSeconds"] = round(time.time() - started, 1)

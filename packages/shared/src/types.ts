@@ -1,6 +1,7 @@
 import type { BaseStat, CardType, PhysiqueField, Position, PositionProficiency, TrainingCategory } from "./constants";
 import type { SyncRunStats } from "./schemas";
 import type { SyncKind, SyncStatus, SyncTrigger } from "./sync";
+import type { SyncRunProgress } from "./sync-records";
 
 // Serialized DTO shapes (what tRPC returns after SuperJSON). BigInt → string.
 /** Everything a PlayerCard tile needs in a list/grid (player.list, trending,
@@ -426,11 +427,59 @@ export interface SyncRunSummaryDTO {
   statsInvalid: boolean;
   watermarkBefore: string | null;
   watermarkAfter: string | null;
+  /**
+   * Live progress (phase, done / total, counters so far, time of the write) —
+   * only while the run is RUNNING and the stored value matches
+   * `syncRunProgressSchema`; null otherwise (openspec admin-sync-live-progress).
+   */
+  progress: SyncRunProgress | null;
 }
 
-/** admin.runs.get — a run with its (redacted, ≤ 64 KB) log tail. */
+/** One listed card of a run's record, its name etc. joined from the catalogue when the run is read (never stored). */
+export interface SyncRunCardRowDTO {
+  id: string;
+  /** null when the card is not in the catalogue (the page gathers such ids in one "N not in the catalogue now" line). */
+  baseId: string | null;
+  name: string | null;
+  /** Level-1 overall and max overall of the card, null when unknown. */
+  overall: number | null;
+  maxOverall: number | null;
+  /** Registered position (POSITIONS label). */
+  position: string | null;
+  cardType: CardType | null;
+}
+
+/**
+ * One group of the record as the admin API returns it: the first rows (≤ 50,
+ * `SYNC_ITEMS_ROWS_SHOWN`), how many the record lists (`listed` ≤ 2,000) and the
+ * true total — `total − listed` entries are not listed anywhere.
+ */
+export interface SyncRunItemGroupDTO<Row> {
+  rows: Row[];
+  listed: number;
+  total: number;
+  truncated: boolean;
+}
+
+/** What a run fetched (admin.runs.get only). */
+export interface SyncRunItemsDTO {
+  cards: { new: SyncRunItemGroupDTO<SyncRunCardRowDTO>; changed: SyncRunItemGroupDTO<SyncRunCardRowDTO> };
+  images: {
+    downloaded: SyncRunItemGroupDTO<string>;
+    overwritten: SyncRunItemGroupDTO<string>;
+    unverified: SyncRunItemGroupDTO<string>;
+    uploaded: SyncRunItemGroupDTO<string>;
+    failed: SyncRunItemGroupDTO<{ path: string; reason: string }>;
+    uploadFailed: SyncRunItemGroupDTO<{ path: string; reason: string }>;
+  };
+}
+
+/** admin.runs.get — a run with its (redacted, ≤ 64 KB) log tail and what it downloaded. */
 export interface SyncRunDTO extends SyncRunSummaryDTO {
   logTail: string;
+  /** null when the run recorded nothing (or the stored record failed `syncRunItemsSchema` — then `itemsInvalid`). */
+  items: SyncRunItemsDTO | null;
+  itemsInvalid: boolean;
 }
 
 /** admin.runs.list — newest first; pass `nextCursor` back as `cursor`. */

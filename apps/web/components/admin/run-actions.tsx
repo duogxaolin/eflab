@@ -55,7 +55,7 @@ export function CancelRunButton({
         {cancel.isPending ? "Cancelling…" : (label ?? (run ? `Cancel run #${run.id}` : "Cancel"))}
       </ActionButton>
       {error && (
-        <p role="alert" className="text-[11px] text-[var(--color-accent-danger)] [overflow-wrap:anywhere]">
+        <p role="alert" className="text-[11px] text-[var(--color-danger-soft-foreground)] [overflow-wrap:anywhere]">
           {error}
         </p>
       )}

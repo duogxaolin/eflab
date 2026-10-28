@@ -65,7 +65,7 @@ export function RunSummary({
         <p className="text-xs text-[var(--color-accent-warn)]">The stored statistics did not match the expected shape and are withheld.</p>
       )}
       {run.error && (
-        <p className="line-clamp-3 text-xs text-[var(--color-accent-danger)] [overflow-wrap:anywhere]">Error: {run.error}</p>
+        <p className="line-clamp-3 text-xs text-[var(--color-danger-soft-foreground)] [overflow-wrap:anywhere]">Error: {run.error}</p>
       )}
     </div>
   );

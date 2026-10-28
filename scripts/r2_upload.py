@@ -26,6 +26,19 @@ Usage:
   python3 scripts/r2_upload.py --workers 32       # default 32
   python3 scripts/r2_upload.py --prefix dump/efootbase/images
   python3 scripts/r2_upload.py --no-resume        # force re-upload (overwrite)
+
+Sync-worker progress / results (openspec admin-sync-live-progress; both opt-in — without them the output
+and the files are byte for byte what the script wrote before):
+  --progress-every N   print `PROGRESS <done>/<total>` (numbers only) once before the first upload and after
+      every N files and the last one
+  --results-file PATH  one JSON line per file, {"key": "<bucket key>", "outcome": "<class>"} — ok,
+      skipped_exists, or a failure class: http_<status>, timeout, other (never an error text or a URL).
+      PATH must be absolute, outside this repository, and not exist yet (created 0600, never through a link).
+      Each line is written whole as its upload finishes, so a killed run leaves every finished line.
+  With either flag, SIGTERM stops the run cleanly: the handler just sets a flag, which the upload loop reads
+  every 0.25 s; nothing more is uploaded, the running uploads finish and are recorded, the last PROGRESS
+  line and a "stopped by SIGTERM after N of M files" line are printed, then exit 143 with no manifest (as an
+  error exit). A second SIGTERM ends it at once.
 """
 
 from __future__ import annotations  # py3.9 (system python) cannot evaluate `str | None` at def time
@@ -34,7 +47,10 @@ import argparse
 import concurrent.futures
 import json
 import os
+import signal
+import socket
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -136,11 +152,126 @@ def object_exists(s3, bucket: str, key: str) -> bool:
         raise
 
 
-def upload_one(s3, bucket: str, local_path: Path, key: str, *, no_resume: bool) -> tuple[str, str]:
-    """Returns (status, key). status ∈ {ok, skip_exists, error}."""
+def error_class(e: BaseException) -> str:
+    """--results-file failure class of an upload error: http_<status> from an S3 error answer, 'timeout' for a
+    connect / read timeout, else 'other' — never the error text."""
+    if isinstance(e, ClientError):
+        code = (getattr(e, "response", None) or {}).get("ResponseMetadata", {}).get("HTTPStatusCode")
+        if isinstance(code, int) and 100 <= code <= 599:
+            return f"http_{code}"
+        return "other"
+    if isinstance(e, (socket.timeout, TimeoutError)) or "Timeout" in type(e).__name__:
+        return "timeout"
+    return "other"
+
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+class ResultsFile:
+    """--results-file, written as the uploads finish: each record is ONE whole JSON line handed to the kernel
+    in one unbuffered os.write (nothing waits in a Python buffer), so a process killed at any moment leaves
+    every finished line on disk and at most an unfinished last line, which readers drop."""
+
+    def __init__(self, fd: int):
+        self.fd = fd
+        self.lock = threading.Lock()  # the completion loop is the only writer today; kept for any later caller
+
+    def write(self, rec: dict) -> None:
+        data = (json.dumps(rec, ensure_ascii=True) + "\n").encode("ascii")
+        with self.lock:
+            while data:
+                data = data[os.write(self.fd, data):]
+
+    def close(self) -> None:
+        with self.lock:
+            if self.fd >= 0:
+                os.close(self.fd)
+                self.fd = -1
+
+
+def open_results_file(path: str) -> ResultsFile:
+    """--results-file: an absolute path outside this repository that does not exist yet, created 0600 with
+    O_EXCL|O_NOFOLLOW (never through a link). Exits with an error otherwise."""
+    if not os.path.isabs(path):
+        sys.exit(f"ERROR: --results-file must be an absolute path (got {path!r})")
+    parent = os.path.realpath(os.path.dirname(path))
+    target = os.path.join(parent, os.path.basename(path))
+    root = str(REPO_ROOT)
+    if os.path.commonpath([root, target]) == root:
+        sys.exit("ERROR: --results-file must be outside the repository tree")
+    try:
+        fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    except OSError as e:
+        sys.exit(f"ERROR: --results-file {target}: cannot create it ({e.strerror}; it must not exist yet)")
+    return ResultsFile(fd)
+
+
+class StopRequested(SystemExit):
+    """The stop a SIGTERM asked for (--progress-every / --results-file only): exit 143. Raised from ordinary
+    code once the uploads already running have been recorded — never from the signal handler."""
+
+    def __init__(self):
+        super().__init__(143)
+
+
+_TERM = {"requested": False}
+
+
+def _on_sigterm(signum, frame):
+    # Never raises: an exception at an arbitrary bytecode — e.g. inside concurrent.futures' loop that takes
+    # every future's lock — would leave locks held and deadlock the pool. It only marks the request, which
+    # the completion loop reads every 0.25 s. A second SIGTERM ends the script at once (lines already on disk).
+    signal.signal(signal.SIGTERM, signal.SIG_DFL)
+    _TERM["requested"] = True
+
+
+def run_stoppable(items, submit, take, window: int) -> bool:
+    """The completion loop used with --progress-every / --results-file. At most `window` (= the worker count)
+    items are submitted at a time, in `items` order, so each concurrent.futures.wait round costs O(window),
+    not O(all files), and no item waits queued behind the running ones (a freed worker cannot start one
+    before this loop has read the flag); the finished ones of a round are taken in submission order; the
+    SIGTERM flag is read every 0.25 s even while every worker is busy. On the flag: nothing more is
+    submitted, anything still queued is cancelled, the running ones finish and are taken. Returns True when
+    stopped by SIGTERM."""
+    it = iter(items)
+    order: dict = {}
+    pending: set = set()
+    seq = 0
+
+    def refill() -> None:
+        nonlocal seq
+        while len(pending) < window and not _TERM["requested"]:
+            item = next(it, None)
+            if item is None:
+                return
+            fut = submit(item)
+            order[fut] = seq
+            seq += 1
+            pending.add(fut)
+
+    refill()
+    while pending:
+        done, rest = concurrent.futures.wait(pending, timeout=0.25, return_when=concurrent.futures.FIRST_COMPLETED)
+        pending.clear()
+        pending.update(rest)
+        for fut in sorted(done, key=order.__getitem__):
+            if not fut.cancelled():
+                take(fut)
+        if _TERM["requested"]:
+            for fut in list(pending):
+                if fut.cancel():
+                    pending.discard(fut)  # queued, never started
+        else:
+            refill()
+    return _TERM["requested"]
+
+
+def upload_one(s3, bucket: str, local_path: Path, key: str, *, no_resume: bool) -> tuple:
+    """Returns (status, key, failure class or ''). status ∈ {ok, skip_exists, error}."""
     try:
         if not no_resume and object_exists(s3, bucket, key):
-            return ("skip_exists", key)
+            return ("skip_exists", key, "")
         ct = content_type_for(key)
         s3.upload_file(
             str(local_path),
@@ -151,9 +282,9 @@ def upload_one(s3, bucket: str, local_path: Path, key: str, *, no_resume: bool) 
                 "CacheControl": "public, max-age=31536000, immutable",
             },
         )
-        return ("ok", key)
+        return ("ok", key, "")
     except Exception as e:
-        return ("error", f"{key} | {str(e)[:120]}")
+        return ("error", f"{key} | {str(e)[:120]}", error_class(e))
 
 
 def main():
@@ -165,7 +296,19 @@ def main():
     ap.add_argument("--limit", type=int, default=None, help="limit N files (test mode)")
     ap.add_argument("--dry-run", action="store_true", help="list files, no upload")
     ap.add_argument("--no-resume", action="store_true", help="force re-upload (skip HEAD check)")
+    # ---- sync-worker progress / results (openspec admin-sync-live-progress); off by default ----
+    ap.add_argument("--progress-every", type=int, default=None, metavar="N",
+                    help="print 'PROGRESS <done>/<total>' before the first upload and every N files (numbers only)")
+    ap.add_argument("--results-file", default=None, metavar="PATH",
+                    help="one JSON line per file {key, outcome} to PATH (absolute, outside the repository, new)")
     args = ap.parse_args()
+    if args.progress_every is not None and args.progress_every < 1:
+        sys.exit("ERROR: --progress-every must be at least 1")
+    results_fh = open_results_file(args.results_file) if args.results_file else None
+    stoppable = args.progress_every is not None or results_fh is not None
+    if stoppable:
+        # only with the sync-worker flags (without them a SIGTERM ends the script exactly as before)
+        signal.signal(signal.SIGTERM, _on_sigterm)
 
     repo_root = Path(__file__).resolve().parent.parent
     load_env(repo_root / args.env)
@@ -194,6 +337,11 @@ def main():
             size = p.stat().st_size
             print(f"  {k}  ({size:,} B)")
         print(f"...\n[dry-run] total {len(files)} files, would upload to bucket {bucket}")
+        if results_fh is not None:  # nothing uploaded: left empty
+            results_fh.close()
+        if _TERM["requested"]:
+            print(f"[upload] stopped by SIGTERM after 0 of {len(files)} files (dry run); no manifest written", file=sys.stderr)
+            raise StopRequested()
         return
 
     s3 = make_s3_client(account_id, access_key, secret)
@@ -203,25 +351,59 @@ def main():
     done = 0
 
     print(f"\n[upload] starting {len(files)} files, {args.workers} workers...")
+    if args.progress_every and files:
+        print(f"PROGRESS 0/{len(files)}")
+    progress_shown = 0
+    key_of: dict = {}  # submitted future → its bucket key (both loops fill it)
+
+    def take(fut) -> None:
+        """One finished upload: its counts and error line, its results line (written now, before the progress
+        line that announces it), then the progress lines."""
+        nonlocal done, progress_shown
+        k = key_of[fut]
+        try:
+            status, info, reason = fut.result()
+            stats[status] = stats.get(status, 0) + 1
+            if status == "error":
+                errors_log.append(info)
+            if results_fh is not None:
+                results_fh.write({"key": k, "outcome": "skipped_exists" if status == "skip_exists" else (reason or "other") if status == "error" else "ok"})
+        except Exception as e:
+            stats["error"] += 1
+            errors_log.append(f"{k} | {str(e)[:120]}")
+            if results_fh is not None:
+                results_fh.write({"key": k, "outcome": error_class(e)})
+        done += 1
+        if args.progress_every and (done % args.progress_every == 0 or done == len(files)):
+            print(f"PROGRESS {done}/{len(files)}")
+            progress_shown = done
+        if done % 500 == 0 or done == len(files):
+            rate = done / (time.time() - t0) if time.time() > t0 else 0
+            print(f"  {done}/{len(files)} ({rate:.0f}/s) ok={stats['ok']} skip={stats['skip_exists']} err={stats['error']}")
+
+    stopped = False
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.workers) as pool:
-        futures = {
-            pool.submit(upload_one, s3, bucket, p, k, no_resume=args.no_resume): k
-            for p, k in files
-        }
-        for fut in concurrent.futures.as_completed(futures):
-            k = futures[fut]
-            try:
-                status, info = fut.result()
-                stats[status] = stats.get(status, 0) + 1
-                if status == "error":
-                    errors_log.append(info)
-            except Exception as e:
-                stats["error"] += 1
-                errors_log.append(f"{k} | {str(e)[:120]}")
-            done += 1
-            if done % 500 == 0 or done == len(files):
-                rate = done / (time.time() - t0) if time.time() > t0 else 0
-                print(f"  {done}/{len(files)} ({rate:.0f}/s) ok={stats['ok']} skip={stats['skip_exists']} err={stats['error']}")
+        def submit(item):
+            p, k = item
+            fut = pool.submit(upload_one, s3, bucket, p, k, no_resume=args.no_resume)
+            key_of[fut] = k
+            return fut
+
+        if stoppable:
+            stopped = run_stoppable(files, submit, take, window=max(1, args.workers))
+        else:
+            futures = [submit(item) for item in files]  # the loop as it always was
+            for fut in concurrent.futures.as_completed(futures):
+                take(fut)
+
+    if results_fh is not None:
+        results_fh.close()
+    if stopped:
+        if args.progress_every and progress_shown != done:
+            print(f"PROGRESS {done}/{len(files)}")
+        print(f"[upload] stopped by SIGTERM after {done} of {len(files)} files "
+              f"(ok={stats['ok']} skip={stats['skip_exists']} err={stats['error']}); no manifest written", file=sys.stderr)
+        raise StopRequested()
 
     duration = time.time() - t0
     manifest = {

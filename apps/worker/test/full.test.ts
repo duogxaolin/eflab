@@ -15,6 +15,7 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SYNC_BLOCK_HOURS, type SyncRunStats } from "@eflab/shared";
+import { syncRunItemsSchema } from "@eflab/shared/sync-records";
 import { SEED_FALLBACK_R2_BASE } from "../src/catalogue.js";
 import { isLoopbackHost } from "../src/efootbase.js";
 import { DB_PACKAGE_DIR, SEED_ENTRY, loadWorkerEnv, seedChildEnv } from "../src/env.js";
@@ -164,6 +165,15 @@ if ("skip" in scratch) {
       assert(staging !== null && staging.startsWith(join(tmpdir(), `eflab-sync-${row.id}-`)) && leftovers(row.id).length === 0, "first full run: the staging directory (os.tmpdir()/eflab-sync-<runId>-…) was removed");
       assert(row.watermarkAfter?.getTime() === T * 1000, "first full run: watermark after = the newest card");
       assert(!row.logTail.includes("--prune") && !row.logTail.includes("--reset-users") && row.logTail.includes(" seed "), "first full run: the seed ran (no --prune / --reset-users)");
+      // admin-sync-live-progress: the record of the full run
+      const it = syncRunItemsSchema.safeParse(row.items);
+      const ids = [0, 1, 2, 3, 4].map((k) => FAKE_ID_BASE + k);
+      assert(it.success && it.data.cards.new.ids.join() === ids.join() && it.data.cards.new.total === 5 && it.data.cards.changed.total === 0, `first full run: items list the 5 new cards newest first (${it.success ? it.data.cards.new.ids.join(", ") : it.error.message})`);
+      assert(
+        it.success && it.data.images.downloaded.total === 11 && it.data.images.uploaded.total === 11 && it.data.images.downloaded.paths[0] === `cards/${id(0)}_dynamic.webp` && it.data.images.downloaded.paths[10]!.startsWith("emblems/nationality/"),
+        `first full run: 11 image paths downloaded and uploaded, newest card first, emblems last (${it.success ? `${it.data.images.downloaded.paths[0]} … ${it.data.images.downloaded.paths[10]}` : "-"})`,
+      );
+      assert(row.progress === null, "first full run: no live progress once it ended");
     }
     await prisma.$executeRaw`UPDATE "Player" SET stars = 5, reputation = 2, "ratingCF" = 91 WHERE id = ${id(1)}`;
 
@@ -197,6 +207,11 @@ if ("skip" in scratch) {
       const gets = reqs.filter((r) => r.path.startsWith("/cdn/") && r.method === "GET").map((r) => r.path.replace("/cdn/", "")).sort();
       assert(JSON.stringify(gets) === JSON.stringify(expected), `edited cards: the unchanged image of an edited card was not downloaded (${gets.join(", ")})`);
       assert(leftovers(row.id).length === 0, "edited cards: the staging directory was removed");
+      const it = syncRunItemsSchema.safeParse(row.items);
+      assert(
+        it.success && it.data.cards.new.ids.join() === String(FAKE_ID_BASE + 5) && it.data.cards.changed.ids.join() === [FAKE_ID_BASE + 1, FAKE_ID_BASE + 2].join() && it.data.images.overwritten.paths.join() === editedImage && it.data.images.downloaded.total === 3,
+        `edited cards: items — new ${it.success ? it.data.cards.new.ids.join() : "?"}, changed ${it.success ? it.data.cards.changed.ids.join() : "?"} (newest first), overwritten ${it.success ? it.data.images.overwritten.paths.join() : "?"}`,
+      );
     }
 
     // ---- seed failure: the catalogue holds exactly the rows it held, staging removed ----
@@ -345,6 +360,8 @@ if ("skip" in scratch) {
       const mid = await prisma.syncRun.findUniqueOrThrow({ where: { id: run.id } });
       const midPending = (mid.stats as { imagesPendingIds?: number[] }).imagesPendingIds ?? [];
       assert(waiting > 0 && midPending.includes(Number(id(4))), `W-d: the seed waits inside its transaction; the pending image ids are already on the run row (${midPending.join(",")})`);
+      const midItems = syncRunItemsSchema.safeParse(mid.items);
+      assert(midItems.success && midItems.data.cards.changed.ids.includes(Number(id(4))), `W-d: the items record (changed cards) is on the row before the seed (${midItems.success ? midItems.data.cards.changed.ids.join(",") : "none"})`);
       await prisma.syncRun.update({ where: { id: run.id }, data: { cancelRequested: true } });
       await new Promise((r) => setTimeout(r, 800)); // the cancel poll (100 ms) has fired
       release();
@@ -358,10 +375,48 @@ if ("skip" in scratch) {
       assert((await prisma.syncRun.count({ where: { status: "RUNNING" } })) === 0 && leftovers(row.id).length === 0, "W-d: no run left RUNNING, staging removed");
     }
 
+    // ---- verify W2: the image step blocked part-way after the seed — BLOCKED, the record keeps the images downloaded before ----
+    {
+      const fresh = seedableRows(10, { cdnBase: fake.cdnBase, newestTimeAdded: T + 150_000, startIndex: 600 });
+      fake.setRows([...fresh, ...rows]);
+      fake.setCdnBlockAfter(6);
+      const blocked = await runOnce();
+      fake.setCdnBlockAfter(null);
+      const it = syncRunItemsSchema.safeParse(blocked.row.items);
+      const dl = it.success ? it.data.images.downloaded : null;
+      const written = await prisma.player.count({ where: { id: { in: fresh.map((r) => BigInt(r.id)) } } });
+      assert(blocked.row.status === "BLOCKED" && written === 10 && /already updated by the seed/.test(blocked.row.error ?? ""), `W2 full: the seed committed, the image step was blocked part-way → BLOCKED (${blocked.row.status}; ${written} of 10 cards written)`);
+      assert(
+        it.success && it.data.cards.new.ids.length === 10 && dl !== null && dl.total >= 1 && dl.total <= 9 && dl.paths.every((p) => /^cards\/9900000006\d\d_/.test(p)),
+        `W2 full: the record lists the 10 new cards and the ${dl?.total} images downloaded before the block (not cards only)`,
+      );
+      // the next full run compares the owed images of those cards (the earlier rule) and leaves nothing owed
+      const after = await runOnce();
+      assert(after.row.status === "OK" && (after.stats as { imagesPendingIds?: number[] }).imagesPendingIds === undefined, `W2 full: the next run catches up the images (${after.row.status})`);
+    }
+
+    // ---- admin-sync-live-progress — "More than the cap": 2,500 changed cards → 2,000 ids listed, total 2,500 ----
+    // (rows without images, so the two runs are a dump + a seed each)
+    {
+      const big = seedableRows(2_500, { cdnBase: fake.cdnBase, newestTimeAdded: T + 200_000, startIndex: 1_000, stepSeconds: 1, extra: () => ({ card_images: {}, emblem_images: {} }) });
+      fake.setRows([...big, ...rows]);
+      const first = await runOnce();
+      assert(first.row.status === "OK" && first.stats.cardsNew === 2_500, `2,500 cards: first run OK, ${first.stats.cardsNew} new (${first.row.error ?? ""})`);
+      fake.setRows([...big.map((r) => ({ ...r, finishing: 99 })), ...rows]);
+      const second = await runOnce();
+      const it = syncRunItemsSchema.safeParse(second.row.items);
+      const ch = it.success ? it.data.cards.changed : null;
+      assert(second.row.status === "OK" && second.stats.cardsChanged === 2_500, `2,500 changed: run OK, cardsChanged ${second.stats.cardsChanged}`);
+      assert(ch !== null && ch.ids.length === 2_000 && ch.total === 2_500 && ch.truncated, `2,500 changed: the record lists 2,000 ids, total 2,500, truncated — 500 not listed (${ch?.ids.length} / ${ch?.total} / ${ch?.truncated})`);
+      assert(ch !== null && ch.ids[0] === FAKE_ID_BASE + 1_000 && ch.ids[1_999] === FAKE_ID_BASE + 2_999, `2,500 changed: the newest 2,000 are kept, newest first (${ch?.ids[0]} … ${ch?.ids[1_999]})`);
+      const size = (await prisma.$queryRaw<Array<{ n: number }>>`SELECT octet_length(items::text)::int AS n FROM "SyncRun" WHERE id = ${second.row.id}`)[0]?.n ?? 0;
+      assert(size > 0 && size <= 524_288, `2,500 changed: the stored record is ${size} bytes of jsonb text (≤ 512 KB)`);
+    }
+
     // ---- secrets never stored ----
     {
       const runs = await prisma.syncRun.findMany();
-      const stored = runs.map((r) => `${r.logTail}\n${r.error ?? ""}\n${JSON.stringify(r.stats)}`).join("\n");
+      const stored = runs.map((r) => `${r.logTail}\n${r.error ?? ""}\n${JSON.stringify(r.stats)}\n${JSON.stringify(r.progress)}\n${JSON.stringify(r.items)}`).join("\n");
       const leaked = Object.entries(TEST_SECRETS).filter(([, v]) => stored.includes(v)).map(([k]) => k);
       assert(leaked.length === 0, `no secret value in any stored log / error / stats (leaked: ${leaked.join(", ") || "none"})`);
       const pw = new URL(scratch.url).password;

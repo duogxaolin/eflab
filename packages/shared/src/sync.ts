@@ -38,7 +38,8 @@ export function syncKindGroup(kind: SyncKind): "check" | "sync" {
 
 export const SYNC_INTERVAL_MIN_MINUTES = 15;
 export const SYNC_INTERVAL_MAX_MINUTES = 1440;
-export const SYNC_DEFAULT_INTERVAL_MINUTES = 360;
+/** Hourly since change admin-sync-live-progress (migration 20261028000000: the column default and a row still at 360). */
+export const SYNC_DEFAULT_INTERVAL_MINUTES = 60;
 export const SYNC_DEFAULT_FULL_WEEKDAY = 0; // Sunday (UTC)
 export const SYNC_DEFAULT_FULL_HOUR_UTC = 3;
 /** Length of the weekly full-sync window that opens at `fullHourUtc`. */

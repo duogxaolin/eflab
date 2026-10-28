@@ -38,7 +38,8 @@ const BUTTON_TONE = {
     "bg-[var(--color-accent)] text-[var(--color-accent-foreground)] font-bold hover:brightness-110 aria-disabled:hover:brightness-100",
   secondary: "button--secondary",
   danger:
-    "border border-[var(--color-accent-danger)]/60 bg-[var(--color-accent-danger)]/10 text-[var(--color-accent-danger)] hover:bg-[var(--color-accent-danger)]/20",
+    // text in the readable danger token (the fill token reads ~2.8:1 here — axe color-contrast)
+    "border border-[var(--color-accent-danger)]/60 bg-[var(--color-accent-danger)]/10 text-[var(--color-danger-soft-foreground)] hover:bg-[var(--color-accent-danger)]/20",
 } as const;
 
 /**

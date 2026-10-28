@@ -36,6 +36,15 @@
 // by the next full run (CR2); the seed child is not stopped by an abort and runs
 // inside ctx.writeCatalogue (W-d).
 //
+// Progress and the items record (openspec change admin-sync-live-progress):
+// phases "Dumping" → "Comparing rows" (done / total = rows compared / rows in
+// the dump) → "Seeding" → "Comparing images" → "Downloading images" (the image
+// child's PROGRESS lines) → "Uploading images" (the upload's). The record keeps
+// the new / changed card ids newest first (by `time_added`, the dump itself is
+// not in release order) — written by the checkpoint before the seed — and,
+// after the image step and the upload, their image lists and failure classes
+// (read before the staging directory goes), written by the final update.
+//
 // Documented trade-offs: an image that changed while its row did not is not
 // detected (a manual dump stays the exhaustive path); images come after the
 // seed (design decision 7), so a failed image step leaves the catalogue updated
@@ -46,6 +55,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { assignPackSlugs, basename, buildCardTypeMap, buildPlayerRow, skillKeyToSlug, type PlayersMeta } from "@eflab/db/efootbase-map";
 import { incrementalWatermark } from "@eflab/shared";
+import { buildSyncRunItems, type SyncItemsInput } from "@eflab/shared/sync-records";
 import { assertLoopbackUrl, sourceImageUrlAllowed } from "../efootbase.js";
 import { SEED_WRITE_WAIT_MS } from "../limits.js";
 import { checkRowId, checkSourceImages, heldSkillKeys, jsonlRows, loadDbLookups, pendingImageIds, playerDigest, seedLeagueIds, storedDigests } from "../catalogue.js";
@@ -55,16 +65,21 @@ import {
   RunStop,
   count,
   fail,
+  imageItems,
   imageStepOutcome,
   makeRunDir,
+  newestFirstFailures,
+  newestFirstPaths,
   readManifest,
   recordOwedImages,
+  recordStoppedStep,
   removeRunDir,
   runDumpScript,
   runSeed,
   runUpload,
   stopToOutcome,
   uploadPreflight,
+  uploadResultsFile,
 } from "../scripts.js";
 
 /** Free space the staging directory needs (design decision 7): the dump is ~0.3 GB of JSON plus images. */
@@ -139,6 +154,7 @@ async function full(ctx: RunContext): Promise<RunOutcome> {
   ctx.log(`staging directory ${staging}`);
   try {
     // ---- 2. dump everything (no images) ----
+    ctx.setProgress({ phase: "Dumping" });
     await runDumpScript(ctx, ["--out", staging, "--no-images", "--dumped-at", ctx.now().toISOString()], "dump");
     const manifest = readManifest(staging);
     ctx.stats.pages = count(manifest, "lastPage");
@@ -189,7 +205,11 @@ async function full(ctx: RunContext): Promise<RunOutcome> {
     const newIds: number[] = [];
     const changedIds: number[] = [];
     let unchanged = 0;
+    const released = new Map<number, number>(); // id → time_added of the new / changed cards (newest-first order)
+    let compared = 0;
+    ctx.setProgress({ phase: "Comparing rows", done: 0, total: n });
     for await (const r of jsonlRows(dumpPath)) {
+      if (++compared % 1000 === 0) ctx.setProgress({ phase: "Comparing rows", done: compared, total: n });
       let row: Record<string, unknown>;
       try {
         row = buildPlayerRow(r, BigInt(r.id), cardTypeByCode, countryIds, teamIds, packIds, leagueIds, []);
@@ -199,14 +219,25 @@ async function full(ctx: RunContext): Promise<RunOutcome> {
       // Unknown s_* keys are left out here: the seed rejects them itself.
       const skills = heldSkillKeys(r).map((k) => lookups.skillBySlug.get(skillKeyToSlug(k))?.id).filter((id): id is number => id !== undefined);
       const prev = stored.get(String(r.id));
-      if (prev === undefined) newIds.push(r.id);
-      else if (prev !== playerDigest(row, skills, names)) changedIds.push(r.id);
-      else unchanged++;
+      const t = typeof r.time_added === "number" && Number.isFinite(r.time_added) ? r.time_added : 0;
+      if (prev === undefined) {
+        newIds.push(r.id);
+        released.set(r.id, t);
+      } else if (prev !== playerDigest(row, skills, names)) {
+        changedIds.push(r.id);
+        released.set(r.id, t);
+      } else unchanged++;
     }
+    ctx.setProgress({ phase: "Comparing rows", done: compared, total: Math.max(n, compared) });
     ctx.stats.cardsNew = newIds.length;
     ctx.stats.cardsChanged = changedIds.length;
     ctx.stats.cardsUnchanged = unchanged;
     ctx.log(`dump: ${n} cards — ${newIds.length} new, ${changedIds.length} changed, ${unchanged} unchanged (compared with the database)`);
+    // Newest first = release time descending, then id descending (the dump's own order is not by release).
+    const newestFirst = (ids: number[]) => [...ids].sort((a, b) => (released.get(b) ?? 0) - (released.get(a) ?? 0) || b - a);
+    const found: SyncItemsInput = { newIds: newestFirst(newIds), changedIds: newestFirst(changedIds) };
+    const rank = new Map<number, number>(newestFirst([...newIds, ...changedIds]).map((id, i) => [id, i]));
+    ctx.recordItems(buildSyncRunItems(found));
 
     // ---- 4. the seed ----
     // The cards whose images this run must compare: new ∪ changed ∪ those an earlier full run left
@@ -219,6 +250,7 @@ async function full(ctx: RunContext): Promise<RunOutcome> {
     ctx.stats.imagesChecked = false;
     if (imageIds.length > 0) ctx.stats.imagesPendingIds = imageIds;
     await ctx.checkpoint(); // throws (no seed) when the state cannot be recorded — third verify S4
+    ctx.setProgress({ phase: "Seeding" });
     await ctx.writeCatalogue(
       "the seed (full catalogue write)",
       () =>
@@ -237,9 +269,16 @@ async function full(ctx: RunContext): Promise<RunOutcome> {
     // ---- 5. images of new, changed and carried-over cards ----
     const idsFile = join(staging, "only_ids.json");
     writeFileSync(idsFile, JSON.stringify(imageIds));
+    ctx.setProgress({ phase: "Comparing images" });
+    const imageResults = join(staging, "image_results.jsonl");
     try {
-      await runDumpScript(ctx, ["--out", staging, "--no-data", "--only-ids", idsFile, "--etag-vs-bucket", env.r2PublicBase!], "images");
+      await runDumpScript(ctx, ["--out", staging, "--no-data", "--only-ids", idsFile, "--etag-vs-bucket", env.r2PublicBase!], "images", {
+        resultsFile: imageResults,
+        onProgress: (done, total) => ctx.setProgress({ phase: "Downloading images", done, total }),
+      });
     } catch (e) {
+      // blocked / failed / cancelled / time limit / worker stop: keep what the step fetched (verify W2), then the original error
+      recordStoppedStep(ctx, found, rank, { imageDir: staging, imageResults }, "the image step");
       if (e instanceof RunStop) {
         const o = e.outcome;
         throw new RunStop(o.status === "BLOCKED" ? { ...o, reason: `${o.reason}; the catalogue was already updated by the seed` } : { ...o, error: `${o.error}; the catalogue was already updated by the seed` });
@@ -249,6 +288,8 @@ async function full(ctx: RunContext): Promise<RunOutcome> {
     const im = readManifest(staging);
     const st = (im.imageStats ?? {}) as Record<string, unknown>;
     const step = imageStepOutcome(staging);
+    Object.assign(found, imageItems(staging, imageResults, rank));
+    ctx.recordItems(buildSyncRunItems(found));
     ctx.stats.requests = (ctx.stats.requests ?? 0) + count(im, "cdnRequests");
     ctx.stats.imagesDownloaded = count(st, "ok");
     ctx.stats.imagesFailed = step.failedRels.length;
@@ -262,11 +303,21 @@ async function full(ctx: RunContext): Promise<RunOutcome> {
     );
     const owed = new Set<number>(step.failedIds);
     if (ctx.stats.imagesDownloaded > 0) {
-      const up = await runUpload(ctx, join(staging, "images"));
+      ctx.setProgress({ phase: "Uploading images" });
+      let up: Awaited<ReturnType<typeof runUpload>>;
+      try {
+        up = await runUpload(ctx, join(staging, "images"), staging, (done, total) => ctx.setProgress({ phase: "Uploading images", done, total }));
+      } catch (e) {
+        recordStoppedStep(ctx, found, rank, { uploadResults: uploadResultsFile(staging) }, "the upload");
+        throw e;
+      }
       ctx.stats.imagesUploaded = up.ok;
       ctx.stats.imagesFailed += up.errors;
-      // which files failed is not known: every downloaded card is compared again next time (an uploaded one then reads "same")
+      // every downloaded card is compared again next time when an upload failed (an uploaded one then reads "same")
       if (up.errors > 0) for (const id of step.downloadedIds) owed.add(id);
+      found.uploaded = newestFirstPaths(up.uploaded, rank);
+      found.uploadFailed = newestFirstFailures(up.uploadFailed, rank);
+      ctx.recordItems(buildSyncRunItems(found));
     }
     if (ctx.stats.imagesOverwritten > 0) {
       ctx.log(`${ctx.stats.imagesOverwritten} card images were overwritten in the bucket — raise the web build's image version (DEFAULT_IMAGE_VERSION) and rebuild the web app so visitors see them`);

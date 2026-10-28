@@ -1028,8 +1028,10 @@ fi
 #      league differs from its team's ("Free Agent" vs "Other" on the
 #      2026-10-24 data) and another card of that kind (a Vissel Kobe card of
 #      league 30 there). Each card's list query is narrowed by its team,
-#      nation and overall so it lands on page 1; calls go in tRPC batches of
-#      ten (the API's maxBatchSize). The number of cards whose own league
+#      nation and overall, 200 a page, and the next pages are read until the
+#      card is found or the pages run out (a group can exceed one page — a
+#      FREE card shares team, nation and overall with 100+ others); calls go
+#      in tRPC batches of ten (the API's maxBatchSize). The number of cards whose own league
 #      differs from their team's league is then computed through the API alone
 #      — per league L: the L-filter's total minus the total of L ∧ the teams
 #      whose league is L (player.teams) — and compared with the independent
@@ -1085,17 +1087,26 @@ for c, d in zip(cards, dtos):
         notes.append("%s %s: own league %s, team league %s" % (c["tag"], c["id"], "null" if cl is None else "%d %s" % (cl["id"], cl["name"]), d.get("leagueName")))
     if c["tag"] == "free" and (cl is None or cl["name"] == d.get("leagueName")):
         bad.append("%s FREE card: own league %s equals the team league %s" % (c["id"], cl, d.get("leagueName")))
-def narrowed(c, d):
-    q = dict(leagueIds=[d["cardLeague"]["id"]], ovrMin=c["ovr"], ovrMax=c["ovr"], limit=100)
+def narrowed(c, d, page=1):
+    q = dict(leagueIds=[d["cardLeague"]["id"]], ovrMin=c["ovr"], ovrMax=c["ovr"], limit=200, page=page)
     if c["team"] != "": q["clubIds"] = [int(c["team"])]
     if c["nat"] > 0: q["nationalityIds"] = [c["nat"]]
     return q
 pairs = [(c, d) for c, d in zip(cards, dtos) if d and d.get("cardLeague")]
 need = [c for c, _ in pairs]
 lists = batch("player.list", [narrowed(c, d) for c, d in pairs])
-for c, res in zip(need, lists):
-    if any(i["id"] == c["id"] for i in res["items"]): listed += 1
-    else: unlisted.append("%s (total %d)" % (c["id"], res["total"]))
+for (c, d), res in zip(pairs, lists):
+    # the narrowed group can hold more than one page (e.g. a FREE card: one team, nation and overall shared by
+    # 100+ cards): the next pages are read until the card is found or the pages run out — every filter kept,
+    # so the check still proves that leagueIds=[cardLeague.id] lists the card
+    page = 1
+    found = any(i["id"] == c["id"] for i in res["items"])
+    while not found and page < res["totalPages"]:
+        page += 1
+        res = batch("player.list", [narrowed(c, d, page)])[0]
+        found = any(i["id"] == c["id"] for i in res["items"])
+    if found: listed += 1
+    else: unlisted.append("%s (total %d, %d pages read)" % (c["id"], res["total"], page))
 # Global: per league, the filter total minus the cards of the teams of that league.
 leagues = batch("player.leagues", [None])[0]
 teams = batch("player.teams", [None])[0]
@@ -1851,8 +1862,9 @@ run_admin_checks() {
   # -- 6. config.get / config.update ------------------------------------------
   admin_req GET admin.config.get - -H @"$C1"
   local cfg0; cfg0="$(ares '"%s|%s|%s|%s|%s|%s" % (d["enabled"], d["incrementalIntervalMin"], d["fullWeekday"], d["fullHourUtc"], d["blockedUntil"], d["updatedBy"])')"
-  if [ "$ACODE" = "200" ] && [ "$cfg0" = "True|360|0|3|None|None" ]; then
-    apass "admin.config.get → defaults (enabled, every 360 min, full Sunday 03:00 UTC, not blocked)"
+  # hourly by default since migration 20261028000000_admin_sync_live_progress (was 360)
+  if [ "$ACODE" = "200" ] && [ "$cfg0" = "True|60|0|3|None|None" ]; then
+    apass "admin.config.get → defaults (enabled, every 60 min, full Sunday 03:00 UTC, not blocked)"
   else
     afail "admin.config.get defaults" "code=$ACODE got=$cfg0"
   fi
@@ -2103,6 +2115,99 @@ print("%d|%s|%s" % (len(ids), ids == sorted(set(ids), reverse=True), times == so
     apass "dashboard → worker offline without heartbeat / online at 0 s / offline at 3 min; last run, active runs, next runs, 12 overwritten images (run #$over_id), empty catalogue → no newest card"
   else
     afail "dashboard" "dash=$dash online_now=$online_now stale=$online_stale active=$active_ids (check $check4_id)"
+  fi
+
+  # -- 14b. live progress and the downloaded-items record (admin-sync-live-progress) --
+  # Worker-side state written with psql, as above. The catalogue gets one card (no release date, so the
+  # dashboard's newest card stays empty); the record lists it, an id the catalogue does not hold and
+  # 2,500 changed cards of which it keeps 2,000.
+  pg_scratch >/dev/null 2>&1 <<'SQL'
+INSERT INTO "Country" ("id", "name") VALUES (1, 'Smokeland') ON CONFLICT DO NOTHING;
+INSERT INTO "Player" ("id", "baseId", "name", "nationalityId", "height", "weight", "age", "registeredPosition", "cardType", "ovr", "maxOvr")
+VALUES (990000000101, 990000500101, 'Smoke Card One', 1, 180, 75, 25, 12, 'HIGHLIGHT', 85, 101);
+SQL
+  local items_json; items_json="$(py 'import json
+ids = [990000001000 + i for i in range(2000)]
+none = {"paths": [], "total": 0, "truncated": False}
+print(json.dumps({"version": 1,
+  "cards": {"new": {"ids": [990000000101, 990000000999], "total": 2, "truncated": False}, "changed": {"ids": ids, "total": 2500, "truncated": True}},
+  "images": {"downloaded": {"paths": ["cards/990000000101_dynamic.webp", "emblems/team/abc123.png"], "total": 2, "truncated": False},
+             "overwritten": none, "unverified": none, "uploaded": {"paths": ["cards/990000000101_dynamic.webp"], "total": 1, "truncated": False},
+             "failed": {"entries": [{"path": "cards/990000000101_transparent.webp", "reason": "http_404"}], "total": 1, "truncated": False},
+             "uploadFailed": {"entries": [], "total": 0, "truncated": False}}}))')"
+  local items_id; items_id="$(pg_scratch -c "INSERT INTO \"SyncRun\" (\"kind\", \"trigger\", \"status\", \"queuedAt\", \"startedAt\", \"finishedAt\", \"stats\", \"items\")
+    VALUES ('FULL', 'SCHEDULE', 'OK', (now() AT TIME ZONE 'UTC') - interval '2 days', (now() AT TIME ZONE 'UTC') - interval '2 days', (now() AT TIME ZONE 'UTC') - interval '2 days',
+            '{\"cardsNew\": 2, \"cardsChanged\": 2500}', '$items_json') RETURNING id")"
+  local empty_id; empty_id="$(pg_scratch -c "INSERT INTO \"SyncRun\" (\"kind\", \"trigger\", \"status\", \"queuedAt\", \"startedAt\", \"finishedAt\", \"items\")
+    VALUES ('INCREMENTAL', 'SCHEDULE', 'OK', (now() AT TIME ZONE 'UTC') - interval '3 days', (now() AT TIME ZONE 'UTC') - interval '3 days', (now() AT TIME ZONE 'UTC') - interval '3 days',
+            '{\"version\": 1, \"cards\": {\"new\": {\"ids\": [], \"total\": 0, \"truncated\": false}, \"changed\": {\"ids\": [], \"total\": 0, \"truncated\": false}}, \"images\": {\"downloaded\": {\"paths\": [], \"total\": 0, \"truncated\": false}, \"overwritten\": {\"paths\": [], \"total\": 0, \"truncated\": false}, \"unverified\": {\"paths\": [], \"total\": 0, \"truncated\": false}, \"uploaded\": {\"paths\": [], \"total\": 0, \"truncated\": false}, \"failed\": {\"entries\": [], \"total\": 0, \"truncated\": false}, \"uploadFailed\": {\"entries\": [], \"total\": 0, \"truncated\": false}}}') RETURNING id")"
+  local named_id; named_id="$(pg_scratch -c "INSERT INTO \"SyncRun\" (\"kind\", \"trigger\", \"status\", \"queuedAt\", \"items\")
+    VALUES ('CHECK', 'SCHEDULE', 'CANCELLED', (now() AT TIME ZONE 'UTC') - interval '4 days',
+            '{\"version\": 1, \"names\": [\"Smoke Card Leak\"]}') RETURNING id")"
+  # The join is ONE Player lookup: per-table scan counters (pg_stat_user_tables) of the scratch database.
+  # A backend flushes its counters at the latest 10 s after it went idle (Postgres ≥ 15), so the reads
+  # wait 11 s — before (earlier requests drained), and after each runs.get.
+  local scan_sql="SELECT coalesce(seq_scan, 0) + coalesce(idx_scan, 0) FROM pg_stat_user_tables WHERE relname = 'Player'"
+  sleep 11; local scans0; scans0="$(pg_scratch -c "$scan_sql")"
+  admin_req GET admin.runs.get "{\"id\":${empty_id:-0}}" -H @"$C1"
+  local e_get; e_get="$(ares '"%s|%s|%s" % (d["items"]["cards"]["new"]["total"], d["items"]["images"]["failed"]["rows"], d["itemsInvalid"])')"
+  sleep 11; local scans1; scans1="$(pg_scratch -c "$scan_sql")"
+  admin_req GET admin.runs.get "{\"id\":${items_id:-0}}" -H @"$C1"
+  local i_code="$ACODE" i_store=no; no_store && i_store=yes
+  local i_new; i_new="$(ares '"%s" % [(r["id"], r["baseId"], r["name"], r["overall"], r["maxOverall"], r["position"], r["cardType"]) for r in d["items"]["cards"]["new"]["rows"]]')"
+  local i_changed; i_changed="$(ares '"%s|%s|%s|%s|%s|%s" % (len(d["items"]["cards"]["changed"]["rows"]), d["items"]["cards"]["changed"]["listed"], d["items"]["cards"]["changed"]["total"], d["items"]["cards"]["changed"]["truncated"], d["items"]["cards"]["changed"]["rows"][0]["id"], d["items"]["cards"]["changed"]["rows"][0]["name"])')"
+  local i_images; i_images="$(ares '"%s|%s|%s|%s" % (d["items"]["images"]["downloaded"]["rows"], d["items"]["images"]["uploaded"]["total"], d["items"]["images"]["failed"]["rows"], d["itemsInvalid"])')"
+  sleep 11; local scans2; scans2="$(pg_scratch -c "$scan_sql")"
+  admin_req GET admin.runs.list '{"limit":50}' -H @"$C1"
+  local i_list; i_list="$(ares 'any("items" in r for r in d["items"])')"
+  admin_req GET admin.runs.get "{\"id\":${named_id:-0}}" -H @"$C1"
+  local i_named; i_named="$(ares '"%s|%s" % (d["items"], d["itemsInvalid"])')"; local i_named_body="$ABODY"
+  local i_stored; i_stored="$(pg_scratch -c "SELECT count(*) FROM \"SyncRun\" WHERE items::text LIKE '%Smoke Card One%'")"
+  if [ "$i_code" = "200" ] && [ "$i_store" = "yes" ] \
+    && [ "$i_new" = "[('990000000101', '990000500101', 'Smoke Card One', 85, 101, 'CF', 'HIGHLIGHT'), ('990000000999', None, None, None, None, None, None)]" ] \
+    && [ "$i_changed" = "50|2000|2500|True|990000001000|None" ] \
+    && [ "$i_images" = "['cards/990000000101_dynamic.webp', 'emblems/team/abc123.png']|1|[{'path': 'cards/990000000101_transparent.webp', 'reason': 'http_404'}]|False" ] \
+    && [ "$i_list" = "False" ]; then
+    apass "runs.get → items: card rows joined from the catalogue (name, overall, max, position, type; an unknown id without a name), 50 of 2,000 listed of 2,500 changed (500 not listed), image paths and http_404; runs.list carries no items; no-store"
+  else
+    afail "runs.get items view" "code=$i_code no-store=$i_store new=$i_new changed=$i_changed images=$i_images list-has-items=$i_list"
+  fi
+  if [ "$i_named" = "None|True" ] && [[ "$i_named_body" != *"Smoke Card Leak"* ]] && [ "$i_stored" = "0" ] && [ "$e_get" = "0|[]|False" ]; then
+    apass "names are never stored (no record holds a card name) and a stored record with an unlisted key is withheld (items null + itemsInvalid); an empty record reads as empty groups"
+  else
+    afail "items record: names never stored, invalid record withheld" "named=$i_named stored-with-name=$i_stored empty=$e_get"
+  fi
+  if [ "$((scans1 - scans0))" = "0" ] && [ "$((scans2 - scans1))" = "1" ]; then
+    apass "the names join is ONE Player lookup per runs.get (scan counter +1 for 52 listed card ids, +0 for a record without card ids)"
+  else
+    afail "names join = one bounded lookup" "scans $scans0 → $scans1 → $scans2"
+  fi
+  # live progress: on runs.get / runs.list / the dashboard while RUNNING, gone once the run ended or when invalid
+  local prog_json='{"phase": "Downloading images", "done": 45, "total": 120, "counters": {"cardsNew": 40, "requests": 3}, "updatedAt": "2026-10-28T09:00:00.000Z"}'
+  local prun_id; prun_id="$(pg_scratch -c "INSERT INTO \"SyncRun\" (\"kind\", \"trigger\", \"status\", \"queuedAt\", \"startedAt\", \"heartbeatAt\", \"progress\")
+    VALUES ('INCREMENTAL', 'MANUAL', 'RUNNING', now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC', '$prog_json') RETURNING id")"
+  admin_req GET admin.runs.get "{\"id\":${prun_id:-0}}" -H @"$C1"
+  local p_get; p_get="$(ares '"%s|%s|%s|%s|%s" % (d["progress"]["phase"], d["progress"]["done"], d["progress"]["total"], d["progress"]["counters"]["cardsNew"], d["items"])')"
+  admin_req GET admin.runs.list '{"limit":5}' -H @"$C1"
+  local p_list; p_list="$(ares '"%s" % [r["progress"]["done"] for r in d["items"] if r["id"] == '"${prun_id:-0}"']')"
+  admin_req GET admin.dashboard - -H @"$C1"
+  local p_dash; p_dash="$(ares '"%s|%s" % ([r["progress"]["phase"] for r in d["activeRuns"]], any("items" in r for r in d["activeRuns"]))')"
+  pg_scratch -c "UPDATE \"SyncRun\" SET status = 'OK', \"finishedAt\" = now() AT TIME ZONE 'UTC' WHERE id = ${prun_id:-0}" >/dev/null 2>&1
+  admin_req GET admin.runs.get "{\"id\":${prun_id:-0}}" -H @"$C1"
+  local p_after; p_after="$(ares 'd["progress"]')"
+  pg_scratch -c "UPDATE \"SyncRun\" SET status = 'RUNNING', \"finishedAt\" = NULL, progress = progress || '{\"url\": \"https://example.invalid/leak\"}' WHERE id = ${prun_id:-0}" >/dev/null 2>&1
+  admin_req GET admin.runs.get "{\"id\":${prun_id:-0}}" -H @"$C1"
+  local p_bad; p_bad="$(ares 'd["progress"]')"; local p_bad_body="$ABODY"
+  pg_scratch -c "UPDATE \"SyncRun\" SET status = 'OK', \"finishedAt\" = now() AT TIME ZONE 'UTC', progress = NULL WHERE id = ${prun_id:-0}" >/dev/null 2>&1
+  if [ "$p_get" = "Downloading images|45|120|40|None" ] && [ "$p_list" = "[45]" ] && [ "$p_dash" = "['Downloading images']|False" ]; then
+    apass "a RUNNING run's progress (phase, 45 of 120, counters) on runs.get, runs.list and the dashboard's active run"
+  else
+    afail "progress of a RUNNING run" "get=$p_get list=$p_list dash=$p_dash"
+  fi
+  if [ "$p_after" = "None" ] && [ "$p_bad" = "None" ] && [[ "$p_bad_body" != *"example.invalid"* ]]; then
+    apass "no progress once the run ended (stored value ignored), and a stored progress with an unlisted key is withheld"
+  else
+    afail "progress after the run / invalid progress" "after=$p_after invalid=$p_bad"
   fi
 
   # -- 15. lock after five failures (the count is per account) -----------------

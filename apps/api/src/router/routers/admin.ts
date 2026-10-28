@@ -10,6 +10,15 @@
 //   runs.list / runs.get             run history (cursor pages, newest first) and one run
 //   dashboard                        worker state, last / active / next runs, newest card
 //
+// Live progress and the downloaded-items record (openspec change
+// admin-sync-live-progress, design D5): every run summary carries its
+// `progress` — only while RUNNING and only when the stored value matches the
+// strict shared schema; `runs.get` alone carries `items`, with the first 50
+// rows of each group and, for the two card groups, the card's name, overall,
+// position and type joined from the catalogue in ONE batched Player lookup
+// (≤ 100 ids). Names are never stored in the record; an id the catalogue does
+// not hold comes back without a name (the page shows "card <id>").
+//
 // Sign-in failure is always UNAUTHORIZED "Wrong user name or password" — unknown
 // name, wrong password, locked account and disabled account alike — and every
 // path runs one full scrypt (the dummy hash for an unknown name). Responses
@@ -28,7 +37,15 @@ import {
   warmUpAdminAuth,
 } from "@eflab/db/admin-auth";
 import {
+  SYNC_ITEMS_ROWS_SHOWN,
+  syncRunItemsSchema,
+  syncRunProgressSchema,
+  type SyncRunItems,
+  type SyncRunProgress,
+} from "@eflab/shared/sync-records";
+import {
   ACTIVE_SYNC_STATUSES,
+  POSITIONS,
   SYNC_KINDS,
   adminSignInInput,
   isBlocked,
@@ -46,7 +63,10 @@ import {
   type SyncConfigDTO,
   type SyncDashboardDTO,
   type SyncKind,
+  type SyncRunCardRowDTO,
   type SyncRunDTO,
+  type SyncRunItemGroupDTO,
+  type SyncRunItemsDTO,
   type SyncRunStats,
   type SyncRunSummaryDTO,
   type SyncRunsPageDTO,
@@ -140,9 +160,11 @@ const runSummarySelect = {
   stats: true,
   watermarkBefore: true,
   watermarkAfter: true,
+  progress: true,
   requestedBy: { select: { username: true } },
 } satisfies Prisma.SyncRunSelect;
-const runDetailSelect = { ...runSummarySelect, logTail: true } satisfies Prisma.SyncRunSelect;
+// `items` (≤ 512 KB) only for one run — never in a list or the dashboard.
+const runDetailSelect = { ...runSummarySelect, logTail: true, items: true } satisfies Prisma.SyncRunSelect;
 type RunSummaryRow = Prisma.SyncRunGetPayload<{ select: typeof runSummarySelect }>;
 type RunDetailRow = Prisma.SyncRunGetPayload<{ select: typeof runDetailSelect }>;
 
@@ -157,6 +179,19 @@ function statsOf(runId: number, raw: Prisma.JsonValue, warn: Warn): { stats: Syn
   if (parsed.success) return { stats: publicRunStats(parsed.data), statsInvalid: false };
   warn(runId, "stored SyncRun.stats do not match syncRunStatsSchema — withheld from the admin API");
   return { stats: {}, statsInvalid: true };
+}
+
+/**
+ * The live progress of a RUNNING run, validated with the strict shared schema;
+ * null for any other status (an ended run carries no live progress) and for a
+ * stored value that fails the schema (withheld and logged, never guessed).
+ */
+function progressOf(runId: number, status: SyncStatus, raw: Prisma.JsonValue | null, warn: Warn): SyncRunProgress | null {
+  if (status !== "RUNNING" || raw === null) return null;
+  const parsed = syncRunProgressSchema.safeParse(raw);
+  if (parsed.success) return parsed.data;
+  warn(runId, "stored SyncRun.progress does not match syncRunProgressSchema — withheld from the admin API");
+  return null;
 }
 
 function toRunSummary(r: RunSummaryRow, warn: Warn): SyncRunSummaryDTO {
@@ -174,11 +209,77 @@ function toRunSummary(r: RunSummaryRow, warn: Warn): SyncRunSummaryDTO {
     ...statsOf(r.id, r.stats, warn),
     watermarkBefore: iso(r.watermarkBefore),
     watermarkAfter: iso(r.watermarkAfter),
+    progress: progressOf(r.id, r.status, r.progress, warn),
   };
 }
 
-function toRunDetail(r: RunDetailRow, warn: Warn): SyncRunDTO {
-  return { ...toRunSummary(r, warn), logTail: r.logTail };
+const cardRowSelect = { id: true, baseId: true, name: true, ovr: true, maxOvr: true, registeredPosition: true, cardType: true } satisfies Prisma.PlayerSelect;
+type CardRow = Prisma.PlayerGetPayload<{ select: typeof cardRowSelect }>;
+
+/**
+ * The record as the run page shows it (design D5): the first
+ * SYNC_ITEMS_ROWS_SHOWN entries of every group, how many the record lists and
+ * the true total; the two card groups' rows get the card's name, overall,
+ * position and type from ONE `Player.findMany` over at most 2 × 50 ids. A
+ * stored record that fails the strict schema is withheld (`itemsInvalid`).
+ */
+async function itemsOf(runId: number, raw: Prisma.JsonValue | null, warn: Warn): Promise<{ items: SyncRunItemsDTO | null; itemsInvalid: boolean }> {
+  if (raw === null) return { items: null, itemsInvalid: false };
+  const parsed = syncRunItemsSchema.safeParse(raw);
+  if (!parsed.success) {
+    warn(runId, "stored SyncRun.items does not match syncRunItemsSchema — withheld from the admin API");
+    return { items: null, itemsInvalid: true };
+  }
+  const it: SyncRunItems = parsed.data;
+  const shownNew = it.cards.new.ids.slice(0, SYNC_ITEMS_ROWS_SHOWN);
+  const shownChanged = it.cards.changed.ids.slice(0, SYNC_ITEMS_ROWS_SHOWN);
+  const ids = [...new Set([...shownNew, ...shownChanged])].map((n) => BigInt(n));
+  const found = ids.length === 0 ? [] : await prisma.player.findMany({ where: { id: { in: ids } }, select: cardRowSelect });
+  const byId = new Map<string, CardRow>(found.map((p) => [p.id.toString(), p]));
+  const cardRow = (n: number): SyncRunCardRowDTO => {
+    const p = byId.get(String(n));
+    if (!p) return { id: String(n), baseId: null, name: null, overall: null, maxOverall: null, position: null, cardType: null };
+    return {
+      id: p.id.toString(),
+      baseId: p.baseId.toString(),
+      name: p.name,
+      overall: p.ovr,
+      maxOverall: p.maxOvr,
+      position: POSITIONS[p.registeredPosition] ?? null,
+      cardType: p.cardType,
+    };
+  };
+  // `listed` = how many the stored record lists (≤ 2,000); `total − listed` are not listed anywhere
+  const group = <T, R>(list: readonly T[], total: number, truncated: boolean, row: (v: T) => R): SyncRunItemGroupDTO<R> => ({
+    rows: list.slice(0, SYNC_ITEMS_ROWS_SHOWN).map(row),
+    listed: list.length,
+    total,
+    truncated,
+  });
+  const paths = (g: { paths: string[]; total: number; truncated: boolean }) => group(g.paths, g.total, g.truncated, (p) => p);
+  const failures = (g: { entries: Array<{ path: string; reason: string }>; total: number; truncated: boolean }) =>
+    group(g.entries, g.total, g.truncated, (e) => ({ path: e.path, reason: e.reason }));
+  return {
+    items: {
+      cards: {
+        new: group(it.cards.new.ids, it.cards.new.total, it.cards.new.truncated, cardRow),
+        changed: group(it.cards.changed.ids, it.cards.changed.total, it.cards.changed.truncated, cardRow),
+      },
+      images: {
+        downloaded: paths(it.images.downloaded),
+        overwritten: paths(it.images.overwritten),
+        unverified: paths(it.images.unverified),
+        uploaded: paths(it.images.uploaded),
+        failed: failures(it.images.failed),
+        uploadFailed: failures(it.images.uploadFailed),
+      },
+    },
+    itemsInvalid: false,
+  };
+}
+
+async function toRunDetail(r: RunDetailRow, warn: Warn): Promise<SyncRunDTO> {
+  return { ...toRunSummary(r, warn), logTail: r.logTail, ...(await itemsOf(r.id, r.items, warn)) };
 }
 
 /** Fastify's request logger, bound to the run id (no stats content is logged). */
@@ -303,11 +404,11 @@ const runsRouter = router({
     };
   }),
 
-  /** One run with its statistics, error and (redacted, ≤ 64 KB) log tail. */
+  /** One run with its statistics, error, (redacted, ≤ 64 KB) log tail, live progress and what it downloaded (`itemsOf`). */
   get: adminProcedure.input(syncRunIdInput).query(async ({ input, ctx }): Promise<SyncRunDTO> => {
     const row = await prisma.syncRun.findUnique({ where: { id: input.id }, select: runDetailSelect });
     if (!row) throw new TRPCError({ code: "NOT_FOUND", message: `No run #${input.id}` });
-    return toRunDetail(row, warnerFor(ctx.req.log));
+    return await toRunDetail(row, warnerFor(ctx.req.log));
   }),
 });
 

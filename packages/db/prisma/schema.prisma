@@ -643,8 +643,9 @@ model AdminSession {
 model SyncConfig {
   id                     Int       @id @default(1)
   enabled                Boolean   @default(true)
-  // Incremental sync interval, minutes (15–1440).
-  incrementalIntervalMin Int       @default(360)
+  // Incremental sync interval, minutes (15–1440). Default 60 since migration
+  // 20261028000000_admin_sync_live_progress (360 before; a row still holding 360 was moved to 60).
+  incrementalIntervalMin Int       @default(60)
   // Weekly full sync window: weekday 0–6 (0 = Sunday, UTC) and hour 0–23 (UTC).
   fullWeekday            Int       @default(0)
   fullHourUtc            Int       @default(3)
@@ -677,6 +678,12 @@ model SyncRun {
   stats           Json        @default("{}")
   watermarkBefore DateTime?
   watermarkAfter  DateTime?
+  // Live progress of a RUNNING run (phase, done / total, counters so far, time of the write) —
+  // shape: SyncRunProgress in @eflab/shared. Written with the run heartbeat; NULL once the run ended.
+  progress        Json?
+  // What the run fetched (card ids, image paths, failure reason classes; capped lists with true
+  // totals) — shape: SyncRunItems in @eflab/shared. ≤ 512 KB as jsonb text (CHECK in the migration).
+  items           Json?
 
   @@index([queuedAt(sort: Desc)])
   @@index([status])
